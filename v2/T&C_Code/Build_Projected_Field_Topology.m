@@ -15,10 +15,22 @@ end
 topo = Build_Polygon_Grid_Topology(grid_polygon,cell_size_m);
 grid_calibration.grid_nx = topo.main_grid_nx;
 grid_calibration.grid_ny = topo.main_grid_ny;
+grid_calibration.grid_slot_count = topo.grid_slot_count;
 grid_calibration.grid_cell_count = topo.N_cells;
 grid_calibration.simulated_area_m2 = topo.simulated_area_m2;
 grid_calibration.field_area_m2 = topo.field_area_m2;
 grid_calibration.field_fraction = topo.field_area_m2/topo.simulated_area_m2;
+grid_calibration.outside_grid_area_m2 = ...
+    topo.simulated_area_m2-topo.field_area_m2;
+grid_calibration.outside_grid_fraction = ...
+    grid_calibration.outside_grid_area_m2/topo.simulated_area_m2;
+grid_calibration.required_field_fraction = 0.95;
+if grid_calibration.field_fraction <= grid_calibration.required_field_fraction
+    error('Build_Projected_Field_Topology:CoverageBelowTarget', ...
+        ['%.6g m cells place only %.3f%% of retained full-cell area inside ' ...
+         'the polygon; more than 95%% is required.'], ...
+        cell_size_m,100*grid_calibration.field_fraction);
+end
 topo.grid_calibration = grid_calibration;
 topo.grid_rotation_degrees = grid_calibration.rotation_degrees;
 topo.projected_grid_origin_m = grid_calibration.projected_grid_origin_m;

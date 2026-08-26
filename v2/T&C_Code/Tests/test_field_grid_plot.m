@@ -22,6 +22,8 @@ assert(isequal(summary.ProjectedPolygonVertexCount,[18;29]));
 assert(all(summary.ProjectionRoundTripMaxM < 1e-6));
 assert(all(summary.SourceToPolygonMaxM < 1e-9));
 assert(all(summary.CellCount == reshape([setups.N_cells],[],1)));
+assert(all(summary.GridSlotCount == reshape([setups.grid_slot_count],[],1)));
+assert(all(summary.FieldFraction > 0.95));
 assert(max(abs(summary.FieldAreaM2- ...
     reshape([setups.field_area_m2],[],1))) < 1e-9);
 expected_outside = reshape([setups.simulated_area_m2],[],1)- ...
@@ -34,7 +36,9 @@ field_outlines = findobj(figure_handle,'Type','line', ...
 grid_cells = findobj(figure_handle,'Type','patch','Tag','GridCell');
 assert(numel(setup_axes) == 2);
 assert(numel(field_outlines) == 2);
-assert(numel(grid_cells) == sum([setups.N_cells]));
+assert(numel(grid_cells) == numel(setups));
+assert(sum(arrayfun(@(x) size(x.Faces,1),grid_cells)) == ...
+    sum([setups.N_cells]));
 for k = 1:numel(setups)
     outline = findobj(figure_handle,'Type','line', ...
         'Tag',sprintf('FieldOutline%02d',k));

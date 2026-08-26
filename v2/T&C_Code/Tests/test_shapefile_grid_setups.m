@@ -45,6 +45,9 @@ for k = 1:numel(setups)
         setups(k).field_area_m2) < 1e-6);
     assert(setups(k).simulated_area_m2 < 1e6);
     assert(strcmp(setups(k).grid_calibration.mode,'polygon_geometry'));
+    assert(setups(k).grid_calibration.field_fraction > 0.95);
+    assert(setups(k).grid_calibration.outside_grid_fraction < 0.05);
+    assert(all(setups(k).cell_overlap_area_m2 > 0));
 end
 
 expect_error(@() Build_Shapefile_Grid_Setups(shape_file,[],0), ...

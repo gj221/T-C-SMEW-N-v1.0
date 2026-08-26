@@ -2,9 +2,9 @@ function topo = Build_Polygon_Grid_Topology(field_polygon,cell_size_m)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Build_Polygon_Grid_Topology
 %%
-%% Construct a full rectangular grid of equal square cells over a metric
-%% field polygon. Every square is retained for simulation. Polygon-cell
-%% intersections are stored separately for field-scale accounting.
+%% Construct equal full square cells over a metric field polygon. Every
+%% square with positive polygon overlap is retained and simulated in full.
+%% Polygon-cell intersections are stored separately for field accounting.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if ~(isa(field_polygon,'polyshape') && isscalar(field_polygon)) || ...
@@ -33,22 +33,19 @@ y_min = min(vertices(:,2));
 y_max = max(vertices(:,2));
 nx = Grid_Cell_Count(x_max-x_min,cell_size_m);
 ny = Grid_Cell_Count(y_max-y_min,cell_size_m);
-N_cells = nx*ny;
+N_slots = nx*ny;
 
-cell_id = (1:N_cells)';
-cell_name = cell(N_cells,1);
-cell_row = zeros(N_cells,1);
-cell_col = zeros(N_cells,1);
-cell_x_lo = zeros(N_cells,1);
-cell_x_hi = zeros(N_cells,1);
-cell_y_lo = zeros(N_cells,1);
-cell_y_hi = zeros(N_cells,1);
-cell_overlap_area_m2 = zeros(N_cells,1);
+cell_row = zeros(N_slots,1);
+cell_col = zeros(N_slots,1);
+cell_x_lo = zeros(N_slots,1);
+cell_x_hi = zeros(N_slots,1);
+cell_y_lo = zeros(N_slots,1);
+cell_y_hi = zeros(N_slots,1);
+cell_overlap_area_m2 = zeros(N_slots,1);
 
 for iy = 1:ny
     for ix = 1:nx
         c = (iy-1)*nx+ix;
-        cell_name{c} = sprintf('Cell_Grid_%04d',c);
         cell_row(c) = iy;
         cell_col(c) = ix;
         cell_x_lo(c) = x_min+(ix-1)*cell_size_m;
@@ -62,31 +59,49 @@ for iy = 1:ny
     end
 end
 
-cell_area_m2 = repmat(cell_size_m^2,N_cells,1);
-area_tol = 1e-9*cell_size_m^2;
+area_tol = 1e-12*cell_size_m^2;
 cell_overlap_area_m2(cell_overlap_area_m2 < area_tol) = 0;
+retain = cell_overlap_area_m2 > 0;
+if ~any(retain)
+    error('Build_Polygon_Grid_Topology:EmptyGrid', ...
+        'No full grid cells intersect the field polygon.');
+end
+cell_grid_slot = find(retain);
+cell_row = cell_row(retain);
+cell_col = cell_col(retain);
+cell_x_lo = cell_x_lo(retain);
+cell_x_hi = cell_x_hi(retain);
+cell_y_lo = cell_y_lo(retain);
+cell_y_hi = cell_y_hi(retain);
+cell_overlap_area_m2 = cell_overlap_area_m2(retain);
+N_cells = numel(cell_grid_slot);
+cell_id = (1:N_cells)';
+cell_name = arrayfun(@(c) sprintf('Cell_Grid_%04d',c),cell_id, ...
+    'UniformOutput',false);
+cell_area_m2 = repmat(cell_size_m^2,N_cells,1);
 full_cell = abs(cell_overlap_area_m2-cell_area_m2) < area_tol;
 cell_overlap_area_m2(full_cell) = cell_area_m2(full_cell);
-cell_overlap_fraction = cell_overlap_area_m2./cell_area_m2;
-
-N_edges = (nx-1)*ny+nx*(ny-1);
-edge_a = zeros(N_edges,1);
-edge_b = zeros(N_edges,1);
+slot_to_cell = zeros(N_slots,1);
+slot_to_cell(cell_grid_slot) = cell_id;
+edge_a = zeros(2*N_cells,1);
+edge_b = zeros(2*N_cells,1);
 e = 0;
-for iy = 1:ny
-    for ix = 1:nx-1
+for c = 1:N_cells
+    slot = cell_grid_slot(c);
+    if cell_col(c) < nx && slot_to_cell(slot+1) > 0
         e = e+1;
-        edge_a(e) = (iy-1)*nx+ix;
-        edge_b(e) = edge_a(e)+1;
+        edge_a(e) = c;
+        edge_b(e) = slot_to_cell(slot+1);
+    end
+    if cell_row(c) < ny && slot_to_cell(slot+nx) > 0
+        e = e+1;
+        edge_a(e) = c;
+        edge_b(e) = slot_to_cell(slot+nx);
     end
 end
-for iy = 1:ny-1
-    for ix = 1:nx
-        e = e+1;
-        edge_a(e) = (iy-1)*nx+ix;
-        edge_b(e) = edge_a(e)+nx;
-    end
-end
+N_edges = e;
+edge_a = edge_a(1:N_edges);
+edge_b = edge_b(1:N_edges);
 
 edge_face_width_m = repmat(cell_size_m,N_edges,1);
 edge_face_distance_m = repmat(cell_size_m,N_edges,1);
@@ -97,20 +112,61 @@ adj = sparse([edge_a;edge_b],[edge_b;edge_a],1,N_cells,N_cells) > 0;
 
 outer_face_width_m = zeros(N_cells,1);
 for c = 1:N_cells
-    if cell_col(c) == 1;  outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m; end
-    if cell_col(c) == nx; outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m; end
-    if cell_row(c) == 1;  outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m; end
-    if cell_row(c) == ny; outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m; end
+    slot = cell_grid_slot(c);
+    if cell_col(c) == 1 || slot_to_cell(slot-1) == 0
+        outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m;
+    end
+    if cell_col(c) == nx || slot_to_cell(slot+1) == 0
+        outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m;
+    end
+    if cell_row(c) == 1 || slot_to_cell(slot-nx) == 0
+        outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m;
+    end
+    if cell_row(c) == ny || slot_to_cell(slot+nx) == 0
+        outer_face_width_m(c) = outer_face_width_m(c)+cell_size_m;
+    end
 end
 
 field_area_m2 = area(field_polygon);
-overlap_tol = max(1e-6,1e-9*field_area_m2);
-assert(abs(sum(cell_overlap_area_m2)-field_area_m2) < overlap_tol, ...
-    'Build_Polygon_Grid_Topology:AreaMismatch', ...
-    'Polygon-cell intersections do not recover the field area.');
-assert(abs(sum(outer_face_width_m)-2*(nx+ny)*cell_size_m) < area_tol, ...
+overlap_tol = max(1e-6,1e-7*field_area_m2);
+simulated_area_m2 = sum(cell_area_m2);
+grid_area_tol = max(1e-9,1e-13*field_area_m2);
+if simulated_area_m2 < field_area_m2 || ...
+        any(cell_overlap_area_m2 > cell_area_m2+grid_area_tol)
+    error('Build_Polygon_Grid_Topology:AreaMismatch', ...
+        'Retained full-cell area does not contain the complete field polygon.');
+end
+overlap_area_error_m2 = sum(cell_overlap_area_m2)-field_area_m2;
+if abs(overlap_area_error_m2) >= overlap_tol
+    error('Build_Polygon_Grid_Topology:AreaMismatch', ...
+        ['Polygon-cell intersections differ from the field area by %.17g m2 ' ...
+         'for %.17g m cells.'],overlap_area_error_m2,cell_size_m);
+end
+%% Polyshape booleans can leave sub-ppm slivers at coincident grid edges.
+%% Close only that bounded numerical residual so field accounting is exact.
+if overlap_area_error_m2 < 0
+    [capacity,correction_cell] = max(cell_area_m2-cell_overlap_area_m2);
+    if capacity < -overlap_area_error_m2
+        error('Build_Polygon_Grid_Topology:AreaMismatch', ...
+            'Numerical overlap residual exceeds the retained-cell capacity.');
+    end
+    cell_overlap_area_m2(correction_cell) = ...
+        cell_overlap_area_m2(correction_cell)-overlap_area_error_m2;
+elseif overlap_area_error_m2 > 0
+    [available,correction_cell] = max(cell_overlap_area_m2);
+    if available < overlap_area_error_m2
+        error('Build_Polygon_Grid_Topology:AreaMismatch', ...
+            'Numerical overlap residual exceeds the polygon overlap area.');
+    end
+    cell_overlap_area_m2(correction_cell) = ...
+        cell_overlap_area_m2(correction_cell)-overlap_area_error_m2;
+end
+cell_overlap_fraction = cell_overlap_area_m2./cell_area_m2;
+expected_outer_width_m = (4*N_cells-2*N_edges)*cell_size_m;
+perimeter_tol = max(1e-9,1e-12*expected_outer_width_m);
+assert(abs(sum(outer_face_width_m)-expected_outer_width_m) < perimeter_tol, ...
     'Build_Polygon_Grid_Topology:PerimeterMismatch', ...
-    'Grid outer-face widths do not recover the rectangular perimeter.');
+    'Grid outer-face widths do not recover the retained-cell perimeter.');
 
 [field_boundary_x_m,field_boundary_y_m] = boundary(field_polygon);
 topo.field_side_m = [];
@@ -119,8 +175,10 @@ topo.cell_size_m = cell_size_m;
 topo.main_grid_nx = nx;
 topo.main_grid_ny = ny;
 topo.N_cells = N_cells;
+topo.grid_slot_count = N_slots;
 topo.cell_id = cell_id;
 topo.cell_name = cell_name;
+topo.cell_grid_slot = cell_grid_slot;
 topo.cell_row = cell_row;
 topo.cell_col = cell_col;
 topo.cell_region = repmat({'main'},N_cells,1);
@@ -137,7 +195,7 @@ topo.cell_area_m2 = cell_area_m2;
 topo.cell_overlap_area_m2 = cell_overlap_area_m2;
 topo.cell_overlap_fraction = cell_overlap_fraction;
 topo.field_area_m2 = field_area_m2;
-topo.simulated_area_m2 = sum(cell_area_m2);
+topo.simulated_area_m2 = simulated_area_m2;
 topo.field_boundary_x_m = field_boundary_x_m;
 topo.field_boundary_y_m = field_boundary_y_m;
 topo.field_region_count = numel(regions(field_polygon));

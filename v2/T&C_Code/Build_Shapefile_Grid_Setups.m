@@ -6,6 +6,15 @@ function setups = Build_Shapefile_Grid_Setups( ...
 
 if nargin < 2; cell_size_m = []; end
 if nargin < 3; feature_indices = []; end
+cache_key = setup_cache_key(shape_file,cell_size_m,feature_indices);
+persistent cache_keys cache_values
+if ~isempty(cache_keys)
+    cache_index = find(strcmp(cache_keys,cache_key),1);
+    if ~isempty(cache_index)
+        setups = cache_values{cache_index};
+        return
+    end
+end
 [feature_polygons,metadata] = ...
     Read_Shapefile_Polygons(shape_file,feature_indices);
 [field_regions,region_feature_indices] = connected_field_regions( ...
@@ -32,7 +41,23 @@ for k = 1:numel(setups)
     setups(k).setup_index = k;
     setups(k).setup_count = numel(setups);
 end
+cache_keys{end+1} = cache_key;
+cache_values{end+1} = setups;
+if numel(cache_keys) > 8
+    cache_keys = cache_keys(end-7:end);
+    cache_values = cache_values(end-7:end);
+end
 
+end
+
+function key = setup_cache_key(shape_file,cell_size_m,feature_indices)
+[shape_directory,shape_name] = fileparts(shape_file);
+components = cellfun(@(extension) fullfile(shape_directory, ...
+    [shape_name extension]),{'.shp','.shx','.dbf','.prj'}, ...
+    'UniformOutput',false);
+runtime_identity = sprintf('cell_size=%s;features=%s', ...
+    mat2str(cell_size_m,17),mat2str(feature_indices,17));
+key = ERW_Checkpoint_Fingerprint(0,0,runtime_identity,components{:});
 end
 
 function [field_regions,region_feature_indices] = connected_field_regions( ...
