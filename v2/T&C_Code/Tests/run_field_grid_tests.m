@@ -1,0 +1,6 @@
+function run_field_grid_tests()
+test_field_grid_topology;
+test_field_grid_calibration;
+test_field_aggregation;
+test_shapefile_launcher;
+end

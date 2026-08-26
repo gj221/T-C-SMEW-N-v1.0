@@ -716,6 +716,7 @@ if ~all(isfield(S,required)) || ~isstruct(S.topo) || ...
 end
 
 A_cell = S.topo.cell_area_m2(:);
+[~,w_col] = Field_Aggregation_Areas(S.topo);
 n_col = numel(A_cell);
 if n_col < 1 || numel(S.ColCfg) ~= n_col || ...
         any(~isfinite(A_cell)) || any(A_cell <= 0)
@@ -804,7 +805,6 @@ for c = 1:n_col
             crown.*fruit_removed;
     end
 end
-w_col = A_cell/sum(A_cell);
 nee = nee_cell*w_col;
 crop_harvest = crop_harvest_cell*w_col;
 end

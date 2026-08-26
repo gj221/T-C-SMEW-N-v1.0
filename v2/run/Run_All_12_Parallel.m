@@ -8,6 +8,8 @@ function plan = Run_All_12_Parallel(varargin)
 %%   NDays           optional shortened run                       []
 %%   StartDate      optional forcing start date                    []
 %%   GridNx, GridNy  optional main-grid overrides                 []
+%%   FieldShapefile  optional polygon field boundary               ''
+%%   GridCellSizeM   explicit square width; otherwise calibrated   []
 %%   AppeloAlpha     optional run-local Appelo alpha              []
 %%   AppeloLogKH     optional [Na K Ca Mg Al] logKH vector        []
 %%   ResultDirectory optional result and checkpoint directory      ''
@@ -19,7 +21,8 @@ function plan = Run_All_12_Parallel(varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('MaxConcurrent',2,'Runs',[10:12 1:9],'NDays',[],'StartDate',[], ...
-    'GridNx',[],'GridNy',[],'AppeloAlpha',[],'AppeloLogKH',[], ...
+    'GridNx',[],'GridNy',[],'FieldShapefile','','GridCellSizeM',[], ...
+    'AppeloAlpha',[],'AppeloLogKH',[], ...
     'PollSeconds',20, ...
     'MaxRuntimeHours',168,'DryRun',false,'Overwrite',false, ...
     'ResultDirectory','','LogDirectory','','PreferenceDirectoryRoot','');
@@ -54,6 +57,7 @@ validateattributes(opt.MaxRuntimeHours,{'numeric'},{'scalar','positive','finite'
 validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
+validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
 if ~isempty(opt.AppeloLogKH) && ~(isnumeric(opt.AppeloLogKH) && ...
         isvector(opt.AppeloLogKH) && numel(opt.AppeloLogKH) == 5 && ...
@@ -74,15 +78,35 @@ if ~isempty(opt.StartDate)
             'StartDate must be a scalar date accepted by datenum.');
     end
 end
-if ~(ischar(opt.ResultDirectory) || ...
+if ~(ischar(opt.FieldShapefile) || ...
+        (isstring(opt.FieldShapefile) && isscalar(opt.FieldShapefile))) || ...
+        ~(ischar(opt.ResultDirectory) || ...
         (isstring(opt.ResultDirectory) && isscalar(opt.ResultDirectory))) || ...
         ~(ischar(opt.LogDirectory) || ...
         (isstring(opt.LogDirectory) && isscalar(opt.LogDirectory))) || ...
         ~(ischar(opt.PreferenceDirectoryRoot) || ...
         (isstring(opt.PreferenceDirectoryRoot) && isscalar(opt.PreferenceDirectoryRoot)))
     error('Run_All_12_Parallel:BadOptions', ...
-        ['ResultDirectory, LogDirectory and PreferenceDirectoryRoot must be ' ...
-        'character vectors or scalar strings.']);
+        ['FieldShapefile, ResultDirectory, LogDirectory and ' ...
+         'PreferenceDirectoryRoot must be character vectors or scalar strings.']);
+end
+opt.FieldShapefile = char(opt.FieldShapefile);
+has_field_shape = ~isempty(opt.FieldShapefile);
+if ~has_field_shape && ~isempty(opt.GridCellSizeM)
+    error('Run_All_12_Parallel:IncompleteFieldGrid', ...
+        'GridCellSizeM requires FieldShapefile.');
+end
+if has_field_shape
+    if ~isfile(opt.FieldShapefile)
+        error('Run_All_12_Parallel:MissingShapefile', ...
+            'FieldShapefile does not exist: %s',opt.FieldShapefile);
+    end
+    [~,shape_attributes] = fileattrib(opt.FieldShapefile);
+    opt.FieldShapefile = shape_attributes.Name;
+    if ~isempty(opt.GridNx) || ~isempty(opt.GridNy)
+        error('Run_All_12_Parallel:ConflictingGridOptions', ...
+            'GridNx and GridNy cannot be combined with FieldShapefile.');
+    end
 end
 
 %% This launcher and its worker live in v2/run; results, logs and status
@@ -91,6 +115,10 @@ here = fileparts(mfilename('fullpath'));
 root = fileparts(here);
 RM = Run_Matrix_12();
 runs = opt.Runs(:)';
+if has_field_shape && any(~strcmp({RM(runs).layout},'whole_field'))
+    error('Run_All_12_Parallel:BadFieldLayout', ...
+        'FieldShapefile is supported for whole_field runs 1 to 3 only.');
+end
 requires_explicit_alpha = any(ismember(runs,10:12)) && ...
     (isempty(opt.NDays) || opt.NDays >= 679);
 if requires_explicit_alpha && isempty(opt.AppeloAlpha)
@@ -109,6 +137,12 @@ if ~isempty(opt.NDays);  extra = [extra {'NDays',opt.NDays}]; end
 if ~isempty(opt.StartDate); extra = [extra {'StartDate',opt.StartDate}]; end
 if ~isempty(opt.GridNx); extra = [extra {'GridNx',opt.GridNx}]; end
 if ~isempty(opt.GridNy); extra = [extra {'GridNy',opt.GridNy}]; end
+if has_field_shape
+    extra = [extra {'FieldShapefile',opt.FieldShapefile}];
+end
+if ~isempty(opt.GridCellSizeM)
+    extra = [extra {'GridCellSizeM',opt.GridCellSizeM}];
+end
 if ~isempty(opt.AppeloAlpha)
     extra = [extra {'AppeloAlpha',opt.AppeloAlpha}];
 end
@@ -282,7 +316,16 @@ end
 
 function tag = result_tag(R,opt)
 tag = R.name;
-if R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
+if ~isempty(opt.FieldShapefile)
+    [~,shape_name] = fileparts(opt.FieldShapefile);
+    shape_name = regexprep(shape_name,'[^A-Za-z0-9]+','_');
+    if ~isempty(opt.GridCellSizeM)
+        resolution = sprintf('cell%sm',number_tag(opt.GridCellSizeM));
+    else
+        resolution = 'geometry';
+    end
+    tag = sprintf('%s__field_%s__%s',tag,shape_name,resolution);
+elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
     nx = R.geom.main_grid_nx;
     ny = R.geom.main_grid_ny;
     if ~isempty(opt.GridNx); nx = opt.GridNx; end
@@ -418,5 +461,13 @@ if isempty(value); return; end
 if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value >= 0)
     error('Run_All_12_Parallel:BadOptions', ...
         '%s must be a finite nonnegative scalar.',name);
+end
+end
+
+function validate_optional_positive_scalar(value,name)
+if isempty(value); return; end
+if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value > 0)
+    error('Run_All_12_Parallel:BadOptions', ...
+        '%s must be a finite positive scalar.',name);
 end
 end
