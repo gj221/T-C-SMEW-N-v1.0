@@ -102,23 +102,10 @@ BiogeoPar.kv = 8.6*1e-5; %% [1/d]
 %%%%%%% Nitrification (Aerobic)
 BiogeoPar.KNmaxn = 0.086; %% [1/d] % Dickinson et al., 2002
 %%%%%%% Denitrification (Anaerobic)
-BiogeoPar.Kc = 17.5; %% [gC/ gsoil] %% Li et al., 1992
-BiogeoPar.Kn = 82.5; %% [gN/ gsoil] % Li et al., 1992 (not used)
+BiogeoPar.Kc = 17.5; %% [gC/m2] %% Li et al., 1992
+BiogeoPar.Kn = 82.5; %% [gN/m2] % Li et al., 1992
 BiogeoPar.KNmaxd= 0.217; %% [1/d] % Dickinson et al., 2002
 %%%%%% N2O pathway - pH effects
-BiogeoPar.f_N2O_nit = 0.002; %% [-] N2O yield of nitrification
-%% Goodroad and Keeney 1984, Soil Biol Biochem 16:39-43; Khalil et al 2004, Soil Biol Biochem 36:687-699
-BiogeoPar.k_rN2O = 1.5;   %% [1/pH] steepness of denitrification N2O/(N2O+N2) partition
-%% Moved from 6.2 to 5.0. At 6.2 the 50%% crossover sits essentially on
-%% this site's pH of 6.06, giving rN2O = 0.55: over half of all
-%% denitrified nitrogen leaving as N2O rather than N2. The cited work
-%% places the crossover in acidic soil, with near-neutral soils emitting
-%% N2O at 0.1-0.3 of denitrification. 5.0 gives rN2O = 0.17 here.
-%% This changes only the N2O/N2 split, not total denitrification, so it
-%% does not affect the nitrate budget. Default is 6.2.
-BiogeoPar.pH0_rN2O = 5.0; %% [-] pH at which N2O/(N2O+N2) = 0.5
-%% Simek and Cooper 2002, Eur J Soil Sci 53:345; Cuhel et al 2010, Appl Environ Microbiol 76:1870;
-%% Liu et al 2010, FEMS Microbiol Ecol 72:407
 %%%%%% Parton et al 1997
 %%%%%%
 BiogeoPar.K1p= 1/600; %%% [1/day]
@@ -212,17 +199,7 @@ BiogeoPar.vam =  2.3e-7; %BiogeoPar.g_am*BiogeoPar.mrm/kn3 ; %% [m^2/day]
 %BiogeoPar.KnP=0.05;
 %BiogeoPar.KnK=0.1;
 
-%%%%%% Shape of the pH response functions used in BIOGEOCHEMISTRY_DYNAMIC3.
-%% These were literals inside the rate expressions. Named here so the
-%% published forms and their coefficients sit in one visible place rather
-%% than buried in the rate code. The values are the published ones and
-%% reproduce those forms exactly.
-%% Nitrification, Parton et al 1996: 0.56 + atan(pi*s*(PH-p0))/pi
-BiogeoPar.pH_nit_0 = 5.0;   %% [-] inflection
-BiogeoPar.pH_nit_s = 0.45;  %% [1/pH] steepness
-%% Denitrification, Heinen 2006: (PH-pmin)/prng, clamped to [0 1]
-BiogeoPar.pH_den_min = 3.5; %% [-] pH of zero denitrification
-BiogeoPar.pH_den_rng = 3.0; %% [pH] span from zero to unlimited
+%%%%%% Shape of the nitrification pH response used in BIOGEOCHEMISTRY_DYNAMIC3.
 return
 
 

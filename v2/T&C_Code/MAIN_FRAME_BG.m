@@ -297,7 +297,7 @@ for i=2:NN
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%% Biogeochemistry Unit
-        [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM]=Biogeo_environment(Tdp(pdind,:),O(pdind,:),V(pdind,:),Soil_Param,Phy,SPAR,Bio_Zs,Zbio);% sum(V(i,:))
+        [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,L_bio,WFPS_bio]=Biogeo_environment(Tdp(pdind,:),O(pdind,:),V(pdind,:),Soil_Param,Phy,SPAR,Bio_Zs,Zbio);% sum(V(i,:))
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         if OPT_SoilBiogeochemistry == 1
 
@@ -317,7 +317,7 @@ for i=2:NN
                 SupN_H(j-1,:),SupP_H(j-1,:),SupK_H(j-1,:),SupN_L(j-1,:),SupP_L(j-1,:),SupK_L(j-1,:),...
                 SupCa_H(j-1,:),SupMg_H(j-1,:),SupSi_H(j-1,:),SupCa_L(j-1,:),SupMg_L(j-1,:),SupSi_L(j-1,:),...
                 REXMY,RexmyI(j-1,:),ExEM,NavlI(j-1,:),Pcla,Psan,...
-                B_IO,Datam(i,:),FireA,0);
+                B_IO,Datam(i,:),FireA,0,0,0,L_bio,WFPS_bio);
             %%%%%
             %%%%%
             BLit(j,:)= 0.002*sum(P(j,1:5))*Ccrown; %% %%[kg DM / m2]
@@ -762,4 +762,3 @@ clear Bam Bem FireA Se_fc REXMY
 %for i=2:NN
 %Cc(i)=Jsx_L(i)+Lk(i)+EG(i) +( sum(V(i,:))-sum(V(i-1,:))) -f(i);
 %end
-

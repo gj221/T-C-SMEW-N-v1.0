@@ -134,7 +134,7 @@ elseif excel_input.fX_conc_convention == "Kantola"
 
     % case study: Kantola.
     %
-    % The published T&C-SMEW seed assumes an exchange composition
+    % The legacy T&C-SMEW seed prescribes an exchange composition
     % (f_CEC_sat = 0.8, f_H = 0.15) and back-derives the pore-water
     % concentrations from the Gaines-Thomas inverses, then fits
     % K_Ca_H/K_Ca_Mg/K_Ca_K to reproduce that same state.  Under GT that
@@ -146,25 +146,26 @@ elseif excel_input.fX_conc_convention == "Kantola"
     % constants (Resolve_Appelo_Constants), which removes that freedom.
     % The assumed composition and the derived concentrations become
     % physical claims, and two of them are false: handing sodium every
-    % site the measured Ca/Mg/K do not claim gives f_Na = 0.76, an ESP of
+    % site the prescribed Ca/Mg/K do not claim gives f_Na = 0.76, an ESP of
     % 76% (a sodic soil, not a Mollisol), and the GT inverses evaluated at
     % f_Ca ~ 0.003 return 0.5 M Na and 89 mM Al, the latter 2e5 times the
     % Al(OH)3 solubility at pH 6.
     %
-    % The 80% base saturation the published seed assumes is right for
+    % The prescribed 80% base-saturation target is retained for
     % this soil, so it is kept.  What changes is where the unmeasured
     % remainder goes.  The spin-up's exchangeable pools (P(:,61/69/53))
     % come back essentially equal to the solution pools and account for
     % only ~4% of the CEC, so the remainder is real and has to be
     % assigned; a Mollisol carries it as Ca and Mg, not sodium.
-    % Proportions below are the standard exchangeable-base split for a
+    % Proportions below are an explicitly assumed exchangeable-base split for a
     % near-neutral Mollisol and are exposed as constants so a site with
     % its own exchange data can override them.
-    f_CEC_sat = 0.8;
+    %% Pretreatment base saturation is approximately 80% in Fig. 1F.
+    f_CEC_sat = 0.80;
     f_H(1) = 0.15;
     f_Al(1) = (1-f_CEC_sat)-f_H(1);
 
-    % Pore-water Na is a measured quantity, so it is set first and the
+    % Pore-water Na is prescribed or deposition-derived, so it is set first and the
     % exchange fraction follows from the Appelo law rather than the other
     % way round.  It must be strictly positive: the log-space exchange
     % residual log(f_Na) - (log K_Na_H + log[Na] + log(f_H/[H]) + ...)
@@ -172,19 +173,24 @@ elseif excel_input.fX_conc_convention == "Kantola"
     % floors and leave a fixed ~13 log-unit residual that pins the scaled
     % error at 1 and stalls every other equation in the block.  Use the
     % deposition-supported steady state when the site supplies a rain-Na
-    % flux, otherwise a Midwest agricultural default of 200 umol/L
+    % flux, otherwise an explicit fallback assumption of 200 umol/L
     % (~4.6 mg/L), which is mid-range for a leached non-sodic soil.
     if ~(isfinite(Na(1)) && Na(1) > 0)
         Na(1) = 200;
     end
     [K_Na_H_kant, ~, ~, ~, ~, alpha_kant] = Resolve_Appelo_Constants([]);
     f_Na(1) = K_Na_H_kant*Na(1)*(f_H(1)/H(1))*10^(alpha_kant*f_H(1));
-    f_Na(1) = min(max(f_Na(1), 0), f_CEC_sat);
+    if ~(isfinite(f_Na(1)) && f_Na(1) >= 0 && f_Na(1) <= f_CEC_sat)
+        error('ERW:InfeasibleKantolaNaExchange', ...
+            ['Pore-water Na implies exchange fraction %.6g outside the ' ...
+             'available base-saturation interval [0, %.6g].'], ...
+            f_Na(1),f_CEC_sat);
+    end
 
-    % The measured Ca/Mg/K carry the rest of the base saturation in the
-    % standard exchangeable split for a near-neutral Mollisol; exposed as
+    % Ca/Mg/K carry the remaining prescribed base saturation in the
+    % assumed exchangeable split for a near-neutral Mollisol; exposed as
     % constants so a site with its own exchange data can override them.
-    kantola_base_split = [0.79, 0.17, 0.04];   % Ca Mg K
+    kantola_base_split = [0.79, 0.17, 0.04];   % Assumed Ca Mg K partition
     kantola_base_split = kantola_base_split/sum(kantola_base_split);
     f_base_kant = f_CEC_sat - f_Na(1);
     f_Ca(1) = f_base_kant*kantola_base_split(1);
@@ -251,11 +257,7 @@ if rock_dist_active && ~ismissing(rock_filepath_txt) && strlength(rock_filepath_
         d_in = x1 * 1e-6; % [m]
         CDF_in = y1;
         d_in(1) = 1e-6;
-        CDF_in(1) = 1e-6;
-        psd_in = diff(CDF_in)./diff(d_in);
-        psd_in(psd_in < 0) = 0;
-        psd_in = [CDF_in(1)/d_in(1) psd_in];
-        psd_in = psd_in/sum(psd_in);
+        psd_in = ERW_Particle_Mass_Fractions(d_in,CDF_in);
     elseif rock_dist_mode == "mass_fraction_um"
         d_in = x1 * 1e-6;
         psd_in = y1 / sum(y1);

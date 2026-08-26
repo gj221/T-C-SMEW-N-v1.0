@@ -6,7 +6,15 @@ if ~exist('bulk_pH_params','var') || ~isstruct(bulk_pH_params)
     bulk_pH_params = struct();
 end
 bulk_pH_params.scheme = 'appelo';
-% Aqueous Al is held at Al(OH)3 equilibrium.  SCEPTER carries the same
+% One static, charge-scaled shift of the SCEPTER default logKH values makes
+% the pH 6.1 bulk-extract inversion reproduce the prescribed pretreatment base
+% saturation.  Relative cation selectivity is unchanged.  Alpha 1.3 is the
+% SCEPTER v1.0 optimized value; no runtime affinity state is fitted.
+bulk_pH_params.appelo = struct( ...
+    'logKH', [4.71627429367 3.61627429367 8.10254858734 ...
+              8.41854858734 12.918822881], ...
+    'alpha', 1.3);
+% Aqueous Al equilibrates with a finite Al(OH)3 inventory.  SCEPTER carries the same
 % phase as an equilibrium solid (scepter.f90 case('amal'),
 % Al(OH)3 + 3H+ = Al3+ + 3H2O, therm_ref = 10^10.8 from PHREEQC.DAT),
 % and the ERW module already computes the saturation state
@@ -15,10 +23,12 @@ bulk_pH_params.scheme = 'appelo';
 % year four, four orders above solubility at pH 6, until the Al_tot
 % conservation residual aborted the run.  Pinning solution Al to the
 % hydroxide equilibrium makes the excess precipitate as secondary
-% Al(OH)3, which is what happens in the soil.  Exchangeable Al then
-% derives from solution, so the measured exchange-Al heritage is not
-% conserved - the same trade SCEPTER makes.
+% Al(OH)3, which is what happens in the soil.  Dissolved, exchangeable,
+% and secondary Al remain within the reactive Al inventory.
 bulk_pH_params.Al_solubility_pin = true;
+% Beerling pH is the measured bulk-extract boundary.  The porewater state is
+% obtained by strict inversion while retaining the prescribed exchange inventory.
+bulk_pH_params.initial_pH_mode = 'bulk_observed';
 
 %%% Maize–soybean rotations
 %%%%%%%%%
@@ -311,7 +321,7 @@ Tlo_L = [15 15];%[7.0 7.0]; %% Mean Temperature for Leaf onset
 Tls_L = [7 7]; %% Mean Temperature for Leaf Shed
 PAR_th_L= [NaN NaN]; %%% Stem allocation for Crops  
 dmg_L= [100 100];%[45 40]; %%% Tree 30 Grasses Day of Max Growth ?
-LAI_min_L = [0.1 0.1];
+LAI_min_L = [0 0]; % Managed harvest resets crops; retain seed-scale emergence LAI
 Trr_L = [4.5 1.0];%[4.5 6.5]; %% Translocation rate [gC /m^2 d] ?
 mjDay_L = [300 280];%[200 200]; %% Maximum Julian day for leaf onset ?
 LDay_min_L = [12.0 12.0];%[13.0 13.0]; %% Minimum Day duration for leaf onset ?
@@ -345,14 +355,16 @@ if NN_case_study_ERW_MOD == 21 % pretreatment
 else
     Mpar_L(1).Date_harvesting = datenum(2009:1:2020,09,17,10,0,0) ; %%% Fully Harvested
 end
-Mpar_L(1).Crop_B=[20 30];
+Mpar_L(1).Crop_B=[0.52 0.78]; % Assumed seed-scale C boundary [g C m-2 crown]; legacy 40:60 allocation
+Mpar_L(1).EstablishmentStoich=Stoich_L(1);
 Mpar_L(1).Crop_crown =[1 0 1 1 0 1 1 0 1 1 0 1]; 
 
 % soy
 Mpar_L(2).Date_sowing = datenum(2009:1:2020,5,25,10,0,0) ; %% Date of Sowing
 Mpar_L(2).Date_harvesting = datenum(2009:1:2020,10,10,10,0,0); %%% Fully Harvested
 Mpar_L(2).Date_harvesting = datenum(2009:1:2020,9,10,17,0,0); %%% Fully Harvested
-Mpar_L(2).Crop_B=[20 30];
+Mpar_L(2).Crop_B=[1.18 1.76]; % Assumed seed-scale C boundary [g C m-2 crown]; legacy 40:60 allocation
+Mpar_L(2).EstablishmentStoich=Stoich_L(2);
 Mpar_L(2).Crop_crown =[0 1 0 0 1 0 0 1 0 0 1 0]; 
 
 %%%%%%%%%%%%%
@@ -419,20 +431,20 @@ BLit(1)=0.0;  %% [kg DM /m2 PFT] Litter Biomass
 Nreserve_H(1,:)= [0 0];
 Preserve_H(1,:)= [0 0];
 Kreserve_H(1,:)= [0 0];
-Careserve_H(1,:)= [1000 1000];
-Mgreserve_H(1,:)= [1000 1000];
-Sireserve_H(1,:)= [1000 1000];
+Careserve_H(1,:)= [0 0];
+Mgreserve_H(1,:)= [0 0];
+Sireserve_H(1,:)= [0 0];
 FNC_H(1,:)=[1 1];
 NupI_H(1,:,:)= [0 0 0 0 0 0; 0 0 0 0 0 0];
-Nreserve_L(1,:)= [1000 1000];
-Preserve_L(1,:)= [100 100];
-Kreserve_L(1,:)= [1000 1000];
+Nreserve_L(1,:)= [0 0];
+Preserve_L(1,:)= [0 0];
+Kreserve_L(1,:)= [0 0];
 FNC_L(1,:)=[1 1];
 NupI_L(1,:,:)= [0 0 0 0 0 0; 0 0 0 0 0 0];
 RexmyI(1,:)= [0 0 0]; 
-Careserve_L(1,:)= [1000 1000];
-Mgreserve_L(1,:)= [1000 1000];
-Sireserve_L(1,:)= [1000 1000];
+Careserve_L(1,:)= [0 0];
+Mgreserve_L(1,:)= [0 0];
+Sireserve_L(1,:)= [0 0];
 %%%%%%%%%
 
 if OPT_SoilBiogeochemistry == 1

@@ -2,7 +2,7 @@
 %   Temperature Humidity Biogeochemistry Zone
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function[Se_bio,Se_fc,Psi_bio,Tdp_bio,Vtot,VT,L_bio]=Biogeo_environment(Tdp,O,V,Soil_Param,Phy,SPAR,Bio_Zs,Zbio)
+function[Se_bio,Se_fc,Psi_bio,Tdp_bio,Vtot,VT,L_bio,WFPS_bio]=Biogeo_environment(Tdp,O,V,Soil_Param,Phy,SPAR,Bio_Zs,Zbio)
 O=mean(O,1); Tdp=mean(Tdp,1);  V=mean(V,1); 
 %%%%%%%
 Ks_Zs=Soil_Param.Ks_Zs; 
@@ -28,6 +28,7 @@ Obio = sum(Bio_Zs.*O);
 Ohy = sum(Bio_Zs.*Ohy); 
 Osat = sum(Bio_Zs.*Osat); 
 Ofc = sum(Bio_Zs.*Ofc); 
+WFPS_bio = Biogeo_WFPS(Obio,Osat); %% [-] theta/theta_sat over the active layer
 Obio(Obio<=Ohy)= Ohy + 1e-5; 
 Obio(Obio>=Osat)= Osat - 1e-5; 
 Se_bio = (Obio-Ohy)./(Osat-Ohy);%%
@@ -49,5 +50,5 @@ Vtot = sum(V); %% [mm] Volume of entire depth
 %%% 9.4 mm at 6x50, 1.9 mm at 30x10. The physical answer is Zbio*(Obio-Ohy)
 %%% = 56.5 mm on all three. Obio and Ohy are already the depth-weighted
 %%% values computed above, so this is mesh independent by construction.
-VT = Zbio*(Obio-Ohy); %% [mm] Water volume in the Biogeochemistry layer
+VT = Biogeo_Mobile_Water_Volume(Zbio,Obio,Ohy); %% [mm] Water volume in the Biogeochemistry layer
 end

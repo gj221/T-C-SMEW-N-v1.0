@@ -44,6 +44,11 @@ the amendment properties. Untreated cells use the control chemistry row.
 The configuration workbook contains only the five Kantola cases used by
 the single-column comparison and the twelve-run matrix.
 
+Field reactions and microbial rates use pore-water pH. Bulk-extract pH is
+retained only as the 1:2.5 laboratory observation operator, with no additive
+baseline offset. The Kantola seed explicitly uses the prescribed field-state
+mode, so its initial bulk pH is a model prediction rather than a forced match.
+
 The archived Kantola background file contains areal pool totals and no
 depth metadata. It is reused unchanged in every case. This keeps the runs
 comparable, and the 300 mm active depth is the depth it was spun up at.
