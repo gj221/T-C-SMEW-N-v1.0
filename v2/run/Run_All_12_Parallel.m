@@ -10,6 +10,7 @@ function plan = Run_All_12_Parallel(varargin)
 %%   GridNx, GridNy  optional main-grid overrides                 []
 %%   FieldShapefile  optional polygon field boundary               ''
 %%   GridCellSizeM   explicit square width; otherwise calibrated   []
+%%   FieldFeatureIndices optional shapefile records to include      []
 %%   AppeloAlpha     optional run-local Appelo alpha              []
 %%   AppeloLogKH     optional [Na K Ca Mg Al] logKH vector        []
 %%   ResultDirectory optional result and checkpoint directory      ''
@@ -22,6 +23,7 @@ function plan = Run_All_12_Parallel(varargin)
 
 opt = struct('MaxConcurrent',2,'Runs',[10:12 1:9],'NDays',[],'StartDate',[], ...
     'GridNx',[],'GridNy',[],'FieldShapefile','','GridCellSizeM',[], ...
+    'FieldFeatureIndices',[], ...
     'AppeloAlpha',[],'AppeloLogKH',[], ...
     'PollSeconds',20, ...
     'MaxRuntimeHours',168,'DryRun',false,'Overwrite',false, ...
@@ -58,6 +60,7 @@ validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
 validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
+validate_optional_index_vector(opt.FieldFeatureIndices,'FieldFeatureIndices');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
 if ~isempty(opt.AppeloLogKH) && ~(isnumeric(opt.AppeloLogKH) && ...
         isvector(opt.AppeloLogKH) && numel(opt.AppeloLogKH) == 5 && ...
@@ -92,9 +95,10 @@ if ~(ischar(opt.FieldShapefile) || ...
 end
 opt.FieldShapefile = char(opt.FieldShapefile);
 has_field_shape = ~isempty(opt.FieldShapefile);
-if ~has_field_shape && ~isempty(opt.GridCellSizeM)
+if ~has_field_shape && (~isempty(opt.GridCellSizeM) || ...
+        ~isempty(opt.FieldFeatureIndices))
     error('Run_All_12_Parallel:IncompleteFieldGrid', ...
-        'GridCellSizeM requires FieldShapefile.');
+        'GridCellSizeM and FieldFeatureIndices require FieldShapefile.');
 end
 if has_field_shape
     if ~isfile(opt.FieldShapefile)
@@ -113,6 +117,8 @@ end
 %% files belong to the repository root one level up.
 here = fileparts(mfilename('fullpath'));
 root = fileparts(here);
+code_directory = fullfile(root,'T&C_Code');
+addpath(code_directory);
 RM = Run_Matrix_12();
 runs = opt.Runs(:)';
 if has_field_shape && any(~strcmp({RM(runs).layout},'whole_field'))
@@ -124,6 +130,12 @@ requires_explicit_alpha = any(ismember(runs,10:12)) && ...
 if requires_explicit_alpha && isempty(opt.AppeloAlpha)
     error('Run_All_12_Parallel:MissingAppeloAlpha', ...
         'Runs 10-12 reaching day 679 require an explicit prescribed AppeloAlpha.');
+end
+field_polygon_count = 1;
+if has_field_shape
+    field_setups = Build_Shapefile_Grid_Setups( ...
+        opt.FieldShapefile,opt.GridCellSizeM,opt.FieldFeatureIndices);
+    field_polygon_count = numel(field_setups);
 end
 log_dir = char(opt.LogDirectory);
 if isempty(log_dir); log_dir = fullfile(root,'logs','Subfield_12'); end
@@ -140,6 +152,9 @@ if ~isempty(opt.GridNy); extra = [extra {'GridNy',opt.GridNy}]; end
 if has_field_shape
     extra = [extra {'FieldShapefile',opt.FieldShapefile}];
 end
+if ~isempty(opt.FieldFeatureIndices)
+    extra = [extra {'FieldFeatureIndices',opt.FieldFeatureIndices}];
+end
 if ~isempty(opt.GridCellSizeM)
     extra = [extra {'GridCellSizeM',opt.GridCellSizeM}];
 end
@@ -155,14 +170,19 @@ end
 matlab_exe = fullfile(matlabroot,'bin','matlab.exe');
 if ~isfile(matlab_exe); matlab_exe = fullfile(matlabroot,'bin','matlab'); end
 plan = repmat(struct('run_id',0,'name','','result_file','', ...
+    'polygon_index',0, ...
     'status_file','','log_file','','runtime_directory','', ...
     'preference_directory','','temporary_directory','', ...
-    'batch','','command',''),numel(runs),1);
-for q = 1:numel(runs)
-    id = runs(q);
-    tag = result_tag(RM(id),opt);
+    'batch','','command',''),numel(runs)*field_polygon_count,1);
+q = 0;
+for run_index = 1:numel(runs)
+    id = runs(run_index);
+    for polygon_index = 1:field_polygon_count
+    q = q+1;
+    tag = result_tag(RM(id),opt,polygon_index);
     plan(q).run_id = id;
     plan(q).name = RM(id).name;
+    plan(q).polygon_index = polygon_index;
     plan(q).result_file = fullfile(out_dir, ...
         sprintf('TC_2D_run%02d_%s.mat',id,tag));
     plan(q).status_file = fullfile(status_dir, ...
@@ -171,11 +191,15 @@ for q = 1:numel(runs)
         sprintf('run_%02d_%s.log',id,tag));
     if ~isempty(pref_root)
         plan(q).runtime_directory = fullfile(pref_root, ...
-            sprintf('run_%02d',id));
+            sprintf('run_%02d_polygon%02d',id,polygon_index));
         plan(q).preference_directory = fullfile(plan(q).runtime_directory,'pref');
         plan(q).temporary_directory = fullfile(plan(q).runtime_directory,'temp');
     end
-    args = worker_args(id,plan(q).status_file,extra);
+    job_extra = extra;
+    if has_field_shape
+        job_extra = horzcat(extra,{'FieldPolygonIndex',polygon_index});
+    end
+    args = worker_args(id,plan(q).status_file,job_extra);
     plan(q).batch = sprintf("cd('%s'); Run_Subfield_Worker(%s)", ...
         strrep(here,"'","''"),args);
     if isempty(plan(q).preference_directory)
@@ -188,16 +212,26 @@ for q = 1:numel(runs)
             plan(q).preference_directory,plan(q).temporary_directory, ...
             plan(q).temporary_directory,matlab_exe,plan(q).batch,plan(q).log_file);
     end
+    end
 end
 
 fprintf('\n=== Twelve simulations ===\n');
 fprintf('runs: %s   max concurrent: %d\n',mat2str(runs),opt.MaxConcurrent);
+if has_field_shape
+    fprintf('independent polygon setups per run: %d\n',field_polygon_count);
+end
 fprintf('max runtime per run: %.0f h\n',opt.MaxRuntimeHours);
 fprintf('results: %s\nlogs: %s\n',out_dir,log_dir);
 if opt.DryRun
     for q = 1:numel(plan)
-        fprintf('  run %d  %s\n    %s\n', ...
-            plan(q).run_id,plan(q).name,plan(q).command);
+        if has_field_shape
+            fprintf('  run %d polygon %d  %s\n    %s\n', ...
+                plan(q).run_id,plan(q).polygon_index, ...
+                plan(q).name,plan(q).command);
+        else
+            fprintf('  run %d  %s\n    %s\n', ...
+                plan(q).run_id,plan(q).name,plan(q).command);
+        end
     end
     return
 end
@@ -314,7 +348,7 @@ end
 
 end
 
-function tag = result_tag(R,opt)
+function tag = result_tag(R,opt,polygon_index)
 tag = R.name;
 if ~isempty(opt.FieldShapefile)
     [~,shape_name] = fileparts(opt.FieldShapefile);
@@ -325,6 +359,12 @@ if ~isempty(opt.FieldShapefile)
         resolution = 'geometry';
     end
     tag = sprintf('%s__field_%s__%s',tag,shape_name,resolution);
+    tag = sprintf('%s__polygon%02d',tag,polygon_index);
+    if ~isempty(opt.FieldFeatureIndices)
+        parts = arrayfun(@(x) sprintf('%d',x),opt.FieldFeatureIndices, ...
+            'UniformOutput',false);
+        tag = sprintf('%s__features%s',tag,strjoin(parts,'_'));
+    end
 elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
     nx = R.geom.main_grid_nx;
     ny = R.geom.main_grid_ny;
@@ -469,5 +509,15 @@ if isempty(value); return; end
 if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value > 0)
     error('Run_All_12_Parallel:BadOptions', ...
         '%s must be a finite positive scalar.',name);
+end
+end
+
+function validate_optional_index_vector(value,name)
+if isempty(value); return; end
+if ~(isnumeric(value) && isvector(value) && all(isfinite(value)) && ...
+        all(value == fix(value)) && all(value >= 1) && ...
+        numel(unique(value)) == numel(value))
+    error('Run_All_12_Parallel:BadOptions', ...
+        '%s must contain unique positive integers.',name);
 end
 end

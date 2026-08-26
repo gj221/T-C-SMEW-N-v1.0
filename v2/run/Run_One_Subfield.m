@@ -35,6 +35,7 @@ function result_file = Run_One_Subfield(run_id, varargin)
 %% run_id launched concurrently would otherwise race on one output path.
 opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
     'FieldShapefile','','GridCellSizeM',[], ...
+    'FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'AppeloAlpha',[],'AppeloLogKH',[],'SaveResults',true,'ResultDirectory','');
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
@@ -50,6 +51,8 @@ validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
 validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
+validate_optional_index_vector(opt.FieldFeatureIndices,'FieldFeatureIndices');
+validate_optional_integer(opt.FieldPolygonIndex,'FieldPolygonIndex');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
 if ~isempty(opt.AppeloLogKH) && ~(isnumeric(opt.AppeloLogKH) && ...
         isvector(opt.AppeloLogKH) && numel(opt.AppeloLogKH) == 5 && ...
@@ -68,9 +71,11 @@ if ~(ischar(opt.FieldShapefile) || ...
 end
 opt.FieldShapefile = char(opt.FieldShapefile);
 has_field_shape = ~isempty(opt.FieldShapefile);
-if ~has_field_shape && ~isempty(opt.GridCellSizeM)
+if ~has_field_shape && (~isempty(opt.GridCellSizeM) || ...
+        ~isempty(opt.FieldFeatureIndices) || ~isempty(opt.FieldPolygonIndex))
     error('Run_One_Subfield:IncompleteFieldGrid', ...
-        'GridCellSizeM requires FieldShapefile.');
+        ['GridCellSizeM, FieldFeatureIndices and FieldPolygonIndex ' ...
+         'require FieldShapefile.']);
 end
 if has_field_shape
     if ~isfile(opt.FieldShapefile)
@@ -118,6 +123,24 @@ Directory           = fullfile(current_directory,'T&C_Code');
 Input_Directory     = fullfile(Directory,'Inputs');
 Parameter_Directory = fullfile(Directory,'Parameters');
 addpath(Directory, Input_Directory, Parameter_Directory);
+
+field_setups = [];
+if has_field_shape
+    field_setups = Build_Shapefile_Grid_Setups( ...
+        opt.FieldShapefile,opt.GridCellSizeM,opt.FieldFeatureIndices);
+    if isempty(opt.FieldPolygonIndex)
+        if numel(field_setups) ~= 1
+            error('Run_One_Subfield:DisconnectedField', ...
+                ['FieldShapefile contains %d disconnected polygons. ' ...
+                 'Run each with FieldPolygonIndex or use Run_All_12_Parallel.'], ...
+                numel(field_setups));
+        end
+        opt.FieldPolygonIndex = 1;
+    elseif opt.FieldPolygonIndex > numel(field_setups)
+        error('Run_One_Subfield:BadFieldPolygonIndex', ...
+            'FieldPolygonIndex must be between 1 and %d.',numel(field_setups));
+    end
+end
 
 CONTROL_CASE = 5;
 NN_case_study_ERW_MOD = CONTROL_CASE;
@@ -229,8 +252,8 @@ NNd = ceil(NN/24)+1;
 g = R.geom;
 nx = g.main_grid_nx; ny = g.main_grid_ny;
 if has_field_shape
-    topo = Build_Shapefile_Grid_Topology( ...
-        opt.FieldShapefile,opt.GridCellSizeM);
+    topo = field_setups(opt.FieldPolygonIndex);
+    clear field_setups
     nx = topo.main_grid_nx;
     ny = topo.main_grid_ny;
 elseif R.use_subdomains
@@ -302,7 +325,8 @@ if ~exist(ckpt_dir,'dir'); mkdir(ckpt_dir); end
 ckpt_tag = R.name;
 if has_field_shape
     ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
-        field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM));
+        field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM, ...
+        opt.FieldPolygonIndex,opt.FieldFeatureIndices));
 end
 if ~isempty(opt.AppeloAlpha)
     ckpt_tag = sprintf('%s__alpha%s',ckpt_tag,number_tag(opt.AppeloAlpha));
@@ -355,7 +379,8 @@ if opt.SaveResults
     tag = R.name;
     if has_field_shape
         tag = sprintf('%s__%s',tag, ...
-            field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM));
+            field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM, ...
+            opt.FieldPolygonIndex,opt.FieldFeatureIndices));
     elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
         tag = sprintf('%s__grid%dx%d',tag,nx,ny);
     end
@@ -412,7 +437,8 @@ if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value > 0)
 end
 end
 
-function tag = field_grid_tag(shape_file,cell_size_m)
+function tag = field_grid_tag( ...
+        shape_file,cell_size_m,polygon_index,feature_indices)
 [~,shape_name] = fileparts(shape_file);
 shape_name = regexprep(shape_name,'[^A-Za-z0-9]+','_');
 if isempty(cell_size_m)
@@ -421,6 +447,22 @@ else
     resolution = sprintf('cell%sm',number_tag(cell_size_m));
 end
 tag = sprintf('field_%s__%s',shape_name,resolution);
+tag = sprintf('%s__polygon%02d',tag,polygon_index);
+if ~isempty(feature_indices)
+    parts = arrayfun(@(x) sprintf('%d',x),feature_indices, ...
+        'UniformOutput',false);
+    tag = sprintf('%s__features%s',tag,strjoin(parts,'_'));
+end
+end
+
+function validate_optional_index_vector(value,name)
+if isempty(value); return; end
+if ~(isnumeric(value) && isvector(value) && all(isfinite(value)) && ...
+        all(value == fix(value)) && all(value >= 1) && ...
+        numel(unique(value)) == numel(value))
+    error('Run_One_Subfield:BadOptions', ...
+        '%s must contain unique positive integers.',name);
+end
 end
 
 function tag = number_tag(value)

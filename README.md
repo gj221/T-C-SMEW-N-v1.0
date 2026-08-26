@@ -41,20 +41,22 @@ big bluestem as the high C4 PFT and purple coneflower as the low C3 PFT.
 ### Irregular field grids
 
 Runs 1 to 3 can use a polygon shapefile instead of the retained square
-subfield. Polygon records are merged first, so duplicate or overlapping
-features are not counted more than once. Geographic and projected source
-coordinates are converted to the local WGS84 UTM zone before any distance
-or area calculation. This requires MATLAB Mapping Toolbox.
+subfield. Selected records are unioned first, so duplicate or overlapping
+features are not counted more than once. The union is then split into
+connected polygon regions. Every region gets a separate grid, simulation,
+checkpoint, result, status file and log. A large empty grid is therefore not
+placed across the gap between fields. Geographic and projected source
+coordinates are converted to the local WGS84 UTM zone before any distance or
+area calculation. This requires MATLAB Mapping Toolbox.
 
-The default cell width comes from the convex envelope of the merged field
+The default cell width comes from the convex envelope of each connected
 polygon. If its area is `A` and perimeter is `P`, the square width is
 `2*A/P`. The orientation search checks the convex-envelope edge directions
 and every angle where the padded row or column count changes. The retained
 orientation has the smallest full square-grid area, with the minimum bounding
 area used to break a tie. This avoids making cells small because of holes,
-narrow gaps, disconnected parts, or noisy boundary detail. There is no
-maximum cell count. `GridCellSizeM` can still prescribe a width when a fixed
-resolution is needed.
+narrow gaps or noisy boundary detail. There is no maximum cell count.
+`GridCellSizeM` can still prescribe a width when a fixed resolution is needed.
 
 Every square in the rotated bounding grid is simulated, including squares
 outside the polygon. The polygon edge is only an accounting boundary. It is
@@ -64,32 +66,38 @@ while vertical drainage and leaching remain active.
 
 For cell `i`, the stored accounting area is
 `area(intersect(cell_i, field_polygon))`. An areal result `q_i` is converted
-to a field total with `sum(q_i*cell_overlap_area_i)`. Field means use those
-same overlap areas as weights. pH is weighted through hydrogen activity,
-not by taking an arithmetic mean of pH values. Full cell areas remain in
-`topo.cell_area_m2` for storage and lateral transport. The separate
-`topo.cell_overlap_area_m2` values are used only for field accounting.
+to a polygon total with `sum(q_i*cell_overlap_area_i)`. Polygon means use the
+same overlap areas as weights. Site totals are the sum of the separate polygon
+totals. pH is weighted through hydrogen activity, not by taking an arithmetic
+mean of pH values. Full cell areas remain in `topo.cell_area_m2` for storage
+and lateral transport. `topo.cell_overlap_area_m2` is used only for field
+accounting.
 
-The supplied Bruce Farm file contains 12 records representing three unique
-applied strips, with each strip repeated four times. Their merged area is
-13106.45 m2. Geometry calibration gives 49.99 m cells and a rotated 2 by 13
-grid. This is 26 simulated cells over 64983.85 m2. The shapefile is an
-applied-strip boundary, not the outside boundary of the whole field.
+The whole-site source contains three control polygons. Source feature 3,
+`Control 3`, is associated with Field 7 and is excluded. Source features 1
+and 2 are retained and run separately. Their areas are 8410.29 and 15282.73
+m2. Geometry calibration gives a 46.29 m, 4 by 3 grid for `Control 2` and a
+67.33 m, 3 by 3 grid for `Control 1`. This is 21 simulated cells across the
+two independent setups. The retained polygon area is 23693.02 m2.
 
 From the repository root:
 
 ```matlab
 shape_file = fullfile('v2','Spatial inputs','Bruce Farm Virginia', ...
-    'applied_yield_shp.shp');
+    'Whole farm','AdamWilbourne_Control_Fields.shp');
+feature_indices = [1 2];
 addpath(fullfile('v2','T&C_Code'),fullfile('v2','run'))
-topo = Build_Shapefile_Grid_Topology(shape_file,[]);
-Run_One_Subfield(1,'FieldShapefile',shape_file,'NDays',1)
+setups = Build_Shapefile_Grid_Setups(shape_file,[],feature_indices);
+Run_One_Subfield(1,'FieldShapefile',shape_file, ...
+    'FieldFeatureIndices',feature_indices,'FieldPolygonIndex',1,'NDays',1)
 ```
 
-The parallel launcher accepts the same field option for whole-field runs:
+The parallel launcher expands each requested scenario into one job per
+connected polygon:
 
 ```matlab
 Run_All_12_Parallel('Runs',1:3,'FieldShapefile',shape_file, ...
+    'FieldFeatureIndices',feature_indices, ...
     'MaxConcurrent',2,'MaxRuntimeHours',168)
 ```
 
@@ -99,6 +107,10 @@ To inspect the calibrated grid before a run:
 cd(fullfile('v2','plotting'))
 Plot_Field_Grid
 ```
+
+This writes one subplot per retained polygon, with the complete boundary over
+the full grid. It also writes a CSV with separate area, cell-size, grid and
+outside-area summaries for each polygon.
 
 The result topology stores the UTM EPSG code, grid rotation, projected
 origin, overlap areas, and projected cell centres. `Grid_Local_To_Projected`
