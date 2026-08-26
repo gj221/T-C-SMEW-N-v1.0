@@ -34,6 +34,7 @@ function result_file = Run_One_Subfield(run_id, varargin)
 %% unchanged when it is not given. It exists because two runs of the same
 %% run_id launched concurrently would otherwise race on one output path.
 opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
+    'FieldShapefile','','GridCellSizeM',[], ...
     'AppeloAlpha',[],'AppeloLogKH',[],'SaveResults',true,'ResultDirectory','');
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
@@ -48,6 +49,7 @@ end
 validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
+validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
 if ~isempty(opt.AppeloLogKH) && ~(isnumeric(opt.AppeloLogKH) && ...
         isvector(opt.AppeloLogKH) && numel(opt.AppeloLogKH) == 5 && ...
@@ -58,6 +60,29 @@ end
 opt.AppeloLogKH = reshape(opt.AppeloLogKH,1,[]);
 if ~(islogical(opt.SaveResults) && isscalar(opt.SaveResults))
     error('Run_One_Subfield:BadOptions','SaveResults must be scalar logical.');
+end
+if ~(ischar(opt.FieldShapefile) || ...
+        (isstring(opt.FieldShapefile) && isscalar(opt.FieldShapefile)))
+    error('Run_One_Subfield:BadOptions', ...
+        'FieldShapefile must be a character vector or scalar string.');
+end
+opt.FieldShapefile = char(opt.FieldShapefile);
+has_field_shape = ~isempty(opt.FieldShapefile);
+if ~has_field_shape && ~isempty(opt.GridCellSizeM)
+    error('Run_One_Subfield:IncompleteFieldGrid', ...
+        'GridCellSizeM requires FieldShapefile.');
+end
+if has_field_shape
+    if ~isfile(opt.FieldShapefile)
+        error('Run_One_Subfield:MissingShapefile', ...
+            'FieldShapefile does not exist: %s',opt.FieldShapefile);
+    end
+    [~,shape_attributes] = fileattrib(opt.FieldShapefile);
+    opt.FieldShapefile = shape_attributes.Name;
+    if ~isempty(opt.GridNx) || ~isempty(opt.GridNy)
+        error('Run_One_Subfield:ConflictingGridOptions', ...
+            'GridNx and GridNy cannot be combined with FieldShapefile.');
+    end
 end
 start_datenum = [];
 if ~isempty(opt.StartDate)
@@ -80,6 +105,10 @@ if ~(isnumeric(run_id) && isscalar(run_id) && isfinite(run_id) && ...
 end
 
 R = RM(run_id);
+if has_field_shape && ~strcmp(R.layout,'whole_field')
+    error('Run_One_Subfield:BadFieldLayout', ...
+        'FieldShapefile is supported for whole_field runs 1 to 3 only.');
+end
 
 %% This function lives in v2/run; the repository root is one level up.
 script_directory = fileparts(mfilename('fullpath'));
@@ -199,7 +228,12 @@ NNd = ceil(NN/24)+1;
 %% ---------------------------------------------------------------------
 g = R.geom;
 nx = g.main_grid_nx; ny = g.main_grid_ny;
-if R.use_subdomains
+if has_field_shape
+    topo = Build_Shapefile_Grid_Topology( ...
+        opt.FieldShapefile,opt.GridCellSizeM);
+    nx = topo.main_grid_nx;
+    ny = topo.main_grid_ny;
+elseif R.use_subdomains
     if ~isempty(opt.GridNx); nx = opt.GridNx; end
     if ~isempty(opt.GridNy); ny = opt.GridNy; end
     topo = Build_Cell_Topology(g.field_side_m,g.margin_width_m,nx,ny);
@@ -227,7 +261,16 @@ for c = 1:topo.N_cells
         ColCfg(c).ERW_PARAM = ERW_PARAM_control;
     end
 end
-if R.use_subdomains
+if has_field_shape
+    fprintf(['Domain: %d full-grid columns, %.0f m2 field inside ' ...
+        '%.0f m2 simulated (%.3g m cells, %.2f deg rotation)\n'], ...
+        topo.N_cells,topo.field_area_m2,topo.simulated_area_m2, ...
+        topo.cell_size_m,topo.grid_rotation_degrees);
+    fprintf('Grid area outside field: %.0f m2 (%.1f%%)\n', ...
+        topo.grid_calibration.outside_grid_area_m2, ...
+        100*topo.grid_calibration.outside_grid_fraction);
+    fprintf('Rock on: %d field-grid cell(s)\n',sum([ColCfg.apply_rock]));
+elseif R.use_subdomains
     fprintf('Domain: %d columns, %.0f m2 main + %.0f m2 margin (%g m wide)\n', ...
         topo.N_cells,sum(topo.cell_area_m2(is_main)), ...
         sum(topo.cell_area_m2(~is_main)),g.margin_width_m);
@@ -257,6 +300,10 @@ end
 ckpt_dir = fullfile(ckpt_dir,'checkpoints');
 if ~exist(ckpt_dir,'dir'); mkdir(ckpt_dir); end
 ckpt_tag = R.name;
+if has_field_shape
+    ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
+        field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM));
+end
 if ~isempty(opt.AppeloAlpha)
     ckpt_tag = sprintf('%s__alpha%s',ckpt_tag,number_tag(opt.AppeloAlpha));
 end
@@ -306,7 +353,10 @@ if opt.SaveResults
     end
     if ~exist(fl_save,'dir'); mkdir(fl_save); end
     tag = R.name;
-    if R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
+    if has_field_shape
+        tag = sprintf('%s__%s',tag, ...
+            field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM));
+    elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
         tag = sprintf('%s__grid%dx%d',tag,nx,ny);
     end
     if ~isempty(opt.AppeloAlpha)
@@ -352,6 +402,25 @@ if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value >= 0)
     error('Run_One_Subfield:BadOptions', ...
         '%s must be a finite nonnegative scalar.',name);
 end
+end
+
+function validate_optional_positive_scalar(value,name)
+if isempty(value); return; end
+if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value > 0)
+    error('Run_One_Subfield:BadOptions', ...
+        '%s must be a finite positive scalar.',name);
+end
+end
+
+function tag = field_grid_tag(shape_file,cell_size_m)
+[~,shape_name] = fileparts(shape_file);
+shape_name = regexprep(shape_name,'[^A-Za-z0-9]+','_');
+if isempty(cell_size_m)
+    resolution = 'geometry';
+else
+    resolution = sprintf('cell%sm',number_tag(cell_size_m));
+end
+tag = sprintf('field_%s__%s',shape_name,resolution);
 end
 
 function tag = number_tag(value)

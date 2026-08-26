@@ -1,4 +1,4 @@
-# T&C-SMEW-N v0.9
+# T&C-SMEW-N v1.0
 
 ## Repository layout
 
@@ -10,6 +10,7 @@ v2/plotting/     figure scripts: Plot_1D_Then_All_12, Plot_Grid_Setup,
                  Plot_Biogeo_Pools, Plot_Nflux_Diagnostics,
                  Plot_Kantola_Benchmark, and the Cflux_post_processing helper
 v2/figures/      every PNG and FIG the plotting scripts write
+v2/Spatial inputs/   field polygons used by full-grid simulations
 v2/T&C_Code/     model source, Inputs, Parameters and Tests
 v2/SIM/          simulation results (not tracked)
 v2/logs/         worker logs and status files (not tracked)
@@ -36,6 +37,72 @@ contains control, basalt and calcite treatments.
 The retained 12-cell geometry has four 25 m by 25 m field cells, four
 50 m by 5 m side margins and four 5 m by 5 m corners. The prairie uses
 big bluestem as the high C4 PFT and purple coneflower as the low C3 PFT.
+
+### Irregular field grids
+
+Runs 1 to 3 can use a polygon shapefile instead of the retained square
+subfield. Polygon records are merged first, so duplicate or overlapping
+features are not counted more than once. Geographic and projected source
+coordinates are converted to the local WGS84 UTM zone before any distance
+or area calculation. This requires MATLAB Mapping Toolbox.
+
+The default cell width comes from the convex envelope of the merged field
+polygon. If its area is `A` and perimeter is `P`, the square width is
+`2*A/P`. The orientation search checks the convex-envelope edge directions
+and every angle where the padded row or column count changes. The retained
+orientation has the smallest full square-grid area, with the minimum bounding
+area used to break a tie. This avoids making cells small because of holes,
+narrow gaps, disconnected parts, or noisy boundary detail. There is no
+maximum cell count. `GridCellSizeM` can still prescribe a width when a fixed
+resolution is needed.
+
+Every square in the rotated bounding grid is simulated, including squares
+outside the polygon. The polygon edge is only an accounting boundary. It is
+not a no-flow boundary, so laterally coupled cells outside the field can
+affect cells inside it. The outer rectangular grid remains closed laterally,
+while vertical drainage and leaching remain active.
+
+For cell `i`, the stored accounting area is
+`area(intersect(cell_i, field_polygon))`. An areal result `q_i` is converted
+to a field total with `sum(q_i*cell_overlap_area_i)`. Field means use those
+same overlap areas as weights. pH is weighted through hydrogen activity,
+not by taking an arithmetic mean of pH values. Full cell areas remain in
+`topo.cell_area_m2` for storage and lateral transport. The separate
+`topo.cell_overlap_area_m2` values are used only for field accounting.
+
+The supplied Bruce Farm file contains 12 records representing three unique
+applied strips, with each strip repeated four times. Their merged area is
+13106.45 m2. Geometry calibration gives 49.99 m cells and a rotated 2 by 13
+grid. This is 26 simulated cells over 64983.85 m2. The shapefile is an
+applied-strip boundary, not the outside boundary of the whole field.
+
+From the repository root:
+
+```matlab
+shape_file = fullfile('v2','Spatial inputs','Bruce Farm Virginia', ...
+    'applied_yield_shp.shp');
+addpath(fullfile('v2','T&C_Code'),fullfile('v2','run'))
+topo = Build_Shapefile_Grid_Topology(shape_file,[]);
+Run_One_Subfield(1,'FieldShapefile',shape_file,'NDays',1)
+```
+
+The parallel launcher accepts the same field option for whole-field runs:
+
+```matlab
+Run_All_12_Parallel('Runs',1:3,'FieldShapefile',shape_file, ...
+    'MaxConcurrent',2,'MaxRuntimeHours',168)
+```
+
+To inspect the calibrated grid before a run:
+
+```matlab
+cd(fullfile('v2','plotting'))
+Plot_Field_Grid
+```
+
+The result topology stores the UTM EPSG code, grid rotation, projected
+origin, overlap areas, and projected cell centres. `Grid_Local_To_Projected`
+maps any grid-local output coordinates back to the shapefile projection.
 
 All runs use the control Kantola T&C parameters, forcing and initial
 state. The active biogeochemical depth is 300 mm in every run, matching the

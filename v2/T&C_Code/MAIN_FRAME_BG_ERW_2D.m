@@ -149,7 +149,6 @@ for c = 1:N_col
     soilpar_cell(c) = Soil_Param_To_Routing(PAR{c}.Soil_Param, PAR{c}.SPAR);
 end
 A_cell = topo.cell_area_m2(:);             %% [m2]
-A_tot  = sum(A_cell);
 
 %% ========================================================================
 %% STATE ALLOCATION   (trailing dimension = column)
@@ -452,12 +451,24 @@ for c = 1:N_col
         mat2str(appelo_logKH_c,17));
 end
 ERW_forcing_identity = sprintf('date_start=%.17g;date_end=%.17g',Date(1),Date(end));
+topology_overlap_area = topo.cell_area_m2;
+if isfield(topo,'cell_overlap_area_m2')
+    topology_overlap_area = topo.cell_overlap_area_m2;
+end
+topology_rotation = [];
+topology_origin = [];
+if isfield(topo,'grid_rotation_degrees'); topology_rotation = topo.grid_rotation_degrees; end
+if isfield(topo,'projected_grid_origin_m'); topology_origin = topo.projected_grid_origin_m; end
 ERW_topology_identity = sprintf([ ...
-    'topology_areas=%s;topology_edge_a=%s;topology_edge_b=%s;' ...
+    'topology_areas=%s;topology_overlap_areas=%s;' ...
+    'topology_rotation=%s;topology_origin=%s;' ...
+    'topology_edge_a=%s;topology_edge_b=%s;' ...
     'topology_edge_width=%s;topology_edge_distance=%s;' ...
     'topology_edge_distance_a=%s;topology_edge_distance_b=%s;' ...
     'topology_edge_active=%s;topology_outer_width=%s'], ...
-    mat2str(topo.cell_area_m2,17),mat2str(topo.edge_a,17), ...
+    mat2str(topo.cell_area_m2,17),mat2str(topology_overlap_area,17), ...
+    mat2str(topology_rotation,17),mat2str(topology_origin,17), ...
+    mat2str(topo.edge_a,17), ...
     mat2str(topo.edge_b,17),mat2str(topo.edge_face_width_m,17), ...
     mat2str(topo.edge_face_distance_m,17), ...
     mat2str(topo.edge_face_distance_a_m,17), ...
@@ -1082,39 +1093,54 @@ fprintf('\nCOMPUTATIONAL TIME [h] %.3f   (%.1f ms per column-step)\n', ...
     Computational_Time/3600, 1000*Computational_Time/(NN*N_col));
 
 %% ========================================================================
-%% DOMAIN AGGREGATION  --  area-weighted over the sub-plot cells
+%% DOMAIN AGGREGATION  --  polygon-overlap weighted where available
 %% ========================================================================
-w_col = reshape(A_cell/A_tot, 1, N_col);
-Domain.area_m2       = A_tot;
-Domain.area_main_m2  = sum(A_cell(strcmp(topo.cell_region,'main')));
-Domain.area_buffer_m2= sum(A_cell(~strcmp(topo.cell_region,'main')));
-Domain.N2Oflx        = squeeze(N2Oflx)  * w_col.';
-Domain.N2flx         = squeeze(N2flx)   * w_col.';
-Domain.VOL            = squeeze(VOL)     * w_col.';
-Domain.BfixN          = squeeze(BfixN)   * w_col.';
-Domain.FertN          = squeeze(FertN_d) * w_col.';
-Domain.DepN           = squeeze(DepN_d)  * w_col.';
-Domain.NITflx         = squeeze(NITflx)  * w_col.';
-Domain.DENITflx       = squeeze(DENITflx)* w_col.';
-Domain.N2Oflx_nit     = squeeze(N2Oflx_nit) * w_col.';
-Domain.LEAK_NO3      = squeeze(LEAK_NO3)* w_col.';
-Domain.LEAK_NH4      = squeeze(LEAK_NH4)* w_col.';
+[A_field,w_col,field_fraction] = Field_Aggregation_Areas(topo);
+A_field_total = sum(A_field);
+A_simulated_total = sum(A_cell);
+Domain.area_m2 = A_field_total;
+Domain.simulated_area_m2 = A_simulated_total;
+Domain.grid_outside_area_m2 = A_simulated_total-A_field_total;
+Domain.area_main_m2 = sum(A_field(strcmp(topo.cell_region,'main')));
+Domain.area_buffer_m2 = sum(A_field(~strcmp(topo.cell_region,'main')));
+[Domain.N2Oflx,Domain.N2O_total_gN] = Field_Aggregate_Areal(squeeze(N2Oflx),topo);
+[Domain.N2flx,Domain.N2_total_gN] = Field_Aggregate_Areal(squeeze(N2flx),topo);
+[Domain.VOL,Domain.VOL_total_gN] = Field_Aggregate_Areal(squeeze(VOL),topo);
+[Domain.BfixN,Domain.BfixN_total_gN] = Field_Aggregate_Areal(squeeze(BfixN),topo);
+[Domain.FertN,Domain.FertN_total_gN] = Field_Aggregate_Areal(squeeze(FertN_d),topo);
+[Domain.DepN,Domain.DepN_total_gN] = Field_Aggregate_Areal(squeeze(DepN_d),topo);
+[Domain.NITflx,Domain.NIT_total_gN] = Field_Aggregate_Areal(squeeze(NITflx),topo);
+[Domain.DENITflx,Domain.DENIT_total_gN] = Field_Aggregate_Areal(squeeze(DENITflx),topo);
+[Domain.N2Oflx_nit,Domain.N2O_nit_total_gN] = ...
+    Field_Aggregate_Areal(squeeze(N2Oflx_nit),topo);
+[Domain.LEAK_NO3,Domain.LEAK_NO3_total_gN] = ...
+    Field_Aggregate_Areal(squeeze(LEAK_NO3),topo);
+[Domain.LEAK_NH4,Domain.LEAK_NH4_total_gN] = ...
+    Field_Aggregate_Areal(squeeze(LEAK_NH4),topo);
 Domain.PH_bulk_cell_d = squeeze(PH_bulk_d);
 Domain.PH_pore_cell_d = squeeze(PH_pore_d);
 Domain.PH_bulk_d      = pH_Area_Weighted(Domain.PH_bulk_cell_d,w_col);
 Domain.PH_pore_d      = pH_Area_Weighted(Domain.PH_pore_cell_d,w_col);
 Domain.PH_bulk_aggregation = 'area_weighted_hydrogen_activity_index_not_pooled_extract';
 Domain.PH_d           = Domain.PH_bulk_d;
-Domain.NO3_pool      = squeeze(P(:,32,:))* w_col.';
+[Domain.NO3_pool,Domain.NO3_pool_total_gN] = ...
+    Field_Aggregate_Areal(squeeze(P(:,32,:)),topo);
 Domain.lateral       = lateral_diag;
 Domain.exit_water_vert_m3 = exit_water_vert_m3;
 Domain.exit_water_surface_m3 = exit_water_surface_m3;
 Domain.exit_water_total_m3 = exit_water_vert_m3+exit_water_surface_m3;
+Domain.exit_water_field_vert_m3 = sum(exit_water_vert_m3.*field_fraction);
+Domain.exit_water_field_surface_m3 = sum(exit_water_surface_m3.*field_fraction);
+Domain.exit_water_field_total_m3 = Domain.exit_water_field_vert_m3+ ...
+    Domain.exit_water_field_surface_m3;
 Domain.cell_region   = topo.cell_region;
 Domain.cell_area_m2  = A_cell;
+Domain.cell_overlap_area_m2 = A_field;
+Domain.cell_overlap_fraction = field_fraction;
+Domain.field_aggregation = 'polygon_overlap_area';
 
-fprintf('Domain: %.0f m2 total (%.0f main, %.0f margin)\n', ...
-    Domain.area_m2, Domain.area_main_m2, Domain.area_buffer_m2);
+fprintf('Domain: %.0f m2 field inside %.0f m2 simulated grid\n', ...
+    Domain.area_m2,Domain.simulated_area_m2);
 fprintf('Cumulative N2O   : %.4f gN/m2\n', sum(Domain.N2Oflx,'omitnan'));
 fprintf('Cumulative NO3   : %.4f gN/m2\n', sum(Domain.LEAK_NO3,'omitnan'));
 fprintf('Net lateral water margin->field: %.4f m3\n', ...
