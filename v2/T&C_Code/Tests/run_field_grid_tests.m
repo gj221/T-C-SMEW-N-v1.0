@@ -2,6 +2,7 @@ function run_field_grid_tests()
 test_field_grid_topology;
 test_field_grid_calibration;
 test_field_aggregation;
+test_shapefile_geometry_fidelity;
 test_shapefile_grid_setups;
 test_shapefile_launcher;
 test_field_grid_plot;

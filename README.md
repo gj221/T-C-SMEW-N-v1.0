@@ -41,13 +41,15 @@ big bluestem as the high C4 PFT and purple coneflower as the low C3 PFT.
 ### Irregular field grids
 
 Runs 1 to 3 can use a polygon shapefile instead of the retained square
-subfield. Selected records are unioned first, so duplicate or overlapping
-features are not counted more than once. The union is then split into
-connected polygon regions. Every region gets a separate grid, simulation,
-checkpoint, result, status file and log. A large empty grid is therefore not
-placed across the gap between fields. Geographic and projected source
-coordinates are converted to the local WGS84 UTM zone before any distance or
-area calculation. This requires MATLAB Mapping Toolbox.
+subfield. Each selected record is split into connected regions first. Only
+regions that touch or overlap are unioned, so duplicate area is not counted
+twice and distant polygons cannot alter one another's vertices. Every region
+gets a separate grid, simulation, checkpoint, result, status file and log. A
+large empty grid is therefore not placed across the gap between fields.
+Geographic and projected source coordinates are converted to the local WGS84
+UTM zone before any distance or area calculation. Polygon simplification is
+disabled, collinear source points are retained, and the projection round trip
+must close within 1e-6 m. This requires MATLAB Mapping Toolbox.
 
 The default cell width comes from the convex envelope of each connected
 polygon. If its area is `A` and perimeter is `P`, the square width is
@@ -110,7 +112,9 @@ Plot_Field_Grid
 
 This writes one subplot per retained polygon, with the complete boundary over
 the full grid. It also writes a CSV with separate area, cell-size, grid and
-outside-area summaries for each polygon.
+outside-area summaries for each polygon. The CSV includes the source and
+projected vertex counts, projection round-trip error and source-to-polygon
+vertex error.
 
 The result topology stores the UTM EPSG code, grid rotation, projected
 origin, overlap areas, and projected cell centres. `Grid_Local_To_Projected`

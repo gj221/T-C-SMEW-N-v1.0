@@ -83,9 +83,45 @@ end
 target_crs = projcrs(projected_crs_epsg);
 
 feature_polygons = cell(numel(features),1);
+source_finite_vertex_count = zeros(1,numel(features));
+projected_polygon_vertex_count = zeros(1,numel(features));
+projection_roundtrip_max_error_m = zeros(1,numel(features));
+source_to_polygon_max_error_m = zeros(1,numel(features));
 for k = 1:numel(features)
     [x_m,y_m] = projfwd(target_crs,latitude{k},longitude{k});
-    feature_polygons{k} = polyshape(x_m,y_m,'Simplify',true);
+    valid = isfinite(x_m) & isfinite(y_m);
+    feature_polygons{k} = polyshape(x_m,y_m,'Simplify',false, ...
+        'KeepCollinearPoints',true);
+    if isempty(feature_polygons{k}.Vertices) || area(feature_polygons{k}) <= 0
+        error('Read_Shapefile_Polygons:InvalidPolygon', ...
+            'Each selected feature must define finite positive-area geometry.');
+    end
+
+    [latitude_rt,longitude_rt] = projinv( ...
+        target_crs,x_m(valid),y_m(valid));
+    [x_rt_m,y_rt_m] = projfwd( ...
+        target_crs,latitude_rt,longitude_rt);
+    projection_roundtrip_max_error_m(k) = max(hypot( ...
+        x_rt_m-x_m(valid),y_rt_m-y_m(valid)));
+
+    polygon_vertices = feature_polygons{k}.Vertices;
+    finite_polygon_vertex = all(isfinite(polygon_vertices),2);
+    polygon_vertices = polygon_vertices(finite_polygon_vertex,:);
+    source_finite_vertex_count(k) = sum(valid);
+    projected_polygon_vertex_count(k) = size(polygon_vertices,1);
+    source_index = find(valid);
+    for j = 1:numel(source_index)
+        i = source_index(j);
+        source_to_polygon_max_error_m(k) = max( ...
+            source_to_polygon_max_error_m(k),min(hypot( ...
+            polygon_vertices(:,1)-x_m(i), ...
+            polygon_vertices(:,2)-y_m(i))));
+    end
+    if projection_roundtrip_max_error_m(k) >= 1e-6 || ...
+            source_to_polygon_max_error_m(k) >= 1e-9
+        error('Read_Shapefile_Polygons:GeometryFidelity', ...
+            'Projection or polygon construction changed a source boundary.');
+    end
 end
 
 metadata.source_shapefile = shape_file;
@@ -94,6 +130,11 @@ metadata.projected_crs_name = char(target_crs.Name);
 metadata.projected_crs_epsg = projected_crs_epsg;
 metadata.shapefile_feature_count = feature_count;
 metadata.feature_indices = feature_indices;
+metadata.source_finite_vertex_count = source_finite_vertex_count;
+metadata.projected_polygon_vertex_count = projected_polygon_vertex_count;
+metadata.projection_roundtrip_max_error_m = ...
+    projection_roundtrip_max_error_m;
+metadata.source_to_polygon_max_error_m = source_to_polygon_max_error_m;
 
 end
 
