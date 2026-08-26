@@ -66,6 +66,12 @@ if ~E.init
     if isfield(p,'Pcla');   C.Pcla  = p.Pcla;   end
     if isfield(p,'rain_pH_vwm'); C.rain_pH_vwm = p.rain_pH_vwm; end
     if isfield(p,'bulk_pH_params'); C.bulk_pH_params = p.bulk_pH_params; end
+    if isfield(p,'spinup_water_loss_mean_l_m2_d') && ...
+            isscalar(p.spinup_water_loss_mean_l_m2_d) && ...
+            isfinite(p.spinup_water_loss_mean_l_m2_d) && ...
+            p.spinup_water_loss_mean_l_m2_d >= 0
+        C.seed_water_loss_l_m2_d = p.spinup_water_loss_mean_l_m2_d;
+    end
     E.TC_const = C;
 
     %% Per-column series, filled in as the run proceeds
@@ -144,6 +150,16 @@ if ~E.init_done_j2
     E.TC.temp_soil(1:2,:) = Tdp_bio;
     E.TC.r_het(1:2,:)     = (R_microbe_c(2) + R_litter_c(2) + R_ew_c(2) - R_litter_sur_c(2))/12*conv_mol;
     E.TC.r_aut(1:2,:)     = (Rmr_H_c(2,:) + Rmr_L_c(2,:))*Ccrown'/12*conv_mol;
+    if isfield(p,'spinup_r_het_mean_umol_m2_d') && ...
+            isscalar(p.spinup_r_het_mean_umol_m2_d) && ...
+            isfinite(p.spinup_r_het_mean_umol_m2_d)
+        E.TC.r_het(1:2,:) = p.spinup_r_het_mean_umol_m2_d;
+    end
+    if isfield(p,'spinup_r_aut_mean_umol_m2_d') && ...
+            isscalar(p.spinup_r_aut_mean_umol_m2_d) && ...
+            isfinite(p.spinup_r_aut_mean_umol_m2_d)
+        E.TC.r_aut(1:2,:) = p.spinup_r_aut_mean_umol_m2_d;
+    end
 else
     E.TC.s(j,:)         = sum(p.Bio_Zs.*mean(O_c(pdind,:)))/C.n;
     E.TC.temp_soil(j,:) = Tdp_bio;

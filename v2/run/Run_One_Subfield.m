@@ -36,6 +36,7 @@ function result_file = Run_One_Subfield(run_id, varargin)
 opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
     'FieldShapefile','','GridCellSizeM',[], ...
     'FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
+    'CellAgronomicFile','','CellSpinupStateFile','', ...
     'AppeloAlpha',[],'AppeloLogKH',[],'SaveResults',true,'ResultDirectory','');
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
@@ -70,6 +71,14 @@ if ~(ischar(opt.FieldShapefile) || ...
         'FieldShapefile must be a character vector or scalar string.');
 end
 opt.FieldShapefile = char(opt.FieldShapefile);
+opt.CellAgronomicFile = validate_optional_file_name( ...
+    opt.CellAgronomicFile,'CellAgronomicFile');
+opt.CellSpinupStateFile = validate_optional_file_name( ...
+    opt.CellSpinupStateFile,'CellSpinupStateFile');
+if xor(isempty(opt.CellAgronomicFile),isempty(opt.CellSpinupStateFile))
+    error('Run_One_Subfield:IncompleteCellInputs', ...
+        'CellAgronomicFile and CellSpinupStateFile must be supplied together.');
+end
 has_field_shape = ~isempty(opt.FieldShapefile);
 if ~has_field_shape && (~isempty(opt.GridCellSizeM) || ...
         ~isempty(opt.FieldFeatureIndices) || ~isempty(opt.FieldPolygonIndex))
@@ -186,7 +195,9 @@ id_location = char(MOD_PARAM_input.Location);
 fprintf('Active biogeochemical depth: %.0f mm\n',R.biogeo_depth_mm);
 
 %% Spin-up pool state
-load(fullfile(Input_Directory,['Data_' id_location '_BG.mat']));  %#ok<LOAD>
+if isempty(opt.CellSpinupStateFile)
+    load(fullfile(Input_Directory,['Data_' id_location '_BG.mat']));  %#ok<LOAD>
+end
 
 %% ---------------------------------------------------------------------
 %% Forcing
@@ -264,10 +275,23 @@ else
     topo = Build_Single_Cell_Topology(g.field_side_m^2);
 end
 
+CellAgronomicInputs = table();
+CellBGStates = struct([]);
+ERW_cell_input_dependencies = {};
+if ~isempty(opt.CellAgronomicFile)
+    CellAgronomicInputs = Resolve_Cell_Agronomic_Inputs(topo, ...
+        readtable(opt.CellAgronomicFile,'VariableNamingRule','preserve'));
+    CellBGStates = Load_Field_Spinup_States(opt.CellSpinupStateFile,topo, ...
+        CellAgronomicInputs.input_identity);
+    ERW_cell_input_dependencies = {opt.CellAgronomicFile,opt.CellSpinupStateFile};
+end
+
 base_param = fullfile(Parameter_Directory,[char(MOD_PARAM_input.MOD_PARAM) '.m']);
 is_main = strcmp(topo.cell_region,'main');
 ColCfg = repmat(struct('PARAM_IC',base_param,'PFT_OVERRIDE','', ...
                        'apply_rock',false,'ERW_PARAM',ERW_PARAM_control, ...
+                       'MOD_PARAM',table(),'BG_STATE',struct(), ...
+                       'agronomic_identity','', ...
                        'appelo_alpha',opt.AppeloAlpha, ...
                        'appelo_logKH',opt.AppeloLogKH), ...
                 topo.N_cells,1);
@@ -283,6 +307,22 @@ for c = 1:topo.N_cells
     else
         ColCfg(c).ERW_PARAM = ERW_PARAM_control;
     end
+end
+if ~isempty(CellAgronomicInputs)
+    ERW_cell_rows = cell(topo.N_cells,1);
+    for c = 1:topo.N_cells
+        ERW_cell_rows{c} = ColCfg(c).ERW_PARAM;
+    end
+    CellInputs = Configure_Cell_Agronomic_Inputs(MOD_PARAM_input, ...
+        vertcat(ERW_cell_rows{:}),CellAgronomicInputs,CellBGStates);
+    for c = 1:topo.N_cells
+        ColCfg(c).MOD_PARAM = CellInputs(c).MOD_PARAM;
+        ColCfg(c).ERW_PARAM = CellInputs(c).ERW_PARAM;
+        ColCfg(c).BG_STATE = CellInputs(c).BG_STATE;
+        ColCfg(c).agronomic_identity = CellInputs(c).agronomic_identity;
+    end
+    fprintf('Cell soil inputs: %d validated agronomic rows and spin-up states\n', ...
+        topo.N_cells);
 end
 if has_field_shape
     fprintf(['Domain: %d full-grid columns, %.0f m2 field inside ' ...
@@ -327,6 +367,10 @@ if has_field_shape
     ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
         field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM, ...
         opt.FieldPolygonIndex,opt.FieldFeatureIndices));
+end
+if ~isempty(opt.CellAgronomicFile)
+    ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
+        Field_Input_Tag(opt.CellAgronomicFile,opt.CellSpinupStateFile));
 end
 if ~isempty(opt.AppeloAlpha)
     ckpt_tag = sprintf('%s__alpha%s',ckpt_tag,number_tag(opt.AppeloAlpha));
@@ -384,6 +428,10 @@ if opt.SaveResults
     elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
         tag = sprintf('%s__grid%dx%d',tag,nx,ny);
     end
+    if ~isempty(opt.CellAgronomicFile)
+        tag = sprintf('%s__%s',tag, ...
+            Field_Input_Tag(opt.CellAgronomicFile,opt.CellSpinupStateFile));
+    end
     if ~isempty(opt.AppeloAlpha)
         tag = sprintf('%s__alpha%s',tag,number_tag(opt.AppeloAlpha));
     end
@@ -419,6 +467,23 @@ if ~(isnumeric(value) && isscalar(value) && isfinite(value) && ...
         value == fix(value) && value >= 1)
     error('Run_One_Subfield:BadOptions','%s must be a positive integer.',name);
 end
+end
+
+function file_name = validate_optional_file_name(value,name)
+if ~(ischar(value) || (isstring(value) && isscalar(value)))
+    error('Run_One_Subfield:BadOptions', ...
+        '%s must be a character vector or scalar string.',name);
+end
+file_name = char(value);
+if isempty(file_name)
+    return
+end
+if ~isfile(file_name)
+    error('Run_One_Subfield:MissingCellInput', ...
+        '%s does not exist: %s',name,file_name);
+end
+[~,attributes] = fileattrib(file_name);
+file_name = attributes.Name;
 end
 
 function validate_optional_nonnegative_scalar(value,name)

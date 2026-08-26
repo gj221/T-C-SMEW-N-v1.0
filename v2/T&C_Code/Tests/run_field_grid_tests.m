@@ -6,4 +6,8 @@ test_shapefile_geometry_fidelity;
 test_shapefile_grid_setups;
 test_shapefile_launcher;
 test_field_grid_plot;
+test_cell_agronomic_inputs;
+test_field_spinup_states;
+test_field_cell_spinup_dry_run;
+test_automatic_spinup_port;
 end

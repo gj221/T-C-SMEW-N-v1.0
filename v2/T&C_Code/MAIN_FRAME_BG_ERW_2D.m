@@ -77,11 +77,24 @@ if exist('NupI_L_out','var'); ctx.NupI_L_out = NupI_L_out; end
 
 PAR = cell(N_col,1);
 for c = 1:N_col
+    cell_ctx = ctx;
+    if isfield(ColCfg(c),'MOD_PARAM') && istable(ColCfg(c).MOD_PARAM) && ...
+            height(ColCfg(c).MOD_PARAM) == 1
+        cell_ctx.MOD_PARAM_input = ColCfg(c).MOD_PARAM;
+    end
+    if isfield(ColCfg(c),'ERW_PARAM') && istable(ColCfg(c).ERW_PARAM) && ...
+            height(ColCfg(c).ERW_PARAM) == 1
+        cell_ctx.ERW_PARAM_input = ColCfg(c).ERW_PARAM;
+    end
+    if isfield(ColCfg(c),'BG_STATE') && isstruct(ColCfg(c).BG_STATE) && ...
+            ~isempty(fieldnames(ColCfg(c).BG_STATE))
+        cell_ctx = Cell_BG_State_Context(cell_ctx,ColCfg(c).BG_STATE);
+    end
     ovr = '';
     if isfield(ColCfg(c),'PFT_OVERRIDE') && ~isempty(ColCfg(c).PFT_OVERRIDE)
         ovr = fullfile(Parameter_Directory, [char(ColCfg(c).PFT_OVERRIDE) '.m']);
     end
-    PAR{c} = Load_Cell_Parameters(char(ColCfg(c).PARAM_IC), ovr, ctx);
+    PAR{c} = Load_Cell_Parameters(char(ColCfg(c).PARAM_IC), ovr, cell_ctx);
     if isfield(ColCfg(c),'appelo_alpha') && ~isempty(ColCfg(c).appelo_alpha)
         if ~isfield(PAR{c},'bulk_pH_params')
             error('MAIN_FRAME_BG_ERW_2D:MissingBulkPHParameters', ...
@@ -425,13 +438,21 @@ end
 if ~exist('ERW_ckpt_force_resume','var') || isempty(ERW_ckpt_force_resume)
     ERW_ckpt_force_resume = false;
 end
+if ~exist('ERW_cell_input_dependencies','var') || isempty(ERW_cell_input_dependencies)
+    ERW_cell_input_dependencies = {};
+end
 ERW_runtime_parts = cell(1,N_col);
 for c = 1:N_col
     appelo_alpha_c = [];
     appelo_logKH_c = [];
     ERW_runtime_param_c = ERW_PARAM_input;
+    MOD_runtime_param_c = MOD_PARAM_input;
     if isfield(ColCfg(c),'ERW_PARAM')
         ERW_runtime_param_c = ColCfg(c).ERW_PARAM;
+    end
+    if isfield(ColCfg(c),'MOD_PARAM') && istable(ColCfg(c).MOD_PARAM) && ...
+            height(ColCfg(c).MOD_PARAM) == 1
+        MOD_runtime_param_c = ColCfg(c).MOD_PARAM;
     end
     if isfield(ColCfg(c),'appelo_alpha')
         appelo_alpha_c = ColCfg(c).appelo_alpha;
@@ -443,10 +464,17 @@ for c = 1:N_col
     if isfield(ColCfg(c),'PFT_OVERRIDE') && ~isempty(ColCfg(c).PFT_OVERRIDE)
         pft_override_c = char(ColCfg(c).PFT_OVERRIDE);
     end
+    agronomic_identity_c = '';
+    if isfield(ColCfg(c),'agronomic_identity')
+        agronomic_identity_c = char(ColCfg(c).agronomic_identity);
+    end
     ERW_runtime_parts{c} = sprintf( ...
-        'c%d:column_param=%s;pft=%s;apply_rock=%d;erw_param=%s;alpha=%s;logKH=%s', ...
+        ['c%d:column_param=%s;pft=%s;apply_rock=%d;mod_param=%s;' ...
+         'erw_param=%s;agronomic=%s;alpha=%s;logKH=%s'], ...
         c,char(ColCfg(c).PARAM_IC),pft_override_c,logical(ColCfg(c).apply_rock), ...
+        ERW_Runtime_Parameter_Identity(MOD_runtime_param_c), ...
         ERW_Runtime_Parameter_Identity(ERW_runtime_param_c), ...
+        agronomic_identity_c, ...
         mat2str(appelo_alpha_c,17), ...
         mat2str(appelo_logKH_c,17));
 end
@@ -520,7 +548,8 @@ ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     fullfile(cd, 'Inputs', 'Ca_Data.mat'), ...
     fullfile(cd, 'Resolve_Appelo_Constants.m'), ...
     fullfile(cd, 'Invert_Bulk_pH.m'), ...
-    fullfile(cd, 'Porewater_to_Bulk_pH.m'));
+    fullfile(cd, 'Porewater_to_Bulk_pH.m'), ...
+    ERW_cell_input_dependencies{:});
 i_resume = 2;
 if ~isempty(ERW_ckpt_file) && isfile(ERW_ckpt_file)
     ckpt_probe = load(ERW_ckpt_file, 'ERW_ckpt_fingerprint', 'i');
@@ -1042,7 +1071,7 @@ for i = i_resume:NN
                 Tdp_bio_c(c), VSUM_c(c), VTSUM_c(c), ...
                 R_microbe(:,1,c), R_litter(:,1,c), R_ew(:,1,c), R_litter_sur(:,1,c), ...
                 Rmr_H(:,:,c), Rmr_L(:,:,c), Ccrown_c(c,:), ...
-                P(:,:,c), MOD_PARAM_input, ERW_PARAM_cell, ...
+                P(:,:,c), PAR{c}.MOD_PARAM_input, ERW_PARAM_cell, ...
                 conv_mol, conv_Al);
             if j == 2 && isfield(ERW{c},'P_initial')
                 P(j-1,:,c) = ERW{c}.P_initial;
@@ -1151,4 +1180,18 @@ fprintf('Net lateral NO3   margin->field: %.4f g\n', ...
 %% ========================================================================
 function out = ternary(cond, a, b)
 if cond; out = a; else; out = b; end
+end
+
+function ctx = Cell_BG_State_Context(ctx,state)
+names = {'B_out','O_out','RexmyI_out','NavlI_out','NupI_L_out', ...
+    'Nreserve_L_out','Preserve_L_out','Kreserve_L_out','Careserve_L_out', ...
+    'Mgreserve_L_out','Sireserve_L_out','Nreserve_H_out','Preserve_H_out', ...
+    'Kreserve_H_out','Careserve_H_out','Mgreserve_H_out','Sireserve_H_out', ...
+    'spinup_r_het_mean_umol_m2_d','spinup_r_aut_mean_umol_m2_d', ...
+    'spinup_water_loss_mean_l_m2_d','spinup_erw_handoff_diagnostic'};
+for k = 1:numel(names)
+    if isfield(state,names{k})
+        ctx.(names{k}) = state.(names{k});
+    end
+end
 end

@@ -15,10 +15,6 @@ if ~(isnumeric(cell_size_m) && isscalar(cell_size_m) && ...
 end
 
 ratio = extent_m/cell_size_m;
-nearest_integer = round(ratio);
-if abs(ratio-nearest_integer) <= 1e-10*max(1,abs(ratio))
-    ratio = nearest_integer;
-end
 count = max(1,ceil(ratio));
 
 end

@@ -11,6 +11,8 @@ function plan = Run_All_12_Parallel(varargin)
 %%   FieldShapefile  optional polygon field boundary               ''
 %%   GridCellSizeM   explicit square width; otherwise calibrated   []
 %%   FieldFeatureIndices optional shapefile records to include      []
+%%   CellAgronomicFiles one input CSV per disconnected polygon      {}
+%%   CellSpinupStateFiles one state MAT per disconnected polygon    {}
 %%   AppeloAlpha     optional run-local Appelo alpha              []
 %%   AppeloLogKH     optional [Na K Ca Mg Al] logKH vector        []
 %%   ResultDirectory optional result and checkpoint directory      ''
@@ -24,6 +26,7 @@ function plan = Run_All_12_Parallel(varargin)
 opt = struct('MaxConcurrent',2,'Runs',[10:12 1:9],'NDays',[],'StartDate',[], ...
     'GridNx',[],'GridNy',[],'FieldShapefile','','GridCellSizeM',[], ...
     'FieldFeatureIndices',[], ...
+    'CellAgronomicFiles',{{}},'CellSpinupStateFiles',{{}}, ...
     'AppeloAlpha',[],'AppeloLogKH',[], ...
     'PollSeconds',20, ...
     'MaxRuntimeHours',168,'DryRun',false,'Overwrite',false, ...
@@ -96,9 +99,11 @@ end
 opt.FieldShapefile = char(opt.FieldShapefile);
 has_field_shape = ~isempty(opt.FieldShapefile);
 if ~has_field_shape && (~isempty(opt.GridCellSizeM) || ...
-        ~isempty(opt.FieldFeatureIndices))
+        ~isempty(opt.FieldFeatureIndices) || ~isempty(opt.CellAgronomicFiles) || ...
+        ~isempty(opt.CellSpinupStateFiles))
     error('Run_All_12_Parallel:IncompleteFieldGrid', ...
-        'GridCellSizeM and FieldFeatureIndices require FieldShapefile.');
+        ['GridCellSizeM, FieldFeatureIndices and polygon cell inputs ' ...
+         'require FieldShapefile.']);
 end
 if has_field_shape
     if ~isfile(opt.FieldShapefile)
@@ -137,6 +142,8 @@ if has_field_shape
         opt.FieldShapefile,opt.GridCellSizeM,opt.FieldFeatureIndices);
     field_polygon_count = numel(field_setups);
 end
+[opt.CellAgronomicFiles,opt.CellSpinupStateFiles] = normalize_cell_input_files( ...
+    opt.CellAgronomicFiles,opt.CellSpinupStateFiles,field_polygon_count);
 log_dir = char(opt.LogDirectory);
 if isempty(log_dir); log_dir = fullfile(root,'logs','Subfield_12'); end
 out_dir = char(opt.ResultDirectory);
@@ -190,14 +197,23 @@ for run_index = 1:numel(runs)
     plan(q).log_file = fullfile(log_dir, ...
         sprintf('run_%02d_%s.log',id,tag));
     if ~isempty(pref_root)
-        plan(q).runtime_directory = fullfile(pref_root, ...
-            sprintf('run_%02d_polygon%02d',id,polygon_index));
+        if has_field_shape
+            runtime_leaf = sprintf('run_%02d_polygon%02d',id,polygon_index);
+        else
+            runtime_leaf = sprintf('run_%02d',id);
+        end
+        plan(q).runtime_directory = fullfile(pref_root,runtime_leaf);
         plan(q).preference_directory = fullfile(plan(q).runtime_directory,'pref');
         plan(q).temporary_directory = fullfile(plan(q).runtime_directory,'temp');
     end
     job_extra = extra;
     if has_field_shape
         job_extra = horzcat(extra,{'FieldPolygonIndex',polygon_index});
+    end
+    if ~isempty(opt.CellAgronomicFiles)
+        job_extra = horzcat(job_extra, ...
+            {'CellAgronomicFile',opt.CellAgronomicFiles{polygon_index}, ...
+             'CellSpinupStateFile',opt.CellSpinupStateFiles{polygon_index}});
     end
     args = worker_args(id,plan(q).status_file,job_extra);
     plan(q).batch = sprintf("cd('%s'); Run_Subfield_Worker(%s)", ...
@@ -372,6 +388,11 @@ elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
     if ~isempty(opt.GridNy); ny = opt.GridNy; end
     tag = sprintf('%s__grid%dx%d',tag,nx,ny);
 end
+if ~isempty(opt.CellAgronomicFiles)
+    tag = sprintf('%s__%s',tag,Field_Input_Tag( ...
+        opt.CellAgronomicFiles{polygon_index}, ...
+        opt.CellSpinupStateFiles{polygon_index}));
+end
 if ~isempty(opt.AppeloAlpha)
     alpha_tag = number_tag(opt.AppeloAlpha);
     tag = sprintf('%s__alpha%s',tag,alpha_tag);
@@ -484,6 +505,54 @@ try
     end
 catch
     value = -1;
+end
+end
+
+function [agronomic_files,state_files] = normalize_cell_input_files( ...
+        agronomic_files,state_files,polygon_count)
+agronomic_files = normalize_file_list(agronomic_files,'CellAgronomicFiles');
+state_files = normalize_file_list(state_files,'CellSpinupStateFiles');
+if xor(isempty(agronomic_files),isempty(state_files))
+    error('Run_All_12_Parallel:IncompleteCellInputs', ...
+        'CellAgronomicFiles and CellSpinupStateFiles must be supplied together.');
+end
+if isempty(agronomic_files)
+    return
+end
+if numel(agronomic_files) ~= polygon_count || numel(state_files) ~= polygon_count
+    error('Run_All_12_Parallel:CellInputCount', ...
+        'Supply one agronomic and one spin-up state file for each of the %d polygons.', ...
+        polygon_count);
+end
+for k = 1:polygon_count
+    if ~isfile(agronomic_files{k}) || ~isfile(state_files{k})
+        error('Run_All_12_Parallel:MissingCellInput', ...
+            'Polygon %d cell input or spin-up state file does not exist.',k);
+    end
+end
+end
+
+function files = normalize_file_list(values,label)
+if isempty(values)
+    files = {};
+elseif ischar(values) || (isstring(values) && isscalar(values))
+    files = {char(values)};
+elseif isstring(values)
+    files = cellstr(values(:));
+elseif iscell(values)
+    files = cell(size(values));
+    for k = 1:numel(values)
+        value = values{k};
+        if ~(ischar(value) || (isstring(value) && isscalar(value)))
+            error('Run_All_12_Parallel:BadOptions', ...
+                '%s entries must be character vectors or scalar strings.',label);
+        end
+        files{k} = char(value);
+    end
+    files = files(:).';
+else
+    error('Run_All_12_Parallel:BadOptions', ...
+        '%s must be a file name or list of file names.',label);
 end
 end
 

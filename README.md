@@ -70,20 +70,27 @@ UTM zone before any distance or area calculation. Polygon simplification is
 disabled, collinear source points are retained, and the projection round trip
 must close within 1e-6 m. This requires MATLAB Mapping Toolbox.
 
-The default cell width comes from the convex envelope of each connected
-polygon. If its area is `A` and perimeter is `P`, the square width is
-`2*A/P`. The orientation search checks the convex-envelope edge directions
-and every angle where the padded row or column count changes. The retained
-orientation has the smallest full square-grid area, with the minimum bounding
-area used to break a tie. This avoids making cells small because of holes,
-narrow gaps or noisy boundary detail. There is no maximum cell count.
-`GridCellSizeM` can still prescribe a width when a fixed resolution is needed.
+The automatic grid retains every full square with positive polygon overlap.
+Squares in the bounding rectangle that do not touch the field are removed.
+For polygon area `A`, retained cell count `N` and square width `h`, coverage is
 
-Every square in the rotated bounding grid is simulated, including squares
-outside the polygon. The polygon edge is only an accounting boundary. It is
-not a no-flow boundary, so laterally coupled cells outside the field can
-affect cells inside it. The outer rectangular grid remains closed laterally,
-while vertical drainage and leaching remain active.
+```
+field_fraction = A/(N*h^2)
+```
+
+and must be greater than 0.95. The grid is aligned to the minimum-area rotated
+bounding rectangle. Cell-size candidates occur where a bounding width or
+height fits another complete square. The calibration minimizes `N` first,
+then minimizes `N*h^2-A`. There is no maximum cell count. `GridCellSizeM` can
+still prescribe a width when a fixed resolution is needed, but the setup is
+rejected if that width does not exceed 95% coverage.
+
+Every retained square is simulated in full, including its area outside the
+polygon. The polygon edge is only an accounting boundary. It is not a no-flow
+boundary, so the outside parts of boundary cells remain part of lateral and
+vertical transport. Missing neighbours around the retained-cell perimeter
+form the closed lateral outer boundary. Vertical drainage and leaching remain
+active.
 
 For cell `i`, the stored accounting area is
 `area(intersect(cell_i, field_polygon))`. An areal result `q_i` is converted
@@ -97,9 +104,10 @@ accounting.
 The whole-site source contains three control polygons. Source feature 3,
 `Control 3`, is associated with Field 7 and is excluded. Source features 1
 and 2 are retained and run separately. Their areas are 8410.29 and 15282.73
-m2. Geometry calibration gives a 46.29 m, 4 by 3 grid for `Control 2` and a
-67.33 m, 3 by 3 grid for `Control 1`. This is 21 simulated cells across the
-two independent setups. The retained polygon area is 23693.02 m2.
+m2. Geometry calibration gives 2.330 m cells for `Control 2` and 2.621 m cells
+for `Control 1`. The independent setups contain 1630 and 2340 retained full
+cells. Their in-polygon fractions are 95.012% and 95.105%, with 441.50 and
+786.55 m2 outside. The retained polygon area is 23693.02 m2.
 
 From the repository root:
 
@@ -139,10 +147,109 @@ The result topology stores the UTM EPSG code, grid rotation, projected
 origin, overlap areas, and projected cell centres. `Grid_Local_To_Projected`
 maps any grid-local output coordinates back to the shapefile projection.
 
-All runs use the control Kantola T&C parameters, forcing and initial
-state. The active biogeochemical depth is 300 mm in every run, matching the
-workbook value and the spin-up that produced Data_Kantola_BG.mat. Treatment rows only supply
-the amendment properties. Untreated cells use the control chemistry row.
+### Cell soil inputs and automatic spin-up
+
+Each disconnected polygon has its own agronomic input file and spin-up state
+file. The files are tied to the shapefile-derived cell ids and projected cell
+centres. This stops a state prepared for one polygon or grid orientation from
+being used on another one.
+
+For property `j` in cell `c`, the resolved input is
+
+```
+x(c,j) = use_measured(c,j)*measured(c,j) + ...
+         (1-use_measured(c,j))*baseline(c,j)
+```
+
+The four toggles are `use_measured_bulk_pH`, `use_measured_texture`,
+`use_measured_OM` and `use_measured_CEC`. A false toggle always uses the
+interpolated baseline for that cell. A true toggle requires a finite measured
+value. Texture uses numeric mass fractions:
+
+```
+silt_fraction = 1 - sand_fraction - clay_fraction - OM_fraction
+```
+
+All four fractions must be nonnegative. OM changes the physical soil organic
+matter fraction used by the pedotransfer functions. It does not directly
+repartition POC and MAOC. OM alone does not identify that split, so the carbon,
+nitrogen and phosphorus pools are left to the automatic spin-up.
+
+CEC is prescribed and is not calibrated. Its areal exchange inventory is
+
+```
+CEC_area = CEC_mass * 1e-5 * rho_bulk * active_depth * 1e6
+```
+
+where `1e-5` converts cmol charge kg-1 to mol charge g-1 and `1e6` converts
+mol charge to micromol charge. Bulk pH is the laboratory observation. The
+pore-water pH and exchange state are obtained by the existing strict inversion.
+
+| Variable | Expected SI Units | Actual Units provided in the code |
+|---|---|---|
+| measurement toggle | 1 | logical or numeric 0/1 |
+| bulk pH | 1 | pH index, dimensionless |
+| hydrogen activity | 1 | `10^(-pH)` |
+| sand, clay, silt, OM | kg kg-1 | decimal mass fraction |
+| organic carbon fraction | kg C kg-1 soil | `OM_fraction/1.72` |
+| CEC by soil mass | mol charge kg-1 | **Non-SI input:** cmol charge kg-1, multiplied by 0.01 |
+| dry bulk density | kg soil m-3 | `rsd` in kg m-3, converted internally to g m-3 where required |
+| active depth | m | **Non-SI input:** `Zbio` in mm, divided by 1000 |
+| areal CEC inventory | mol charge m-2 | **Scaled unit:** micromol charge m-2 in the ERW arrays |
+| biogeochemical pools | kg element m-2 | **Non-SI storage:** g element m-2 in the 79-pool state |
+| projected cell centre | m | WGS84 UTM zone 17N metres |
+| polygon accounting area | m2 | m2 |
+| in-polygon grid fraction | 1 | `field_area_m2/simulated_area_m2`, required to be greater than 0.95 |
+
+Templates are written directly from the shapefile geometry. Field 7 remains
+excluded by selecting source features 1 and 2:
+
+```matlab
+shape_file = fullfile('v2','Spatial inputs','Bruce Farm Virginia', ...
+    'Whole farm','AdamWilbourne_Control_Fields.shp');
+addpath(fullfile('v2','T&C_Code'),fullfile('v2','spinup'))
+files = Write_Field_Agronomic_Templates(shape_file, ...
+    fullfile('v2','T&C_Code','Inputs','Field_Spinup','Bruce_Farm'),[],[1 2]);
+```
+
+Fill every baseline column in both files. Measurements may stay blank when
+their toggle is false. Automatic spin-up is then run separately for each
+polygon:
+
+```matlab
+[state_1,config_1] = Run_Field_Cell_Spinup(shape_file,files{1}, ...
+    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',1);
+[state_2,config_2] = Run_Field_Cell_Spinup(shape_file,files{2}, ...
+    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',2);
+```
+
+The site workbook row must provide `meteo_file`, `meteo_start` and `meteo_end`
+before spin-up can run. This is a hard preflight check. The imported machinery
+is from `Model/TC-SMEW-N` commit `31e9e13`. It retains the three spin-up phases,
+checkpoint rejection, convergence checks, 79-pool physicality screen, six
+nutrient budgets and ERW handoff gate.
+
+The transient launcher requires the matching agronomic and state file for
+each polygon:
+
+```matlab
+Run_All_12_Parallel('Runs',1:3,'FieldShapefile',shape_file, ...
+    'FieldFeatureIndices',[1 2], ...
+    'CellAgronomicFiles',{files{1},files{2}}, ...
+    'CellSpinupStateFiles',{state_1,state_2}, ...
+    'MaxConcurrent',2,'MaxRuntimeHours',168)
+```
+
+Every retained full cell needs a baseline, including boundary cells that
+extend outside the field polygon. Polygon overlap area is used only when
+field totals and means are calculated.
+
+Runs without cell soil files use the control Kantola T&C parameters, forcing
+and archived initial state. The active biogeochemical depth is 300 mm in those
+runs, matching the workbook value and the spin-up that produced
+`Data_Kantola_BG.mat`. Runs with cell soil files use the matching validated
+automatic spin-up state in each cell. Treatment rows only supply the amendment
+properties. Untreated cells use the control chemistry row.
 The configuration workbook contains only the five Kantola cases used by
 the single-column comparison and the twelve-run matrix.
 
