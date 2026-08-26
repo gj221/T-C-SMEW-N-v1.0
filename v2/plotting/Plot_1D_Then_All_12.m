@@ -38,8 +38,14 @@
 %% fig1d, plot_file_1d, stats_1d for the 1-D weathering stage.
 %%
 %% NEE follows the TC sign convention: positive is carbon released to the
-%% atmosphere.  Yield uses the Kantola low crop PFTs only.  Both are
-%% normalised by the full domain area.
+%% atmosphere, normalised by the full domain area.  Cumulative crop yield
+%% stays in the returned summary table but is no longer plotted; the sixth
+%% panel of both figures now compares the modelled N2O flux against the
+%% crop-matched 2017-2018 digitised Val Martin et al. maize chamber
+%% measurements, read from
+%% Experimental observations/Web plot digitizer/figure3a_n2o_digitised.csv
+%% and reported in g N ha^-1 d^-1.  The panel is drawn without the field
+%% data, with a warning, when that file is absent.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% This script lives in v2/plotting; the repository root is one level up.
@@ -68,7 +74,7 @@ if ~isfolder(FigureDirectory); mkdir(FigureDirectory); end
 opt = struct('ResultDirectory',ResultDirectory, ...
     'FigureDirectory',FigureDirectory,'NDays',NDays, ...
     'Visible',Visible,'OutputFile',OutputFile, ...
-    'TimeOutputFile',TimeOutputFile);
+    'TimeOutputFile',TimeOutputFile,'Root',root);
 
 summary = []; fig = []; plot_file = []; time_fig = []; time_plot_file = [];
 fig1d = []; plot_file_1d = []; stats_1d = [];
@@ -211,7 +217,8 @@ end
 %% against N2 split.  Reconstruct rN2O directly from daily pH using the
 %% same expression BIOGEOCHEMISTRY_DYNAMIC3 uses, defined on every day.
 BiogeoPar = Biogeochemistry_Parameter(1);
-rN2O = 100./(1+exp(BiogeoPar.k_rN2O*(ph-BiogeoPar.pH0_rN2O)));
+[~,RN2N2O_pH] = Biogeo_Denitrification_PH_Response(ph);
+rN2O = 100./(1+RN2N2O_pH);
 rN2O(ph <= 0) = NaN;
 
 %% Denitrification-weighted rN2O over the equilibrium years, used to label
@@ -237,6 +244,7 @@ application_dates = datetime([2016 11 10; 2017 11 10; ...
     2018 11 10; 2019 11 10]);
 application_dates = application_dates( ...
     application_dates >= Date_d(1) & application_dates <= Date_d(end));
+management = kantola_management(Date_d);
 
 group_label = strrep(RM(run_ids(1)).layout,'_','\_');
 fig = figure('Color','w','Visible',char(opt.Visible), ...
@@ -251,6 +259,7 @@ tile_span = {[1 2],[1 2],[1 2],[1 3],[1 3]};
 time_axes = gobjects(5,1);
 legend_lines = gobjects(3,1);
 application_legend = gobjects(1);
+fertilizer_legend = gobjects(1);
 for measurement = 1:5
     ax = nexttile(tl,tile_span{measurement});
     time_axes(measurement) = ax;
@@ -264,6 +273,12 @@ for measurement = 1:5
         marker = xline(ax,application_dates,':','Color',application_color, ...
             'LineWidth',1.1,'Tag','FeedstockApplication');
         if measurement == 1; application_legend = marker(1); end
+    end
+    if measurement >= 4
+        fertilizer_marker = draw_kantola_management(ax,management);
+        if measurement == 4 && isgraphics(fertilizer_marker)
+            fertilizer_legend = fertilizer_marker;
+        end
     end
     format_time_axis(ax);
     ylabel(ax,time_units{measurement},'Color','k');
@@ -280,6 +295,10 @@ legend_labels = treatment_labels;
 if isgraphics(application_legend)
     legend_handles(end+1) = application_legend;
     legend_labels{end+1} = 'Feedstock application';
+end
+if isgraphics(fertilizer_legend)
+    legend_handles(end+1) = fertilizer_legend;
+    legend_labels{end+1} = 'Maize fertilizer, days 81-100';
 end
 lgd = legend(legend_handles,legend_labels,'Orientation','horizontal', ...
     'Box','off','TextColor','k','Color','w','EdgeColor','none');
@@ -442,6 +461,17 @@ summary = table([RM.id].',string({RM.layout}).',string({RM.treatment}).', ...
     'FinalNO3Pool_gN_m2','FinalPoreWaterPH', ...
     'CumulativeNEE_gC_m2','CumulativeCropYield_gC_m2'});
 
+%% Digitised Val Martin et al. chamber measurements for maize 2016-2018.
+%% The field data are reported in g N ha^-1 d^-1, so the modelled flux is
+%% carried in those units wherever the two are shown together.
+obs = n2o_observations(opt.Root);
+obs = clip_observations(obs,Date_d);
+n2o_ha_daily = 1e4*n2o_daily;
+[n2o_obs_day_mean,obs_treatment_mean,n_obs_day] = ...
+    paired_n2o_means(Date_d,n2o_ha_daily,obs);
+fprintf(['Crop-matched N2O observation days inside the run window: ' ...
+    '%d\n'],n_obs_day);
+
 all_group_labels = {'Whole field','Margin with crop', ...
     'Margin with prairie','Vertical 1-D'};
 all_group_stems = {'Whole_Field','Margin_Crop','Margin_Prairie','Vertical_1D'};
@@ -498,15 +528,24 @@ draw_panel(summary_axes(5),nee,'Cumulative NEE (+ to atmosphere)', ...
     'g C m^{-2} domain', ...
     group_labels,treatment_colors);
 summary_axes(6) = nexttile(tl);
-draw_panel(summary_axes(6),crop_harvest,'Cumulative crop yield', ...
-    'g C m^{-2} domain',group_labels,treatment_colors);
+b6 = draw_panel(summary_axes(6),n2o_obs_day_mean, ...
+    'Mean N_2O on observation days', ...
+    'g N ha^{-1} d^{-1}',group_labels,treatment_colors);
+obs_reference = draw_observed_points(summary_axes(6),b6, ...
+    obs_treatment_mean,treatment_colors);
 for iax = 1:6
     summary_axes(iax).Tag = sprintf('SummaryRow%dColumn%d', ...
         ceil(iax/2),mod(iax-1,2)+1);
 end
 set(summary_axes(1:4),'XTickLabel',[]);
-lgd = legend(b,treatment_labels,'Orientation','horizontal','Box','off', ...
-    'TextColor','k','Color','w','EdgeColor','none');
+summary_handles = b;
+summary_labels = treatment_labels;
+for k = 1:numel(obs_reference)
+    summary_handles(end+1) = obs_reference(k).handle; %#ok<AGROW>
+    summary_labels{end+1} = obs_reference(k).label; %#ok<AGROW>
+end
+lgd = legend(summary_handles,summary_labels,'Orientation','horizontal', ...
+    'Box','off','TextColor','k','Color','w','EdgeColor','none');
 lgd.Layout.Tile = 'south';
 title(tl,summary_title,'Color','k');
 
@@ -532,23 +571,25 @@ n_time_columns = 2*n_group;
 time_tl = tiledlayout(time_fig,3,n_time_columns, ...
     'TileSpacing','compact','Padding','compact');
 time_value = {cumsum(n2o_daily,1),cumsum(no3_leach_daily,1), ...
-    no3_pool_daily,ph_pore_daily,nee_daily, ...
-    cumsum(crop_harvest_daily,1)};
+    no3_pool_daily,ph_pore_daily,nee_daily,n2o_ha_daily};
 time_label = {'Cumulative N_2O','Cumulative NO_3 leaching', ...
     'Soil NO_3 pool','Pore-water pH','NEE (+ to atmosphere)', ...
-    'Cumulative crop yield'};
+    'Daily N_2O against crop-matched observations'};
 time_units = {'g N m^{-2}','g N m^{-2}','g N m^{-2}','pH', ...
-    'g C m^{-2} domain d^{-1}','g C m^{-2} domain'};
+    'g C m^{-2} domain d^{-1}','g N ha^{-1} d^{-1}'};
 time_tag = {'CumulativeN2O','CumulativeNO3Leaching','NO3Pool', ...
-    'PoreWaterPH','NEE','CumulativeCropYield'};
+    'PoreWaterPH','NEE','DailyN2O'};
 application_dates = datetime([2016 11 10; 2017 11 10; ...
     2018 11 10; 2019 11 10]);
 application_dates = application_dates( ...
     application_dates >= Date_d(1) & application_dates <= Date_d(end));
+management = kantola_management(Date_d);
 application_color = [0.45 0.45 0.45];
 time_axes = gobjects(6,n_group);
 legend_lines = gobjects(3,1);
 application_legend = gobjects(1);
+fertilizer_legend = gobjects(1);
+observation_legend = struct('handle',{},'label',{});
 for plot_row = 1:3
     for group = 1:n_group
         for pair_column = 1:2
@@ -564,6 +605,13 @@ for plot_row = 1:3
                 ln(treatment).Color = treatment_colors(treatment,:);
             end
             set(ln,'Tag',time_tag{measurement});
+            %% Everything below draws on top of the treatment traces, so
+            %% the axes must hold rather than replace from here on.
+            hold(ax,'on');
+            if measurement == 6
+                obs_marks = draw_observation_points(ax,obs,treatment_colors);
+                if group == 1; observation_legend = obs_marks; end
+            end
             if measurement == 4 && has_bulk_pore_ph
                 ln_bulk = plot(ax,Date_d,ph_bulk_daily(:,ids), ...
                     'LineStyle','--','LineWidth',1.15);
@@ -579,6 +627,13 @@ for plot_row = 1:3
                     application_legend = marker(1);
                 end
             end
+            if measurement == 4 || measurement == 6
+                fertilizer_marker = draw_kantola_management(ax,management);
+                if measurement == 4 && group == 1 && ...
+                        isgraphics(fertilizer_marker)
+                    fertilizer_legend = fertilizer_marker;
+                end
+            end
             format_time_axis(ax);
             if plot_row == 1
                 title(ax,group_labels{group},'Color','k');
@@ -590,6 +645,7 @@ for plot_row = 1:3
             text(ax,0.02,0.96,time_label{measurement},'Units','normalized', ...
                 'VerticalAlignment','top','Color','k','FontWeight','bold');
             if measurement == 1 && group == 1; legend_lines = ln; end
+            hold(ax,'off');
         end
     end
 end
@@ -606,6 +662,14 @@ legend_labels = treatment_labels;
 if isgraphics(application_legend)
     legend_handles(end+1) = application_legend;
     legend_labels{end+1} = 'Feedstock application';
+end
+if isgraphics(fertilizer_legend)
+    legend_handles(end+1) = fertilizer_legend;
+    legend_labels{end+1} = 'Maize fertilizer, days 81-100';
+end
+for k = 1:numel(observation_legend)
+    legend_handles(end+1) = observation_legend(k).handle; %#ok<AGROW>
+    legend_labels{end+1} = observation_legend(k).label; %#ok<AGROW>
 end
 time_lgd = legend(legend_handles,legend_labels,'Orientation','horizontal', ...
     'Box','off','TextColor','k','Color','w','EdgeColor','none');
@@ -779,6 +843,124 @@ end
 end
 
 %% =======================================================================
+function obs = n2o_observations(root)
+%% Digitised Val Martin et al. chamber N2O measurements from the Energy
+%% Farm maize plots, 2016-2018, in g N ha^-1 d^-1.  The same file
+%% also carries the traced CLM5 curves from that figure; only the measured
+%% points are returned here.  A missing file is a warning rather than an
+%% error, so the script stays runnable without the digitised data.
+obs = struct('date',datetime.empty(0,1),'flux',zeros(0,1), ...
+    'treatment',strings(0,1),'file','');
+obs.file = fullfile(root,'Experimental observations', ...
+    'Web plot digitizer','figure3a_n2o_digitised.csv');
+if ~isfile(obs.file)
+    warning('Plot_1D_Then_All_12:MissingObservations', ...
+        'Digitised N2O observations not found: %s',obs.file);
+    return
+end
+T = readtable(obs.file,'TextType','string');
+required = {'series','source','year','day_of_year','n2o_flux_gN_ha_day'};
+if ~all(ismember(required,T.Properties.VariableNames))
+    error('Plot_1D_Then_All_12:BadObservations', ...
+        'Digitised observations are missing a required column: %s',obs.file);
+end
+T = T(T.source == "Energy Farm measurement",:);
+%% Kantola has soybean in 2016; only the shared maize years are comparable.
+T = T(ismember(T.year,[2017 2018]),:);
+%% The digitiser resolves the x axis to a fraction of a day; the field
+%% campaign sampled on whole days, so the nearest day is the sample date.
+sample_date = datetime(T.year,1,1) + caldays(round(T.day_of_year)-1);
+treatment = strings(height(T),1);
+treatment(T.series == "EF Cont") = "control";
+treatment(T.series == "EF ERW") = "basalt";
+keep = treatment ~= "";
+[obs.date,order] = sort(sample_date(keep));
+flux = T.n2o_flux_gN_ha_day(keep);
+treatment = treatment(keep);
+obs.flux = flux(order);
+obs.treatment = treatment(order);
+end
+
+%% =======================================================================
+function obs = clip_observations(obs,Date_d)
+%% Keep only the samples inside the simulated window.  The time panels
+%% share one x axis, so a point outside it would stretch every panel.
+if isempty(obs.date) || isempty(Date_d); return; end
+keep = obs.date >= Date_d(1) & obs.date <= Date_d(end);
+obs.date = obs.date(keep);
+obs.flux = obs.flux(keep);
+obs.treatment = obs.treatment(keep);
+end
+
+%% =======================================================================
+function [model_mean,treatment_mean,n_day] = paired_n2o_means(Date_d,flux,obs)
+%% Model and field means restricted to the days the chambers were read.
+%% Comparing a growing-season model mean against a chamber mean would put
+%% the two on different day sets: the campaign sampled around fertiliser
+%% and rainfall events, so its mean sits well above an all-day mean.  The
+%% model side therefore uses only the sampled days.  The two field series
+%% were not always read on the same dates, so each keeps its own days.
+model_mean = nan(size(flux,2),1);
+treatment_mean = struct('control',NaN,'basalt',NaN);
+n_day = 0;
+if isempty(obs.date); return; end
+is_sample_day = ismember(Date_d,unique(obs.date));
+n_day = sum(is_sample_day);
+if n_day > 0
+    model_mean = mean(flux(is_sample_day,:),1).';
+end
+for name = ["control" "basalt"]
+    pick = obs.treatment == name;
+    if any(pick)
+        treatment_mean.(name) = mean(obs.flux(pick));
+    end
+end
+end
+
+%% =======================================================================
+function reference = draw_observed_points(ax,b,treatment_mean,colors)
+%% The field mean as a point over the bar it belongs to, once per scenario
+%% group.  Chamber data is a measurement and is drawn as measurements are
+%% drawn everywhere in these figures: points, never a line.  A white face
+%% inside a treatment-coloured ring is what keeps the point readable both
+%% against a dark bar and on the white of the legend.
+reference = struct('handle',{},'label',{});
+name = {'control','basalt'};
+label = {'Observed control (Val Martin et al.)', ...
+    'Observed basalt (Val Martin et al.)'};
+hold(ax,'on');
+for k = 1:2
+    value = treatment_mean.(name{k});
+    if ~isfinite(value); continue; end
+    x = b(k).XEndPoints;
+    h = scatter(ax,x,repmat(value,size(x)),64,'o','filled', ...
+        'MarkerFaceColor','w','MarkerEdgeColor',colors(k,:), ...
+        'LineWidth',2,'Tag',sprintf('Observed_%s_mean',name{k}));
+    reference(end+1) = struct('handle',h,'label',label{k}); %#ok<AGROW>
+end
+hold(ax,'off');
+end
+
+%% =======================================================================
+function marks = draw_observation_points(ax,obs,colors)
+%% Chamber measurements over the modelled daily flux.  Scatter, not line,
+%% keeps the treatment-colour line contract of the time panels intact.
+marks = struct('handle',{},'label',{});
+name = {'control','basalt'};
+label = {'Observed control (Val Martin et al.)', ...
+    'Observed basalt (Val Martin et al.)'};
+for k = 1:2
+    pick = obs.treatment == name{k};
+    if ~any(pick); continue; end
+    h = scatter(ax,obs.date(pick),obs.flux(pick),24,'o','filled', ...
+        'MarkerFaceColor',colors(k,:),'MarkerEdgeColor','k', ...
+        'MarkerFaceAlpha',0.85, ...
+        'Tag',sprintf('Observed_%s_N2O',name{k}));
+    marks(end+1) = struct('handle',h,'label',label{k}); %#ok<AGROW>
+end
+end
+
+%% =======================================================================
 function b = draw_panel(ax,value,panel_title,y_label,group_labels,colors)
 n_group = numel(group_labels);
 if n_group == 1
@@ -817,4 +999,70 @@ ax.XColor = 'k';
 ax.YColor = 'k';
 ax.XTickLabelRotation = 20;
 grid(ax,'off');
+end
+
+%% =======================================================================
+function management = kantola_management(Date_d)
+maize_years = [2017 2018 2020];
+soybean_years = [2016 2019];
+fertilizer_doy = [81 100];
+
+year_start = datetime(maize_years,ones(size(maize_years)), ...
+    ones(size(maize_years)));
+fertilizer_start = year_start+caldays(fertilizer_doy(1)-1);
+fertilizer_end = year_start+caldays(fertilizer_doy(2)-1);
+keep = fertilizer_end >= Date_d(1) & fertilizer_start <= Date_d(end);
+management.fertilizer_start = fertilizer_start(keep);
+management.fertilizer_end = fertilizer_end(keep);
+
+crop_years = [soybean_years maize_years];
+crop_names = [repmat({'Soybean'},size(soybean_years)), ...
+    repmat({'Maize'},size(maize_years))];
+[crop_years,order] = sort(crop_years);
+crop_names = crop_names(order);
+crop_start = datetime(crop_years,ones(size(crop_years)), ...
+    ones(size(crop_years)));
+crop_end = datetime(crop_years,12*ones(size(crop_years)), ...
+    31*ones(size(crop_years)));
+keep = crop_end >= Date_d(1) & crop_start <= Date_d(end);
+management.crop_years = crop_years(keep);
+management.crop_names = crop_names(keep);
+management.crop_start = crop_start(keep);
+management.crop_end = crop_end(keep);
+management.date_start = Date_d(1);
+management.date_end = Date_d(end);
+end
+
+%% =======================================================================
+function fertilizer_legend = draw_kantola_management(ax,management)
+fertilizer_legend = gobjects(1);
+fertilizer_color = [0.75 0.30 0.10];
+if ~isempty(management.fertilizer_start)
+    marker = xline(ax,management.fertilizer_start,'--', ...
+        'Color',fertilizer_color,'LineWidth',1.0, ...
+        'Tag','KantolaFertilizerStart');
+    stop_marker = xline(ax,management.fertilizer_end,':', ...
+        'Color',fertilizer_color,'LineWidth',1.0, ...
+        'Tag','KantolaFertilizerEnd');
+    set(stop_marker,'HandleVisibility','off');
+    fertilizer_legend = marker(1);
+end
+
+date_span = days(management.date_end-management.date_start);
+for k = 1:numel(management.crop_years)
+    left = management.crop_start(k);
+    right = management.crop_end(k);
+    if left < management.date_start; left = management.date_start; end
+    if right > management.date_end; right = management.date_end; end
+    if date_span > 0
+        x = days(left+(right-left)/2-management.date_start)/date_span;
+    else
+        x = 0.5;
+    end
+    text(ax,x,0.88,sprintf('%d %s',management.crop_years(k), ...
+        management.crop_names{k}),'Units','normalized', ...
+        'HorizontalAlignment','center','VerticalAlignment','top', ...
+        'Color',[0.25 0.25 0.25],'FontSize',8, ...
+        'Tag','KantolaCropLabel');
+end
 end

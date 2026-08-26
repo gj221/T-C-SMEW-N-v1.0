@@ -6,8 +6,8 @@
 %%% Porporato et al., 2003; Zahele and Friend 2010;
 %%% Orwin et al 2011 ; Wang et al 2012
 function[dB,R_litter,R_microbe,R_litter_sur,R_ew,VOL,N2flx,Min_N,Min_P,...
-    R_bacteria,RmycAM,RmycEM,Prod_B,Prod_F,N2Oflx]= BIOGEOCHEMISTRY_DYNAMIC3(t,B,ZBIOG,rsd,...
-    ISOIL,Ts,Ta,Psi_s,PH,Se,Se_fc,...
+    R_bacteria,RmycAM,RmycEM,Prod_B,Prod_F,N2Oflx,NITflx,DENITflx,N2Oflx_nit]= BIOGEOCHEMISTRY_DYNAMIC3(t,B,ZBIOG,rsd,...
+    ISOIL,Ts,Ta,Psi_s,PH_bulk,Se,Se_fc,...
     FertN,DepN,BfixN,FertP,DepP,FertK,DepK,...
     FertCa,DepCa,FertMg,DepMg,FertSi,DepSi,...
     NH4_Uptake,NO3_Uptake,P_Uptake,K_Uptake,...
@@ -16,7 +16,7 @@ function[dB,R_litter,R_microbe,R_litter_sur,R_ew,VOL,N2flx,Min_N,Min_P,...
     LEAK_Ca,LEAK_Mg,LEAK_Si,...
     Tup_P,Tup_K,...
     Tup_Ca,Tup_Mg,Tup_Si, ...
-    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,L_pore)
+    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,L_pore,WFPS)
 %%% OUTPUT
 %VOL ;
 %N2flx ;
@@ -24,6 +24,35 @@ function[dB,R_litter,R_microbe,R_litter_sur,R_ew,VOL,N2flx,Min_N,Min_P,...
 %R_litter
 %%%% INPUT
 dtd=1; %% [day]
+if ~(isfinite(Ts) && Ts > -46.02 && Ts < 70)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Ts must lie inside the empirical response domain (-46.02,70) degC.');
+end
+if ~(isfinite(PH_bulk) && PH_bulk > 0 && PH_bulk < 14)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Microbial bulk-soil pH must be finite and satisfy 0 < pH < 14.');
+end
+if ~(isfinite(Se) && Se >= 0 && Se <= 1)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Effective saturation must satisfy 0 <= Se <= 1.');
+end
+if ~(isfinite(Se_fc) && Se_fc > 0 && Se_fc <= 1)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Field-capacity saturation must satisfy 0 < Se_fc <= 1.');
+end
+if ~(isscalar(WFPS) && isreal(WFPS) && isfinite(WFPS) && ...
+        WFPS >= 0 && WFPS <= 1)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Water-filled pore space must satisfy 0 <= WFPS <= 1.');
+end
+if ~(isfinite(L_pore) && L_pore > 0)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'The pore-size exponent must be finite and positive.');
+end
+if ~(isfinite(ZBIOG) && ZBIOG > 0 && isfinite(rsd) && rsd > 0)
+    error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
+        'Biogeochemical depth and dry soil density must be positive.');
+end
 Psi_s = Psi_s*1000; %% [kPa] Soil Water Potential
 %Lk = [mm/d]
 %V=[mm]
@@ -211,19 +240,14 @@ B(60)=B(60)-Ca_Uptake;%% Calcium  Mineral  solution
 B(68)=B(68)-Mg_Uptake;%% Magnesium  Mineral  solution
 B(76)=B(76)-Si_Uptake;%% Silicate  Mineral  solution
 
-%%% Retain physical inventory after plant uptake
-%% Pools arrive as P = Ptm1 + dP from the previous step. The donor
-%% limiters keep them nonnegative, but a pool driven to exactly zero can
-%% land a rounding step below it. Tolerate that and clamp; a meaningful
-%% negative still aborts, and reports how negative it was.
-pool_tol = 1e-12*max(1,max(abs(B)));
-if any(~isfinite(B)) || any(B < -pool_tol)
+%%% Retain physical inventory after plant uptake.  Donor limitation must
+%%% prevent the state from crossing zero; repairing a negative state here
+%%% would create mass outside the process ledgers.
+if any(~isfinite(B)) || any(B < 0)
     error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidPoolState', ...
         ['Biogeochemistry pools must be finite and nonnegative after ' ...
-         'uptake; most negative is %.6g against a %.3g tolerance.'], ...
-        min(B),pool_tol);
+         'uptake; most negative is %.6g.'],min(B));
 end
-B = max(0,B);
 B_physical = B;
 %%%% Decay Constant on a 40�C basis (Kirschbaum 2002)
 k_met_sur = BiogeoPar.k_met_sur; %%[1/day]
@@ -322,14 +346,14 @@ end
 
 %%% Wang et al 2012b - varying sensitivity in pH=4.5-7.5
 PHopt=6; Psen=2;
-fPH= exp(-((PH-PHopt)/Psen)^2) ;
+fPH= exp(-((PH_bulk-PHopt)/Psen)^2) ;
 
 % %%% Orwin et al 2011  [min 2 4.5 optm 7.5 12 max]
-if PH<=4.5
-    fPH = 0.4*PH - 0.8;
+if PH_bulk<=4.5
+    fPH = 0.4*PH_bulk - 0.8;
 else
-    if PH >=7.5
-        fPH = -0.2222*PH + 2.666;
+    if PH_bulk >=7.5
+        fPH = -0.2222*PH_bulk + 2.666;
     else
         fPH=1;
     end
@@ -729,15 +753,7 @@ KNmax = BiogeoPar.KNmaxn; %% [1/d] % Dickinson et al., 2002
 ftemp=power((70-Ts)/(70-38),12)*exp(12*(Ts-38)/(70-38)); %%% Xu-Ri and Prentice 2008
 fmoist = Se*(1-Se)/(0.25);  %% Dickinson et al., 2002
 %%% pH response of nitrification rate - Parton et al 1996, Global Biogeochem Cycles 10:401
-if isfield(BiogeoPar,'pH_nit_s') && isfinite(BiogeoPar.pH_nit_s) && ...
-        isfield(BiogeoPar,'pH_nit_0') && isfinite(BiogeoPar.pH_nit_0)
-    fpH_nit = 0.56 + atan(pi*BiogeoPar.pH_nit_s*(PH-BiogeoPar.pH_nit_0))/pi;
-else
-    % Legacy parameter structs (e.g. frozen replay fixtures) predate the
-    % pH response: no inhibition, matching the fpH_nit = 1 limit.
-    fpH_nit = 1;
-end
-fpH_nit(fpH_nit>1)=1; fpH_nit(fpH_nit<0)=0;
+fpH_nit = Biogeo_Nitrification_PH_Response(PH_bulk);
 NO3flx = KNmax*ftemp*fmoist*fpH_nit*B(31); %% [gN/gsoil d]
 NH4_reaction_avail = max(0,B(31)/dtd + Incoming_N + ...
     (1-f_org_lea)*Ip_lea_nit - LEAK_NH4);
@@ -747,11 +763,11 @@ if NH4_reaction > NH4_reaction_avail
     NO3flx = NO3flx*reaction_scale;
     VOL = VOL*reaction_scale;
 end
-%%% N2O yield of nitrification - Goodroad and Keeney 1984; Khalil et al 2004
-N2Oflx_nit = BiogeoPar.f_N2O_nit*NO3flx; %% [gN/gsoil d]
+%%% N2O yield of nitrification - Inatomi et al. 2019; Val Martin et al. 2023
+N2Oflx_nit = Biogeo_Nitrification_N2O_Fraction(PH_bulk)*NO3flx; %% [gN/gsoil d]
 %%%%%%% Denitrification (Anaerobic)
 Kc = BiogeoPar.Kc/(ZBIOG*rsd); %% [gC/ gsoil] %% Li et al., 1992
-%Kn = BiogeoPar.Kn/(ZBIOG*rsd); %% [gN/ gsoil] % Li et al., 1992
+Kn = BiogeoPar.Kn/(ZBIOG*rsd); %% [gN/ gsoil] % Li et al., 1992
 ftemp=exp(308.56*(1/68.02-1/(Ts+46.02))); % Xu-Ri and Prentice 2008
 %%% Anaerobic fraction. Under Brooks-Corey Se = (Pe/|Psi|)^L, so Se^(1/L)
 %%% is Pe/|Psi|: the air-entry suction over the current suction, which is 1
@@ -765,32 +781,23 @@ ftemp=exp(308.56*(1/68.02-1/(Ts+46.02))); % Xu-Ri and Prentice 2008
 fmoist=Se^(1/L_pore); %% % Dickinson et al., 2002
 %N2flx = (B(13)/(B(13) + Kc))*ftemp*fmoist*(B(28)/(B(28) + Kn));% [gN/gsoil d]
 KNmax= BiogeoPar.KNmaxd; %% [1/d] % Dickinson et al., 2002
-%%% pH response of denitrification rate - Heinen 2006, Geoderma 133:444 (ANIMO/SWAT-family)
-if isfield(BiogeoPar,'pH_den_min') && isfinite(BiogeoPar.pH_den_min) && ...
-        isfield(BiogeoPar,'pH_den_rng') && isfinite(BiogeoPar.pH_den_rng)
-    fpH_den = (PH-BiogeoPar.pH_den_min)/BiogeoPar.pH_den_rng;
-else
-    % Legacy parameter structs (e.g. frozen replay fixtures) predate the
-    % pH response: no inhibition, matching the fpH_den = 1 limit.
-    fpH_den = 1;
-end
-fpH_den(fpH_den>1)=1; fpH_den(fpH_den<0)=0;
-%%% Denitrifiers need NO3 as electron acceptor AND labile C as donor, so
-%%% the rate carries a Michaelis-Menten term on dissolved organic carbon
-%%% (Li et al. 1992). Without it denitrification and leaching are both
-%%% strictly first order in B(32), their ratio is independent of pool
-%%% size, and the split between them can only be set by rate constants.
-%%% At this site DOC averages 91 gC/m2 against Kc = 17.5, so the term
-%%% sits near saturation (0.84) and modulates weakly; it matters most
-%%% when labile C is drawn down.
+%%% pH response of gross denitrification and its N2:N2O end products.
+[fpH_den,RN2N2O_pH] = Biogeo_Denitrification_PH_Response(PH_bulk);
+%%% Denitrifiers need NO3 as electron acceptor and labile C as donor, so
+%%% both substrates retain the Michaelis-Menten terms of Li et al. (1992).
 f_DOC_den = safe_fraction(B(12)+B(13),(B(12)+B(13))+Kc); %% [-]
-DENITflx = KNmax*ftemp*fmoist*fpH_den*f_DOC_den*B(32); %% [gN/gsoil d] total denitrification (N2+N2O)
+f_NO3_den = safe_fraction(B(32),B(32)+Kn); %% [-]
+DENITflx = KNmax*ftemp*fmoist*fpH_den*f_DOC_den*f_NO3_den*B(32); %% [gN/gsoil d] total denitrification (N2+N2O)
 NO3_reaction_avail = max(0,B(32)/dtd + NO3flx - ...
     N2Oflx_nit - LEAK_NO3);
 DENITflx = min(DENITflx,NO3_reaction_avail);
-%%% N2O/(N2O+N2) product ratio: N2O reductase inhibited at low pH
-%%% Simek and Cooper 2002; Cuhel et al 2010; Liu et al 2010
-rN2O = 1/(1+exp(BiogeoPar.k_rN2O*(PH-BiogeoPar.pH0_rN2O))); %% [-]
+%%% DayCent controls the end products of the existing gross NO3 sink.
+NO3_ppm = B(32)*1e6; %% [microgram N/g soil]
+R_heterotrophic = R_litter + F4b + F5b + F4f + F5f + RespE;
+Resp_kg_C_ha_day = R_heterotrophic*(ZBIOG*rsd)*10; %% [kg C/ha d]
+RN2N2O = Biogeo_Denitrification_Product_Ratio( ...
+    RN2N2O_pH,WFPS,NO3_ppm,Resp_kg_C_ha_day);
+rN2O = 1/(1+RN2N2O); %% [-]
 N2flx = (1-rN2O)*DENITflx; %% [gN/gsoil d] N2 emission
 N2Oflx = N2Oflx_nit + rN2O*DENITflx; %% [gN/gsoil d] total N2O emission
 %%%%%
@@ -1274,6 +1281,9 @@ Min_P = P_mineral_transfer*(ZBIOG*rsd); %% %% [gP/ m2 day]
 VOL=VOL*(ZBIOG*rsd);
 N2flx=N2flx*(ZBIOG*rsd);
 N2Oflx=N2Oflx*(ZBIOG*rsd);
+NITflx=NO3flx*(ZBIOG*rsd);
+DENITflx=DENITflx*(ZBIOG*rsd);
+N2Oflx_nit=N2Oflx_nit*(ZBIOG*rsd);
 return
 end
 
