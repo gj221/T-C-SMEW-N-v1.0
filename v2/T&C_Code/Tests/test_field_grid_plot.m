@@ -17,6 +17,10 @@ assert(numel(setups) == 2);
 assert(height(summary) == 2);
 assert(isequal(summary.SourceFeatureIndices,["1";"2"]));
 assert(isequal(string(summary.Field),["Control 2";"Control 1"]));
+assert(isequal(summary.SourceVertexCount,[19;30]));
+assert(isequal(summary.ProjectedPolygonVertexCount,[18;29]));
+assert(all(summary.ProjectionRoundTripMaxM < 1e-6));
+assert(all(summary.SourceToPolygonMaxM < 1e-9));
 assert(all(summary.CellCount == reshape([setups.N_cells],[],1)));
 assert(max(abs(summary.FieldAreaM2- ...
     reshape([setups.field_area_m2],[],1))) < 1e-9);
