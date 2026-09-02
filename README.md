@@ -515,6 +515,49 @@ The `v2/Spatial inputs/**/DEM/` GeoTIFFs are fetched, not versioned
 tiles `USGS_1M_17_x71y405..x72y407` from the
 `VA_FEMA-NRCS_SouthCentral_2017_D17` project cover both control polygons.
 
+### Parameterizing grid cells from kriged soil measurements
+
+`Write_Field_Agronomic_Templates` writes every `baseline_*`/`measured_*`
+column as `NaN` and every `use_measured_*` toggle `false` -- filling them
+from the kriged soil surfaces is a separate, deliberate step so an
+unreviewed estimate can never become a model input by accident:
+
+```matlab
+addpath(fullfile('v2','interpolation'),fullfile('v2','spinup'));
+shp = fullfile('v2','Spatial inputs','Bruce Farm Virginia','Whole farm', ...
+    'AdamWilbourne_Control_Fields.shp');
+sample_file = Bruce_Farm_Input_File(fullfile('Whole farm','Data', ...
+    'RJ_msft_yale_geochem - agronomic.xlsx'));
+
+%% 1. krige pH / Organic Matter / CEC onto every cell -> a REVIEW table
+[~,kriged_files] = Krige_Cell_Agronomic_Values(shp,sample_file,[], ...
+    'FeatureIndices',[1 2],'Stage','BLC');
+
+%% 2. the deliberate, threshold-gated merge into the template
+Apply_Kriged_Cell_Values(template_file,kriged_files{1}, ...
+    'MaxRelativeStd',0.35,'OutputFile',parameterized_file);
+```
+
+A cell is promoted from baseline to measured only when the kriged
+estimate is not an extrapolation (inside the convex hull of the fitting
+samples) and its relative standard deviation clears `MaxRelativeStd`;
+every other cell keeps exactly what the template already had. Soil
+**texture** (sand/clay) is not in the Bruce Farm geochem workbook and
+stays out of this bridge -- SSURGO/SoilGrids remain its source.
+
+The workbook's control-plot samples use `BLC`/`R1C`/`R2C` stage labels
+(not the treated-field `BL`/`BLP`/`R1`/`R2`). **Control 2** (polygon 1 of
+`AdamWilbourne_Control_Fields.shp`) has 10 `BLC` samples and krieges
+cleanly: 580 of 1630 cells (36 %) fall inside their convex hull and are
+promoted, 0 rejected on uncertainty. **Control 1** (polygon 2) has no
+`BLC` sample inside it at all -- confirmed against
+`v2/figures/Bruce_Control_Interpolation_Timepoints.csv`, which likewise
+shows no `BLC` row for Control 1, only `R1C`/`R2C`. **Decision: do not
+substitute `R1C` (or any other stage) as a baseline proxy for Control
+1.** It runs on pedotransfer baseline values only, `use_measured_* =
+false` for every cell, until a genuine baseline-stage sample exists
+there.
+
 ### Charge-balanced random-forest spin-up
 
 `Run_Field_Cell_Spinup(..., 'Method','rf')` reconstructs the distributed
