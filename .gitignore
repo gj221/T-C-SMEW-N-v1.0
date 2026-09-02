@@ -7,3 +7,8 @@ tmp/
 *.log
 *.status
 *.asv
+
+# large DEM rasters (fetched, not versioned)
+v2/Spatial inputs/**/DEM/
+*.tif
+*.tiff

@@ -9,6 +9,10 @@ v2/run/          launchers: ERW_run, Run_Matrix_12, Run_One_Subfield,
 v2/plotting/     figure scripts: Plot_1D_Then_All_12, Plot_Grid_Setup,
                  Plot_Biogeo_Pools, Plot_Nflux_Diagnostics,
                  Plot_Kantola_Benchmark, and the Cflux_post_processing helper
+v2/interpolation/  soil-sample kriging and the grid figure it feeds:
+                 Run_Notebook_Interpolation, Run_AW_Bruce_Interpolation,
+                 Run_Bruce_Interpolation, Run_Yield_Field_Interpolation,
+                 Run_Cell_Size_Analysis, Plot_Field_Grid_Interpolation
 v2/figures/      every PNG and FIG the plotting scripts write
 v2/Spatial inputs/   field polygons used by full-grid simulations
 v2/T&C_Code/     model source, Inputs, Parameters and Tests
@@ -133,19 +137,196 @@ Run_All_12_Parallel('Runs',1:3,'FieldShapefile',shape_file, ...
 To inspect the calibrated grid before a run:
 
 ```matlab
-cd(fullfile('v2','plotting'))
-Plot_Field_Grid
+addpath(fullfile('v2','interpolation'))
+Plot_Field_Grid_Interpolation(shape_file,[],feature_indices)
 ```
 
 This writes one subplot per retained polygon, with the complete boundary over
 the full grid. It also writes a CSV with separate area, cell-size, grid and
 outside-area summaries for each polygon. The CSV includes the source and
 projected vertex counts, projection round-trip error and source-to-polygon
-vertex error.
+vertex error. Given a sample table, an attribute and a sample stage the same
+function draws the kriged surface under the grid; see the section below.
 
 The result topology stores the UTM EPSG code, grid rotation, projected
 origin, overlap areas, and projected cell centres. `Grid_Local_To_Projected`
 maps any grid-local output coordinates back to the shapefile projection.
+
+### Soil sample interpolation
+
+`v2/interpolation` is the MATLAB form of `bruce_interpolation.ipynb`. Ordinary
+kriging over the measured soil samples produces a continuous surface for one
+attribute inside each polygon, on the same rotated grid the simulation uses.
+
+The variogram keeps the pykrige parameterisation the notebook depended on, so
+a MATLAB surface matches the Python one value for value. `range` is the
+effective range: the exponential model decays over `range/3` and the gaussian
+over `range*4/7`, and a `sill` given with a `nugget` is stored as the partial
+sill `sill-nugget`. Left unset the parameters take the notebook recipe, a sill
+equal to the population variance, an 80 m range and a nugget of 5% of the
+variance. The notebook passed its `variogram_model` argument to the plot title
+only and always fitted an exponential model; here the argument reaches the fit
+and `exponential` remains the default.
+
+A sampling stage is a timepoint, so stages are never pooled. Each polygon is
+interpolated separately at each stage that leaves three or more finite values
+inside its boundary, and the stages that do not are reported instead of being
+dropped in silence.
+
+There are two views, and they answer different questions.
+
+`Run_Notebook_Interpolation` is the notebook figure: the selected fields are
+unioned into one boundary, one kriging model is fitted to every sample inside
+it, and one surface is drawn in Easting and Northing. Use it to look at the
+site.
+
+`Run_AW_Bruce_Interpolation`, `Run_Yield_Field_Interpolation` and
+`Run_Bruce_Interpolation` are the simulation view: each disconnected polygon
+gets its own grid, its own kriging model and its own surface, drawn under the
+calibrated cells it will feed. Use it to prepare a run.
+
+```matlab
+addpath(fullfile('v2','interpolation'))
+results = Run_Notebook_Interpolation();
+report = Run_AW_Bruce_Interpolation();
+report = Run_Yield_Field_Interpolation('Attribute','pH');
+report = Run_Bruce_Interpolation();
+```
+
+`Run_Notebook_Interpolation` and `Run_AW_Bruce_Interpolation` default to
+`AdamWilbourne_Fields.shp`, the notebook's own boundary. It is tracked in
+`v2/Spatial inputs/Bruce Farm Virginia/Whole farm/` and mirrored in the survey
+folder at `Whole farm/Map files/`. Records 65, 77, 115, 116, 117 and 118 are
+AW Bruce 4, 2, 1, 6, 13 and 12, the notebook's six fields, selected by
+`Farm == "AW Bruce"` and those six `Identifier` values:
+
+```matlab
+Run_Notebook_Interpolation('ShapeFile',field_shp, ...
+    'AttributeFilters',struct('Farm','AW Bruce','Identifier', ...
+    {{'AW Bruce 1','AW Bruce 2','AW Bruce 4','AW Bruce 6', ...
+    'AW Bruce 12','AW Bruce 13'}}),'SampleSheet',1);
+```
+
+is the default and need not be passed; `ShapeFile` only matters for pointing
+at a different boundary. If the tracked copy and the survey-folder copy are
+both missing, `Run_Notebook_Interpolation` says so and falls back to the
+Yield Field applied strips instead of erroring.
+
+`Run_AW_Bruce_Interpolation` and `Run_Notebook_Interpolation` read sheet 1 of
+the agronomic workbook, `Bruce_RJ_msft_yale_geochem - ag`, the notebook's
+`bruce.csv`: 841 of its 1871 rows fall inside the six AW Bruce fields, with
+every stage (BL, BLP, R1, R2) represented in every field.
+`Run_Yield_Field_Interpolation` reads the three Yield Field applied strips and
+the Yield Field soil workbook, which carries BL, BLP, R1, R2 and R3.
+`Run_Bruce_Interpolation` reads the whole-site control polygons and sheet 2 of
+the agronomic workbook, `Wilbourne_RJ_msft_yale_geochem`: sheet 1 covers the
+Backside, Frontside and Yield Field block more than a kilometre from Control 1
+and Control 2, so none of its rows fall inside them, but sheet 2 is the
+whole-grower superset and does reach both. Sample workbooks are read from the
+survey folder in OneDrive; set `BRUCE_FARM_ROOT` to read them from somewhere
+else.
+
+Each run writes one figure per timepoint, its grid summary CSV, and one
+combined CSV of polygon by timepoint with sample counts, cell counts and
+value ranges.
+
+### Choosing the cell width
+
+`Run_Cell_Size_Analysis` scores candidate widths for each polygon and writes
+the table and the widths it recommends to `v2/figures`. Two rules get called
+95% coverage and they do not bound the same error.
+
+```
+aggregate coverage   A/(N*h^2) over every cell with positive overlap. Bounds
+                     the simulated area the grid adds in total. Says nothing
+                     about any one cell: at the calibrated 14.077 m width,
+                     Applied Strip 2 passes at 95.565% while its worst cell
+                     is 0.92% inside the polygon.
+per-cell fraction    overlap/h^2 for one cell on its own. A threshold on it
+                     bounds how much of any single simulated column is
+                     outside the field, and so bounds the area correction
+                     that column needs. It is met by dropping the cells that
+                     fail, which leaves a thin unsimulated band at the edge.
+capture              retained overlap area over polygon area. The cost of
+                     the per-cell rule, and the quantity that actually
+                     decides the width.
+```
+
+Under the per-cell rule the retained band is what matters, and it narrows in
+proportion to `h`: the missed area is close to `0.2*h` times the polygon
+perimeter. The threshold value itself barely binds, because at any width
+below about 2 m the overlap distribution is bimodal, and a kept cell is
+typically more than 99.9% inside whether the threshold is 90%, 95% or 99%.
+The width is the decision; the threshold is not.
+
+Measured capture under a 95% per-cell rule:
+
+| Polygon | Area | Calibrated | h = 2 m | h = 1 m | h = 0.5 m |
+|---|---|---|---|---|---|
+| Applied Strip 1 | 1697 m2 | 34 cells, 91.3% | 373, 87.9% | 1631, 96.1% | 6613, 97.4% |
+| Applied Strip 2 | 8712 m2 | 43 cells, 95.9% | 1989, 91.3% | 8341, 95.7% | 34291, 98.4% |
+| Applied Strip 3 | 2697 m2 | 58 cells, 95.0% | 606, 89.9% | 2638, 97.8% | 10590, 98.1% |
+| Control 2 | 8410 m2 | 1461 cells, 94.3% | 1988, 94.5% | 8190, 97.4% | 33241, 98.8% |
+| Control 1 | 15283 m2 | 2129 cells, 95.6% | 3693, 96.6% | 15032, 98.4% | 60651, 99.2% |
+| AW Bruce 4 | 38887 m2 | 3785 cells, 96.0% | — | — | 154618, 99.4% |
+| AW Bruce 2 | 37216 m2 | 2328 cells, 95.0% | — | — | 148038, 99.4% |
+| AW Bruce 1 (part A) | 24374 m2 | 1985 cells, 95.0% | — | — | 96889, 99.4% |
+| AW Bruce 1 (part B) | 13238 m2 | 1351 cells, 94.6% | — | — | 52520, 99.2% |
+| AW Bruce 6 + 13 | 86648 m2 | 3550 cells, 94.9% | — | — | 344784, 99.5% |
+| AW Bruce 12 | 27537 m2 | 2397 cells, 96.1% | — | — | 109540, 99.4% |
+
+The three Yield Field strips are near-rectangles, so their coarse calibrated
+widths pass the aggregate rule on alignment alone and the capture column is
+the honest measure. Capture is not monotonic in `h` above about 1 m, because
+the grid is re-oriented to the minimum-area rotated rectangle at every width
+and a small change in angle moves many cells across the threshold at once.
+Below 1 m the curve is smooth.
+
+`AdamWilbourne_Fields.shp` is the least regular boundary here — 30 to 100
+vertices per field against 9 to 30 for the strips and controls, and one
+record, `AW Bruce 1`, is itself two disconnected parts under a single
+`Identifier`, gridded separately. Their calibrated widths keep 94.6 to 96.1%
+under the 95% per-cell rule, already close to the target because
+`Calibrate_Field_Grid_Cell_Size` orients the grid once, at a width estimated
+from the field's own extent, then searches width within that fixed
+orientation; a width prescribed on its own, as 0.5 m is, re-orients fresh for
+that width and lands closer to 99.2–99.5% captured, consistent with the other
+two sites.
+
+**The configured width is 0.5 m.** Half a metre sits well inside the soil
+survey it is fed from: samples are 10 to 40 m apart and the variogram range
+is 80 m, so nothing below about 2 m adds information about the soil, only
+about the boundary. Going to 0.25 m quadruples the cell count for roughly one
+more point of capture. Under the 95% per-cell rule every simulated column is
+at least 95% inside its polygon, in practice above 99.9%, and 98 to 99% of
+each polygon is simulated.
+
+| Polygon | Cells at 0.5 m | Aggregate inside | Kept at >=95% | Captured |
+|---|---|---|---|---|
+| Applied Strip 1 | 6904 | 98.35% | 6613 | 97.38% |
+| Applied Strip 2 | 35561 | 97.99% | 34291 | 98.40% |
+| Applied Strip 3 | 11062 | 97.54% | 10590 | 98.15% |
+| Control 2 | 34224 | 98.30% | 33241 | 98.81% |
+| Control 1 | 61785 | 98.94% | 60651 | 99.21% |
+| AW Bruce 4 | 156821 | 99.19% | 154618 | 99.40% |
+| AW Bruce 2 | 149914 | 99.30% | 148038 | 99.44% |
+| AW Bruce 1 (part A) | 98299 | 99.18% | 96889 | 99.38% |
+| AW Bruce 1 (part B) | 53510 | 98.96% | 52520 | 99.18% |
+| AW Bruce 6 + 13 | 349036 | 99.30% | 344784 | 99.48% |
+| AW Bruce 12 | 111004 | 99.23% | 109540 | 99.44% |
+
+53527 cells over the three Yield Field strips, 96009 over the two control
+polygons, 918584 over the six AW Bruce fields. Pass the width to any driver:
+
+```matlab
+Run_AW_Bruce_Interpolation('CellSizeM',0.5);
+Run_Yield_Field_Interpolation('CellSizeM',0.5);
+Run_Bruce_Interpolation('CellSizeM',0.5);
+```
+
+The residual 1 to 2% band should be carried by scaling each polygon total by
+polygon area over captured area, in the same way `cell_overlap_area_m2`
+already scales a partial cell.
 
 ### Cell soil inputs and automatic spin-up
 
@@ -272,6 +453,83 @@ boundary is closed laterally. Existing vertical drainage and solute
 leaching remain active. Frozen hydraulic conductivity uses the Hansson
 et al. (2004) ice-impedance factor. Fluxes blocked by frozen pore space
 are excluded when the adaptive lateral time step is calculated.
+
+### Field topography
+
+Following Lian et al. (2025, *WRR* 10.1029/2025WR040260, T&C-BG-2D), the
+2-D field driver can resolve elevation-driven lateral and vertical flow.
+Attach a DEM to any multi-cell topology and the lateral solver switches
+from matric-head-only to **total hydraulic head** `H = psi + z`
+(`Darcy_Lateral_Topology`), overland runoff is routed down the DEM by
+Quinn (1991) multiple-flow-direction weights and leaves only at the
+topographic outlet (`Surface_Runoff_Routing`), and the direct solar beam
+is projected onto each cell's slope and aspect with a sky-view diffuse
+correction. Without a DEM every run is flat and bit-identical to before
+(`test_2d_driver_equivalence` still passes at tolerance 0).
+
+The vertical column stays strictly 1-D in 2-D mode: `SOIL_MOISTURES_RICH_COMP`
+drives its internal kinematic lateral loss from `sin(atan(Slo_top))`, so a
+per-column slope would double-count the FV graph exchange. The topographic
+effect on vertical drainage, infiltration and leaching instead comes
+through the coupled state - lateral redistribution makes footslope columns
+wetter and shoulder columns drier - plus per-cell radiation and
+temperature. Over Bruce Farm slopes (1-8 %) the `Asur`/`cos(alpha)`
+correction that is lost this way is below 0.2 %.
+
+```matlab
+%% ingest the DEM tiles and preview the terrain attributes
+addpath(fullfile('v2','interpolation'));
+Run_Field_DEM('AdamWilbourne_Control_Fields.shp', ...
+    fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
+    'FeatureIndices',[1 2]);
+
+%% compute the process-grid cell size from the site's own length scales
+Run_Field_Length_Scales( ...
+    fullfile('v2','Spatial inputs','Bruce Farm Virginia','Whole farm', ...
+    'AdamWilbourne_Control_Fields.shp'), ...
+    fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
+    'FeatureIndices',[1 2]);
+```
+
+`Run_Field_Length_Scales` fits an empirical variogram to each measured
+Bruce Farm soil attribute (shortest range = `L_soil`) and to the
+detrended-elevation semivariogram of the DEM (`L_terr`), and recommends
+`h = max(DEM spacing, min(L_soil, L_terr) / 3)` capped by the 95 %
+per-cell coverage rule. That fixed 80 m "notebook recipe" variogram range
+in `Fit_Ordinary_Kriging` is a default, not a Bruce Farm measurement, and
+is not used for grid sizing.
+
+A topographic run passes `FieldDEM` (and optionally `DEMResolutionM`) to
+the launcher; the DEM is fetched with `Load_Field_DEM` (mosaic + reproject
++ resample) and attached with `Attach_Topography_To_Topology`:
+
+```matlab
+Run_One_Subfield(1,'FieldShapefile',shape_file, ...
+    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',1, ...
+    'FieldDEM',fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
+    'DEMResolutionM',5)
+```
+
+The `v2/Spatial inputs/**/DEM/` GeoTIFFs are fetched, not versioned
+(gitignored). For the Adam Wilbourne control fields, the USGS 3DEP 1 m
+tiles `USGS_1M_17_x71y405..x72y407` from the
+`VA_FEMA-NRCS_SouthCentral_2017_D17` project cover both control polygons.
+
+### Charge-balanced random-forest spin-up
+
+`Run_Field_Cell_Spinup(..., 'Method','rf')` reconstructs the distributed
+biogeochemistry pools from a topographically-stratified subsample of full
+spin-ups plus a random forest on {elevation, slope, aspect, curvature,
+TWI, soil class, vegetation} -> conserved pool totals (Lian et al.
+Fig. 3e; needs the Statistics and Machine Learning Toolbox, falls back to
+`'per_cell'` otherwise). Every reconstructed cell is seeded from its
+nearest subsample neighbour and finished with a short
+`Run_Automatic_Site_Spinup` that starts near equilibrium and runs the
+standard ERW handoff gate (`ERW_Handoff_Readiness`), so electroneutrality
+and pore-water pH are closed by the same code the transient run trusts;
+cells that fail the gate fall back to a cold-start spin-up. The
+charge-closure primitive `ERW_Initial_H_From_Anion_Budget` is ported from
+the `Model/TC-SMEW-N` branch `lian-spinup-convergence`.
 
 From PowerShell at the repository root:
 

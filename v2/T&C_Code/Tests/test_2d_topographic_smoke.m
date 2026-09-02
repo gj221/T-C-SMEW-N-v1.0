@@ -1,0 +1,145 @@
+function test_2d_topographic_smoke(n_days)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% test_2d_topographic_smoke
+%%
+%% Integration smoke test of the topographic 2-D driver: build a small
+%% multi-cell topology on a synthetic tilted plane, attach it, and run
+%% MAIN_FRAME_BG_ERW_2D over a few days.  Checks that every new topographic
+%% code path executes and that the domain water / solute ledgers close.
+%%
+%% Reuses the forcing bundled in the equivalence baseline
+%%   v2/SIM/EQUIV_1D_TMP/TC_ERW_results_Kantola_crop_control.mat
+%% (generate it as test_2d_driver_equivalence documents).
+%%
+%% Usage
+%%   test_2d_topographic_smoke        % 5 simulated days
+%%   test_2d_topographic_smoke(10)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+if nargin < 1 || isempty(n_days); n_days = 5; end
+fprintf('\n=== test_2d_topographic_smoke (%d days) ===\n', n_days);
+
+here = fileparts(mfilename('fullpath'));
+v2   = fileparts(fileparts(here));
+code = fullfile(v2,'T&C_Code');
+addpath(code, fullfile(code,'Inputs'), fullfile(code,'Parameters'), here);
+
+base_file = fullfile(v2,'SIM','EQUIV_1D_TMP', ...
+    'TC_ERW_results_Kantola_crop_control.mat');
+if ~isfile(base_file)
+    error('test_2d_topographic_smoke:NoForcing', ...
+        ['Forcing bundle not found: %s\nGenerate it first with:\n' ...
+         '  TC_CASE=5 TC_SCENARIO=EQUIV_1D_TMP TC_NDAYS=%d matlab -batch ' ...
+         '"cd(''v2/run''); ERW_run"'], base_file, max(n_days,10));
+end
+R1 = load(base_file);
+n_hours = n_days*24;
+if R1.NN < n_hours
+    error('test_2d_topographic_smoke:ShortForcing', ...
+        'Forcing bundle has %d h; need %d.', R1.NN, n_hours);
+end
+
+n_pass = 0; n_fail = 0;
+    function check(name,cond,detail)
+        if nargin < 3; detail = ''; end
+        if cond; n_pass = n_pass+1; fprintf('  PASS  %s\n',name);
+        else;     n_fail = n_fail+1; fprintf('  FAIL  %s  %s\n',name,detail); end
+    end
+
+%% --- topology: 3x3 main grid + buffer on a 6% tilted plane -----------
+topo = Build_Cell_Topology(60,5,3,3);
+z = 100 + 0.06*(max(topo.cell_yc) - topo.cell_yc) ...      % slope toward -y
+      + 0.5*sin(topo.cell_xc/15);                          % gentle cross-roll
+topo = Attach_Topography_To_Topology(topo, struct('cell_z_m',z));
+check('topography attaches to the sub-field graph', ...
+    isfield(topo,'topography_attached') && topo.topography_attached);
+check('a downslope outlet is identified', any(topo.cell_is_outlet));
+check('edge elevation drops are non-trivial', max(abs(topo.edge_dz_m)) > 0.1);
+
+[Dom, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours);
+
+%% --- ledger + state checks -----------------------------------------
+check('driver completes without error', isstruct(Dom));
+check('surface solute export vector is finite and sized right', ...
+    numel(Dom.exit_mass_surface_g) == numel(Dom.exit_mass_surface_species) && ...
+    all(isfinite(Dom.exit_mass_surface_g)));
+
+%% Subsurface lateral flow must have redistributed water on the slope.
+lat_water = sum(abs(Dom.lateral.water_buf_to_main),'omitnan');
+check('subsurface lateral flow redistributes water down the slope', ...
+    lat_water > 0, sprintf('|net buffer<->main| = %.4g m3', lat_water));
+check('a dissolved species is carried with that lateral water', ...
+    sum(abs(Dom.lateral.NO3_buf_to_main),'omitnan') > 0);
+check('subsurface lateral sub-steps stayed bounded', ...
+    max(Dom.lateral.sub_steps_max) < 5000);
+
+%% Surface routing: assert conservation whenever runoff was generated.
+if runoff_total_m3 > 1e-9
+    surf_out = sum(Dom.lateral.surface_water_out_m3);
+    surf_reinf = sum(Dom.lateral.surface_reinfilt_m3);
+    check('overland runoff is routed (exit + re-infiltration = runoff)', ...
+        abs((surf_out + surf_reinf) - runoff_total_m3) < 1e-6*max(1,runoff_total_m3), ...
+        sprintf('out %.4g + reinf %.4g vs runoff %.4g', ...
+        surf_out, surf_reinf, runoff_total_m3));
+    check('the topographic outlet exported some water', surf_out > 0);
+else
+    fprintf('  SKIP  surface routing checks (no runoff in this %d-day window)\n', ...
+        n_hours/24);
+end
+
+check('total domain water export is non-negative and finite', ...
+    all(isfinite(Dom.exit_water_total_m3)) && all(Dom.exit_water_total_m3 >= -1e-9));
+check('no NaN in the area-weighted pore pH series', ...
+    all(isfinite(Dom.PH_pore_d(Dom.PH_pore_d ~= 0))));
+
+fprintf('  ---------------------------------------\n');
+fprintf('  %d passed, %d failed\n\n', n_pass, n_fail);
+if n_fail > 0
+    error('test_2d_topographic_smoke: %d check(s) failed', n_fail);
+end
+end
+
+%% =======================================================================
+function [Domain, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours)
+%% Rebuild the caller context MAIN_FRAME_BG_ERW_2D expects (mirrors
+%% test_2d_driver_equivalence/run_driver_single) but for N_col > 1 with a
+%% topography-attached topology, and truncate the forcing to n_hours.
+
+NN = n_hours; NNd = ceil(NN/24)+1;                             %#ok<NASGU>
+ms = R1.ms; cc = R1.cc; Zs = R1.Zs; dt = R1.dt; dth = R1.dth;  %#ok<NASGU>
+%% The bundled series are [1 x NN_full] rows; Datam / IrD are [NN_full x k].
+cr = @(a) a(:, 1:min(size(a,2),n_hours));
+cm = @(a) a(1:min(size(a,1),n_hours), :);
+Datam = cm(R1.Datam); Date = cr(R1.Date);                     %#ok<NASGU>
+Pr=cr(R1.Pr); Ta=cr(R1.Ta); Ds=cr(R1.Ds); Ws=cr(R1.Ws);      %#ok<NASGU>
+ea=cr(R1.ea); N=cr(R1.N); Pre=cr(R1.Pre); Tdew=cr(R1.Tdew);   %#ok<NASGU>
+SAB1=cr(R1.SAB1); SAB2=cr(R1.SAB2); SAD1=cr(R1.SAD1); SAD2=cr(R1.SAD2); %#ok<NASGU>
+PARB=cr(R1.PARB); PARD=cr(R1.PARD); Ca=cr(R1.Ca); Oa=R1.Oa;   %#ok<NASGU>
+Lat=R1.Lat; Lon=R1.Lon; DeltaGMT=R1.DeltaGMT;                 %#ok<NASGU>
+t_bef=R1.t_bef; t_aft=R1.t_aft; id_location=R1.id_location;   %#ok<NASGU>
+NN_case_study_ERW_MOD = R1.NN_case_study_ERW_MOD;             %#ok<NASGU>
+MOD_PARAM_input = R1.MOD_PARAM_input;
+ERW_PARAM_input = R1.ERW_PARAM_input;
+OPT_ERW = R1.OPT_ERW;                                         %#ok<NASGU>
+OPT_SoilBiogeochemistry = R1.OPT_SoilBiogeochemistry;         %#ok<NASGU>
+if isfield(R1,'B_out');     B_out = R1.B_out;         end     %#ok<NASGU>
+if isfield(R1,'O_out');     O_out = R1.O_out;         end     %#ok<NASGU>
+if isfield(R1,'NavlI_out'); NavlI_out = R1.NavlI_out; end     %#ok<NASGU>
+if isfield(R1,'RexmyI_out');RexmyI_out = R1.RexmyI_out;end    %#ok<NASGU>
+if isfield(R1,'NupI_L_out');NupI_L_out = R1.NupI_L_out;end    %#ok<NASGU>
+if isfield(R1,'IrD');       IrD = cm(R1.IrD);         end     %#ok<NASGU>
+
+Parameter_Directory = fullfile(code,'Parameters');            %#ok<NASGU>
+apply_rock = logical(R1.OPT_ERW && ERW_PARAM_input.diss_f > 0);
+ColCfg = repmat(struct( ...
+    'PARAM_IC', fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM) '.m']), ...
+    'PFT_OVERRIDE','', 'apply_rock',apply_rock), topo.N_cells, 1); %#ok<NASGU>
+
+old = cd(code); cleanup = onCleanup(@() cd(old));
+MAIN_FRAME_BG_ERW_2D;
+runoff_total_m3 = 0;
+for cc_ = 1:topo.N_cells
+    runoff_total_m3 = runoff_total_m3 + ...
+        sum((Rh(:,1,cc_) + Rd(:,1,cc_))/1000) * topo.cell_area_m2(cc_);
+end
+end

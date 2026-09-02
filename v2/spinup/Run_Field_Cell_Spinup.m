@@ -4,7 +4,8 @@ function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_fi
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
-    'GridCellSizeM',[],'CaseNumber',5,'OutputFile','','DryRun',false);
+    'GridCellSizeM',[],'CaseNumber',5,'OutputFile','','DryRun',false, ...
+    'Method','per_cell','FieldDEM','','SubsampleFraction',0.12);
 if mod(numel(varargin),2) ~= 0
     error('Run_Field_Cell_Spinup:BadOptions','Options must be name/value pairs.');
 end
@@ -84,28 +85,67 @@ if ~exist(output_directory,'dir')
     mkdir(output_directory);
 end
 
-state_cells = cell(topo.N_cells,1);
-for c = 1:topo.N_cells
-    cell_file = fullfile(output_directory,sprintf('cell_%03d_BG.mat', ...
-        resolved.cell_id(c)));
-    settings = struct('NN_case_study_ERW_MOD',opt.CaseNumber, ...
-        'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
-        'SAVE_RESULTS',0,'MOD_PARAM_override',CellInputs(c).MOD_PARAM, ...
-        'ERW_PARAM_override',CellInputs(c).ERW_PARAM, ...
-        'BG_OUTPUT_FILE',cell_file,'CELL_ID',resolved.cell_id(c), ...
-        'CELL_AGRONOMIC_IDENTITY',CellInputs(c).agronomic_identity);
-    Run_Automatic_Site_Spinup(settings);
-    state_cells{c} = load_bg_state(cell_file);
-    Validate_BG_State_For_Transient(state_cells{c},cell_file);
+if ~any(strcmpi(opt.Method,{'per_cell','rf'}))
+    error('Run_Field_Cell_Spinup:BadMethod', ...
+        'Method must be ''per_cell'' or ''rf''.');
 end
-CellBGStates = vertcat(state_cells{:});
+
+run_cell_spinup = @(c) full_cell_spinup(output_directory,resolved.cell_id(c), ...
+    opt.CaseNumber,CellInputs(c));
+
+if strcmpi(opt.Method,'rf')
+    if exist('TreeBagger','file') ~= 2
+        warning('Run_Field_Cell_Spinup:NoRFToolbox', ...
+            ['TreeBagger unavailable; falling back to Method=''per_cell''. ' ...
+             'Install the Statistics and Machine Learning Toolbox for the ' ...
+             'RF reconstruction.']);
+        opt.Method = 'per_cell';
+    elseif isempty(opt.FieldDEM)
+        error('Run_Field_Cell_Spinup:RFNeedsDEM', ...
+            'Method=''rf'' needs a FieldDEM to attach topography for the RF covariates.');
+    end
+end
+
+if strcmpi(opt.Method,'rf')
+    dem = Load_Field_DEM(char(opt.FieldDEM),topo,'OutResolutionM',opt.GridCellSizeM);
+    topo = Attach_Topography_To_Topology(topo,dem);
+    [sub_idx,~] = Select_Topographic_Subsample(topo,resolved,opt.SubsampleFraction);
+    sub_states = repmat(run_cell_spinup(sub_idx(1)), numel(sub_idx), 1);
+    for s = 2:numel(sub_idx); sub_states(s) = run_cell_spinup(sub_idx(s)); end
+    [CellBGStates,rf_report] = Reconstruct_Cell_Pools_RF(topo,resolved, ...
+        CellInputs,sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
+        'OutputDirectory',output_directory);
+    resolved.spinup_method = repmat("rf",topo.N_cells,1);
+else
+    state_cells = cell(topo.N_cells,1);
+    for c = 1:topo.N_cells
+        state_cells{c} = run_cell_spinup(c);
+    end
+    CellBGStates = vertcat(state_cells{:});
+    rf_report = struct('method','per_cell'); %#ok<NASGU>
+end
 
 temporary_file = [tempname(output_directory) '.mat'];
 cleanup = onCleanup(@() delete_if_present(temporary_file));
-save(temporary_file,'CellBGStates','resolved','-v7.3');
+save(temporary_file,'CellBGStates','resolved','rf_report','-v7.3');
 movefile(temporary_file,state_file,'f');
 clear cleanup
-fprintf('Saved %d validated cell spin-up states: %s\n',topo.N_cells,state_file);
+fprintf('Saved %d validated cell spin-up states (%s): %s\n', ...
+    topo.N_cells,opt.Method,state_file);
+end
+
+%% =======================================================================
+function st = full_cell_spinup(output_directory, cell_id, case_number, cell_inputs)
+cell_file = fullfile(output_directory,sprintf('cell_%03d_BG.mat',cell_id));
+settings = struct('NN_case_study_ERW_MOD',case_number, ...
+    'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
+    'SAVE_RESULTS',0,'MOD_PARAM_override',cell_inputs.MOD_PARAM, ...
+    'ERW_PARAM_override',cell_inputs.ERW_PARAM, ...
+    'BG_OUTPUT_FILE',cell_file,'CELL_ID',cell_id, ...
+    'CELL_AGRONOMIC_IDENTITY',cell_inputs.agronomic_identity);
+Run_Automatic_Site_Spinup(settings);
+st = load_bg_state(cell_file);
+Validate_BG_State_For_Transient(st,cell_file);
 end
 
 function delete_if_present(file_name)

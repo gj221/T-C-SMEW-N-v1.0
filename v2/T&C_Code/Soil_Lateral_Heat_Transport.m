@@ -306,7 +306,14 @@ H = cv.*T-rho_i_Lf*Oice;
 end
 
 function [da,db] = edge_half_distances(topo,e)
-if isfield(topo,'edge_face_distance_a_m') && ...
+%% Prefer the slope (down-dip) conduction length when topography is
+%% attached (Attach_Topography_To_Topology), then the planar half
+%% distances, then half the centre-to-centre distance.
+if isfield(topo,'edge_face_distance_surface_a_m') && ...
+        isfield(topo,'edge_face_distance_surface_b_m')
+    da = topo.edge_face_distance_surface_a_m(e);
+    db = topo.edge_face_distance_surface_b_m(e);
+elseif isfield(topo,'edge_face_distance_a_m') && ...
         isfield(topo,'edge_face_distance_b_m')
     da = topo.edge_face_distance_a_m(e);
     db = topo.edge_face_distance_b_m(e);

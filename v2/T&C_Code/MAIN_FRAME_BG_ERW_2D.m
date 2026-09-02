@@ -129,16 +129,34 @@ if any(abs(cellfun(@(p) p.Zbio,PAR)-PAR{1}.Zbio) > 1e-9)
 end
 Zlayer_m = diff(PAR{1}.Zs)/1000;      %% [m] layer thickness, shared
 
-%% This retained sub-field topology has no elevation or roughness closure.
-%% A sloped case requires T&C's raster routing machinery and cannot be
-%% represented by the flat adjacency graph without inventing flow paths.
+%% Topography enters through the cell topology (Attach_Topography_To_Topology
+%% adds cell_z_m and the derived attributes), NOT through the per-column
+%% parameter files.  The FV lateral solver (Darcy_Lateral_Topology) drives
+%% subsurface flow on total hydraulic head H = psi + z, and the surface
+%% router moves ponded runoff down the DEM; the vertical column stays 1-D
+%% (Slo_top = 0 in the HYDROLOGIC_UNIT call below), so its internal
+%% kinematic Qi_out cannot double-count the graph exchange.  A non-zero
+%% parameter-file Slo_top would re-introduce that double count and is
+%% rejected.
+topography_attached = isfield(topo,'topography_attached') && topo.topography_attached;
 if N_col > 1
     for c = 1:N_col
         if abs(PAR{c}.Slo_top) > 1e-12 || any(abs(PAR{c}.Slo_pot) > 1e-12)
             error('MAIN_FRAME_BG_ERW_2D:SlopedDomainUnsupported', ...
-                ['The sub-field graph requires zero Slo_top and Slo_pot. ' ...
-                 'Use raster routing when a DTM and surface-flow parameters are available.']);
+                ['Column %d carries a non-zero parameter-file Slo_top/Slo_pot. ' ...
+                 'Put field topography in the cell topology via ' ...
+                 'Attach_Topography_To_Topology (topo.cell_z_m), not in the ' ...
+                 'parameter file.'], c);
         end
+    end
+    if topography_attached
+        fprintf(['  topography attached: %s; slope %.1f-%.1f%%, ' ...
+            'relief %.1f m, %d outlet cell(s)\n'], ...
+            char(string(topo.topography_source)), ...
+            100*min(topo.cell_slope), 100*max(topo.cell_slope), ...
+            max(topo.cell_z_m)-min(topo.cell_z_m), sum(topo.cell_is_outlet));
+    else
+        fprintf('  no topography attached: flat-field lateral coupling\n');
     end
 end
 
@@ -404,9 +422,20 @@ lateral_diag = struct('water_buf_to_main', zeros(NNd,1), ...
                       'erw_species_names', {{'Na','Al','An','DIC'}});
 
 %% Domain-boundary accounting. The subsurface lateral perimeter is closed;
-%% bottom leakage and unrouted surface runoff leave the modeled plot.
+%% bottom leakage leaves through Leakage_Bottom.  Surface runoff leaves the
+%% plot at each cell (flat, no topography) OR is routed downslope and
+%% leaves only at the topographic outlet(s) (Surface_Runoff_Routing).
 exit_water_vert_m3 = zeros(N_col,1);
 exit_water_surface_m3 = zeros(N_col,1);
+exit_mass_surface_g = zeros(N_lateral_species,1);   %% solute exported at outlets
+%% Overland routing carries this step's ponded runoff to the NEXT step's
+%% re-infiltration opportunity (q_runon).  T&C's operator split is
+%% 1-step-lagged by design; overland travel times over a farm field are
+%% far below one hydrologic step (test_lateral_routing #14).
+q_runon_next = zeros(N_col,1);
+lateral_diag.surface_water_out_m3 = zeros(NNd,1);
+lateral_diag.surface_mass_out_g   = zeros(NNd,N_lateral_species);
+lateral_diag.surface_reinfilt_m3  = zeros(NNd,1);
 
 j = 1;
 tic;
@@ -502,6 +531,28 @@ ERW_topology_identity = sprintf([ ...
     mat2str(topo.edge_face_distance_a_m,17), ...
     mat2str(topo.edge_face_distance_b_m,17), ...
     mat2str(topo.edge_active,17),mat2str(topo.outer_face_width_m,17));
+%% Topographic attributes only extend the identity when a DEM has been
+%% attached, so a flat run's fingerprint is unchanged from before.
+if isfield(topo,'topography_attached') && topo.topography_attached
+    %% Attach_Topography_To_Topology writes all of these together, so a
+    %% missing field here means a malformed topology and should error.
+    topo_field = @(name) mat2str(reshape(double(topo.(name)),[],1),17);
+    ERW_topology_identity = sprintf(['%s;' ...
+        'topology_source=%s;topology_cell_z=%s;topology_cell_slope=%s;' ...
+        'topology_cell_aspect=%s;topology_cell_svf=%s;topology_cell_twi=%s;' ...
+        'topology_cell_curv_prof=%s;topology_cell_curv_plan=%s;' ...
+        'topology_edge_dz=%s;topology_edge_surface_distance=%s;' ...
+        'topology_overland_ab=%s;topology_overland_ba=%s;topology_is_outlet=%s'], ...
+        ERW_topology_identity, ...
+        char(string(topo.topography_source)), ...
+        topo_field('cell_z_m'),topo_field('cell_slope'), ...
+        topo_field('cell_aspect_deg'),topo_field('cell_svf'), ...
+        topo_field('cell_twi'),topo_field('cell_curv_prof'), ...
+        topo_field('cell_curv_plan'),topo_field('edge_dz_m'), ...
+        topo_field('edge_face_distance_surface_m'), ...
+        topo_field('edge_overland_weight_ab'), ...
+        topo_field('edge_overland_weight_ba'),topo_field('cell_is_outlet'));
+end
 ERW_ckpt_runtime_identity = strjoin( ...
     [{ERW_forcing_identity,ERW_topology_identity} ERW_runtime_parts],'|');
 ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
@@ -601,6 +652,40 @@ for i = i_resume:NN
     end
     pdind = max(1,i-24):i-1;
     h_S = NaN;
+
+    %% ------------------------------------------------------------------
+    %% PER-CELL TOPOGRAPHIC RADIATION
+    %%   slope/aspect project the direct beam (Essery & Marks 2007;
+    %%   the T&C spatial-radiation form used by T&C-BG-2D); the sky-view
+    %%   factor scales the diffuse and adds a terrain-reflected term.
+    %%   Flat / no topography attached -> every cell keeps the station
+    %%   series, so this is a no-op there.
+    %% ------------------------------------------------------------------
+    SAB1_c = repmat(SAB1(i),N_col,1); SAB2_c = repmat(SAB2(i),N_col,1);
+    SAD1_c = repmat(SAD1(i),N_col,1); SAD2_c = repmat(SAD2(i),N_col,1);
+    PARB_c = repmat(PARB(i),N_col,1); PARD_c = repmat(PARD(i),N_col,1);
+    SvF_c  = arrayfun(@(c) PAR{c}.SvF, (1:N_col).');
+    if topography_attached
+        SvF_c = topo.cell_svf(:);
+        [h_S_i,~,zeta_S_i] = SetSunVariables( ...
+            Datam(i,:),DeltaGMT,Lon,Lat,t_bef,t_aft);
+        beta = atan(topo.cell_slope(:));
+        asp  = topo.cell_aspect_deg(:)*pi/180;
+        if isfinite(h_S_i) && sin(h_S_i) > 0.10 && ...
+                (SAB1(i)+SAB2(i)+PARB(i)) > 0
+            cos_fst = cos(beta)*sin(h_S_i) + ...
+                sin(beta).*cos(h_S_i).*cos(zeta_S_i - asp);
+            beam_factor = max(0,cos_fst)./sin(h_S_i);   %% ~1 on flat ground
+        else
+            beam_factor = ones(N_col,1);
+        end
+        diff_gain = (1-SvF_c)*0.15;   %% terrain-reflected fraction of global
+        SAB1_c = SAB1(i)*beam_factor;  SAB2_c = SAB2(i)*beam_factor;
+        PARB_c = PARB(i)*beam_factor;
+        SAD1_c = SAD1(i)*SvF_c + diff_gain*(SAB1(i)+SAD1(i));
+        SAD2_c = SAD2(i)*SvF_c + diff_gain*(SAB2(i)+SAD2(i));
+        PARD_c = PARD(i)*SvF_c + diff_gain*(PARB(i)+PARD(i));
+    end
 
     %% ------------------------------------------------------------------
     %% DAILY BLOCK
@@ -896,15 +981,21 @@ for i = i_resume:NN
         p = PAR{c};
         Ccrown = Ccrown_c(c,:);
         if N_col > 1
+            %% The FV graph (Darcy_Lateral_Topology, total head H = psi + z)
+            %% owns all subsurface lateral flow, so the column runs strictly
+            %% 1-D: a non-zero Slo_top here would double-count via the ODE's
+            %% own kinematic Qi_out (SOIL_MOISTURES_RICH_COMP, driven by
+            %% sin(atan(Slo_top))).  See the WP4 note near the slope guard.
             Qi_in(i,:,c) = 0;
             Slo_top_cell = 0;
             Slo_pot_cell = zeros(1,ms);
+            q_runon(i,1,c) = q_runon_next(c);   %% routed runoff, previous step
         else
             Qi_in(i,:,c) = Qi_out(i-1,:,c);
             Slo_top_cell = p.Slo_top;
             Slo_pot_cell = p.Slo_pot;
+            q_runon(i,1,c) = 0;
         end
-        q_runon(i,1,c) = 0;
 
         [V(i,:,c),Vice(i,:,c),O(i,:,c),Oice(i,:,c),ZWT(i,c),OF(i,c),OS(i,c), ...
          OH(i,:,c),OL(i,:,c),Psi_s_H(i,:,c),Psi_s_L(i,:,c),Rd(i,c),Qi_out(i,:,c),WTR(i,:,c), ...
@@ -941,7 +1032,7 @@ for i = i_resume:NN
             p.Soil_Param,p.Interc_Param,p.SnowIce_Param,p.VegH_Param,p.VegL_Param, ...
             p.Zs_deb,p.Deb_Par, ...
             ZR95_H_c(c,:),ZR95_L_c(c,:), ...
-            SAB1(i),SAB2(i),SAD1(i),SAD2(i),PARB(i),PARD(i),p.SvF, ...
+            SAB1_c(c),SAB2_c(c),SAD1_c(c),SAD2_c(c),PARB_c(c),PARD_c(c),SvF_c(c), ...
             SND(i-1,c),snow_alb_c{c},p.Color_Class,p.OM_H,p.OM_L, ...
             p.PFT_opt_H,p.PFT_opt_L,hc_H(j,:,c),hc_L(j,:,c),p.d_leaf_H,p.d_leaf_L, ...
             Ca(i),Oa,Ci_sunH(i-1,:,c),Ci_shdH(i-1,:,c),Ci_sunL(i-1,:,c),Ci_shdL(i-1,:,c), ...
@@ -962,14 +1053,19 @@ for i = i_resume:NN
 
         snow_alb_c{c} = snow_alb_new;
         Tstm0_c(c) = 2*Ts(i,c) - Ts(i-1,c);
-        STOT = SAB1(i)+SAB2(i)+SAD1(i)+SAD2(i);
-        ALB(i,c) = SAB1(i)/STOT*snow_alb_new.dir_vis + SAD1(i)/STOT*snow_alb_new.dif_vis + ...
-                   SAB2(i)/STOT*snow_alb_new.dir_nir + SAD2(i)/STOT*snow_alb_new.dif_nir;
+        STOT = SAB1_c(c)+SAB2_c(c)+SAD1_c(c)+SAD2_c(c);
+        ALB(i,c) = SAB1_c(c)/STOT*snow_alb_new.dir_vis + SAD1_c(c)/STOT*snow_alb_new.dif_vis + ...
+                   SAB2_c(c)/STOT*snow_alb_new.dir_nir + SAD2_c(c)/STOT*snow_alb_new.dif_nir;
 
         %% Vertical exit at the base of the column [m3]
         exit_water_vert_m3(c) = exit_water_vert_m3(c) + (Lk(i,c)/1000)*A_cell(c)*dth;
-        exit_water_surface_m3(c) = exit_water_surface_m3(c) + ...
-            ((Rh(i,c)+Rd(i,c))/1000)*A_cell(c);
+        if ~topography_attached
+            %% Flat graph: unrouted runoff leaves each cell (unchanged).
+            exit_water_surface_m3(c) = exit_water_surface_m3(c) + ...
+                ((Rh(i,c)+Rd(i,c))/1000)*A_cell(c);
+        end
+        %% With topography attached, this step's ponded runoff is collected
+        %% and routed after the lateral block (Surface_Runoff_Routing).
     end
 
     %% ------------------------------------------------------------------
@@ -1029,6 +1125,55 @@ for i = i_resume:NN
         if any(Pj(:) < -1e-10)
             error('MAIN_FRAME_BG_ERW_2D:NegativePool', ...
                 'Conservative lateral transport produced a negative pool at i=%d.',i);
+        end
+
+        %% --------------------------------------------------------------
+        %% SURFACE RUNOFF ROUTING -- this step's ponded runoff is routed
+        %% down the DEM, carrying its dissolved load.  It leaves the
+        %% domain only at the topographic outlet(s); otherwise it is
+        %% offered to the next vertical step as q_runon (re-infiltration).
+        %% --------------------------------------------------------------
+        if topography_attached
+            Rh_c = reshape(Rh(i,1,:),N_col,1);
+            Rd_c = reshape(Rd(i,1,:),N_col,1);
+            runoff_step_mm = max(Rh_c + Rd_c, 0);                 % [N_col x 1]
+            [~,mobile_now] = Biogeo_Lateral_Pools(P_cells);
+            mobile_now = mobile_now .* lateral_fraction;          % [N_col x N_sp]
+            C_soil = Biogeo_Lateral_Concentration( ...
+                mobile_now,A_cell,theta_new,Zlayer_m,bio_active_fraction);
+            C_soil = reshape(C_soil(:,1,:),N_col,N_lateral_species);
+            %% Saturation-excess runoff (Rd) carries soil-water chemistry;
+            %% infiltration-excess runoff (Rh) carries ~precip chemistry
+            %% (~0 for the mobile pools; wet deposition is handled apart).
+            Rd_frac = Rd_c ./ max(runoff_step_mm,eps);
+            C_surf = C_soil .* Rd_frac;
+            depth_m = runoff_step_mm/1000;                        % [N_col x 1]
+            %% cap so the routed export can never exceed the mobile pool
+            C_surf = min(C_surf, mobile_now ./ max(depth_m,eps));
+            C_surf(~isfinite(C_surf)) = 0;
+
+            [q_deliver_mm,C_deliver,~,~,~,exit_cell_m3,exit_cell_g] = ...
+                Surface_Runoff_Routing(topo,runoff_step_mm,C_surf,dth);
+
+            removed_area   = depth_m .* C_surf;                   % [N_col x N_sp] gX/m2
+            delivered_area = (q_deliver_mm/1000) .* C_deliver;    % [N_col x N_sp] gX/m2
+            P_cells = Biogeo_Lateral_Pools(P_cells, delivered_area - removed_area);
+            P(j,:,:) = reshape(P_cells.',1,79,N_col);
+
+            q_runon_next          = q_deliver_mm;
+            exit_water_surface_m3 = exit_water_surface_m3 + exit_cell_m3;
+            exit_mass_surface_g   = exit_mass_surface_g + sum(exit_cell_g,1).';
+            lateral_diag.surface_water_out_m3(j) = ...
+                lateral_diag.surface_water_out_m3(j) + sum(exit_cell_m3);
+            lateral_diag.surface_mass_out_g(j,:) = ...
+                lateral_diag.surface_mass_out_g(j,:) + sum(exit_cell_g,1);
+            lateral_diag.surface_reinfilt_m3(j) = ...
+                lateral_diag.surface_reinfilt_m3(j) + sum((q_deliver_mm/1000).*A_cell);
+
+            if any(reshape(P(j,transported,:),1,[]) < -1e-9)
+                error('MAIN_FRAME_BG_ERW_2D:NegativePool', ...
+                    'Surface runoff transport produced a negative pool at i=%d.',i);
+            end
         end
 
         lateral_diag.water_buf_to_main(j) = lateral_diag.water_buf_to_main(j) + ldiag.buf_to_main.water;
@@ -1162,6 +1307,10 @@ Domain.exit_water_field_vert_m3 = sum(exit_water_vert_m3.*field_fraction);
 Domain.exit_water_field_surface_m3 = sum(exit_water_surface_m3.*field_fraction);
 Domain.exit_water_field_total_m3 = Domain.exit_water_field_vert_m3+ ...
     Domain.exit_water_field_surface_m3;
+%% Solute exported at the topographic outlet(s) with overland runoff
+%% [g element], one entry per lateral species (Domain.lateral.species_names).
+Domain.exit_mass_surface_g = exit_mass_surface_g;
+Domain.exit_mass_surface_species = lateral_species;
 Domain.cell_region   = topo.cell_region;
 Domain.cell_area_m2  = A_cell;
 Domain.cell_overlap_area_m2 = A_field;

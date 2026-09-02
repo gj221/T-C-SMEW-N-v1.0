@@ -37,6 +37,7 @@ opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
     'FieldShapefile','','GridCellSizeM',[], ...
     'FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'CellAgronomicFile','','CellSpinupStateFile','', ...
+    'FieldDEM','','DEMResolutionM',[], ...
     'AppeloAlpha',[],'AppeloLogKH',[],'SaveResults',true,'ResultDirectory','');
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
@@ -273,6 +274,18 @@ elseif R.use_subdomains
     topo = Build_Cell_Topology(g.field_side_m,g.margin_width_m,nx,ny);
 else
     topo = Build_Single_Cell_Topology(g.field_side_m^2);
+end
+
+%% Attach field topography from a DEM so the 2-D driver resolves
+%% elevation-driven lateral and vertical flow (Attach_Topography_To_Topology).
+%% Without FieldDEM the run stays flat, exactly as before.
+if ~isempty(opt.FieldDEM) && topo.N_cells > 1
+    dem = Load_Field_DEM(char(opt.FieldDEM),topo, ...
+        'OutResolutionM',opt.DEMResolutionM);
+    topo = Attach_Topography_To_Topology(topo,dem);
+    fprintf('Topography attached from %s: relief %.1f m, mean slope %.1f%%\n', ...
+        char(opt.FieldDEM),max(topo.cell_z_m)-min(topo.cell_z_m), ...
+        100*mean(topo.cell_slope));
 end
 
 CellAgronomicInputs = table();
