@@ -48,31 +48,61 @@ have_flat = ~isempty(pools_flat) && isequal(size(pools_flat),size(pools_topo));
 x = topo.cell_xc_projected_m(:); y = topo.cell_yc_projected_m(:);
 twi = topo.cell_twi(:); curv = topo.cell_curv_prof(:);
 elev = topo.cell_z_m(:);
-asp  = cosd(topo.cell_aspect_deg(:));         % 1 = south-facing (Lian et al.)
+%% aspect is degrees clockwise from north (downslope direction), so a
+%% south-facing cell has aspect 180: negate the cosine to get the Lian et
+%% al. encoding (+1 = south-facing, -1 = north-facing).
+asp  = -cosd(topo.cell_aspect_deg(:));
 
 %% --- standardized gradient-method sensitivity (Lian et al. Eq. 1) ----
 feat = [elev, twi, asp, curv];
-featz = (feat - mean(feat,1)) ./ max(std(feat,0,1),eps);
-importance = zeros(V,4);
+feat_sd = std(feat,0,1);
+%% A feature with no variation across the domain carries no information
+%% about the pools, and leaving it in makes the design matrix rank
+%% deficient.  Drop it and report its importance as NaN -- "undetermined"
+%% -- rather than 0, which would read as "this driver does not matter".
+%% The elevation-injection topology path is the usual case: it reports a
+%% single slope/aspect and zero curvature for every cell.
+varying = feat_sd > 1e-9*max(1,max(abs(feat),[],1));
+featz = (feat - mean(feat,1)) ./ max(feat_sd,eps);
+featz(:,~varying) = 0;
+feature_names = {'elevation','TWI','aspect','curvature'};
+if ~all(varying)
+    fprintf(['Plot_Topographic_Redistribution: %s constant across the ' ...
+        'domain; importance reported as NaN\n'], ...
+        strjoin(feature_names(~varying),', '));
+end
+importance = nan(V,4);
 for v = 1:V
     yv = pools_topo(:,v);
     keep = yv <= quantile(yv,0.99) & isfinite(yv);      % drop top-1% outliers
     yz = (yv(keep) - mean(yv(keep))) / max(std(yv(keep)),eps);
     Xz = featz(keep,:);
-    %% full quadratic + interaction design (Lian et al. Eq. 1)
+    %% Solve on the varying columns only (a constant column would make the
+    %% least-squares system rank deficient); the dropped terms contribute
+    %% zero to every derivative below because their Xz column is zero.
+    %% full quadratic + interaction design (Lian et al. Eq. 1):
+    %% columns 1-4 linear, 5-10 the six pairwise interactions
+    %% (12,13,14,23,24,34), 11-14 the squares, 15 the intercept.
     D = [Xz, ...
          Xz(:,1).*Xz(:,2), Xz(:,1).*Xz(:,3), Xz(:,1).*Xz(:,4), ...
          Xz(:,2).*Xz(:,3), Xz(:,2).*Xz(:,4), Xz(:,3).*Xz(:,4), ...
          Xz.^2, ones(nnz(keep),1)];
-    b = D \ yz;
+    %% Minimum-norm solution: a dropped (constant) feature leaves zero
+    %% columns in D, which makes a backslash solve rank deficient and warn.
+    %% lsqminnorm gives those terms exactly zero coefficients, which is
+    %% what a predictor with no variation should contribute.
+    b = lsqminnorm(D,yz);
     %% mean |partial derivative| w.r.t. each standardized feature
     dfdx = zeros(nnz(keep),4);
-    dfdx(:,1) = b(1) + b(5)*Xz(:,2) + b(6)*Xz(:,3) + b(7)*Xz(:,4) + 2*b(14)*Xz(:,1);
-    dfdx(:,2) = b(2) + b(5)*Xz(:,1) + b(8)*Xz(:,3) + b(9)*Xz(:,4) + 2*b(15)*Xz(:,2);
-    dfdx(:,3) = b(3) + b(6)*Xz(:,1) + b(8)*Xz(:,2) + b(10)*Xz(:,4) + 2*b(16)*Xz(:,3);
-    dfdx(:,4) = b(4) + b(7)*Xz(:,1) + b(9)*Xz(:,2) + b(10)*Xz(:,3) + 2*b(17)*Xz(:,4);
+    dfdx(:,1) = b(1) + b(5)*Xz(:,2) + b(6)*Xz(:,3) + b(7)*Xz(:,4)  + 2*b(11)*Xz(:,1);
+    dfdx(:,2) = b(2) + b(5)*Xz(:,1) + b(8)*Xz(:,3) + b(9)*Xz(:,4)  + 2*b(12)*Xz(:,2);
+    dfdx(:,3) = b(3) + b(6)*Xz(:,1) + b(8)*Xz(:,2) + b(10)*Xz(:,4) + 2*b(13)*Xz(:,3);
+    dfdx(:,4) = b(4) + b(7)*Xz(:,1) + b(9)*Xz(:,2) + b(10)*Xz(:,3) + 2*b(14)*Xz(:,4);
+    %% Normalise over the features that actually vary, so the reported
+    %% shares still sum to 1 across them.
     m = mean(abs(dfdx),1);
-    importance(v,:) = m / max(sum(m),eps);
+    m(~varying) = NaN;
+    importance(v,:) = m / max(sum(m(varying)),eps);
 end
 sensitivity = array2table(importance, ...
     'VariableNames',{'elevation','TWI','aspect','curvature'}, ...

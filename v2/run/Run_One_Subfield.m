@@ -281,7 +281,7 @@ end
 %% Without FieldDEM the run stays flat, exactly as before.
 if ~isempty(opt.FieldDEM) && topo.N_cells > 1
     dem = Load_Field_DEM(char(opt.FieldDEM),topo, ...
-        'OutResolutionM',opt.DEMResolutionM);
+        'OutResolutionM',dem_resolution(opt.DEMResolutionM,topo));
     topo = Attach_Topography_To_Topology(topo,dem);
     fprintf('Topography attached from %s: relief %.1f m, mean slope %.1f%%\n', ...
         char(opt.FieldDEM),max(topo.cell_z_m)-min(topo.cell_z_m), ...
@@ -547,4 +547,18 @@ function tag = number_tag(value)
 tag = strrep(sprintf('%.17g',value),'.','p');
 tag = strrep(tag,'-','m');
 tag = strrep(tag,'+','');
+end
+
+%% =======================================================================
+function r = dem_resolution(requested,topo)
+%% Default the DEM spacing to the process-grid cell size rather than the
+%% tile's native 1 m.  Terrain attributes are sampled at cell centres, so
+%% a DEM far finer than the cell aliases sub-cell microtopography into
+%% slope / curvature / TWI (and slope, a gradient magnitude, is biased
+%% one-sided by it).  Load_Field_DEM area-averages to whatever spacing it
+%% is given.
+r = requested;
+if isempty(r) && isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m)
+    r = topo.cell_size_m;
+end
 end

@@ -4,27 +4,45 @@ function [q_deliver_mm, C_deliver, exit_water_m3, exit_mass, diag, ...
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Surface_Runoff_Routing
 %%
-%% Route ponded overland runoff one cell downslope on the DEM topology,
+%% Route this step's ponded overland runoff down the DEM topology,
 %% carrying its dissolved load.  Returns (a) the depth + concentration
 %% delivered to each cell as its NEXT vertical step's re-infiltration
 %% opportunity (q_runon) and (b) the water + mass that leaves the domain
 %% at the topographic outlet(s).
 %%
-%% MODEL
-%%   Each cell's ponded runoff this step is partitioned among its
-%%   downslope neighbours by the Quinn (1991) multiple-flow-direction
-%%   weights (from Attach_Topography_To_Topology) and delivered ONE cell
-%%   hop.  A share that lands on an outlet cell leaves the domain; a share
-%%   that lands on an interior cell becomes that cell's next-step q_runon,
-%%   where the Richards / infiltration solver decides how much
-%%   re-infiltrates and how much becomes runoff again (routed on the
-%%   following step).  A pit cell keeps its own runoff.  Solute moves with
-%%   the water, upwind from the contributing cell.
+%% MODEL -- runoff / run-on connectivity
+%%   Ponded water is partitioned among a cell's downslope neighbours by
+%%   the Quinn (1991) multiple-flow-direction weights (Attach_Topography_
+%%   To_Topology) and cascaded downslope within the step, in descending
+%%   elevation order.  What happens at a receiving cell depends on what
+%%   the vertical solver just said about it:
 %%
-%%   One hop per step deliberately under-propagates fast overland flow
-%%   (real travel times are sub-hourly), which lags -- but conserves --
-%%   streamflow timing while giving every downslope cell a re-infiltration
-%%   chance.  It is mass-exact.
+%%     TRANSMITTING  the cell produced runoff itself this step (runoff_mm
+%%                   > 0): it is at infiltration capacity (Hortonian) or
+%%                   saturated (Dunne), so run-on cannot infiltrate there
+%%                   -- it passes straight through, downslope, in the
+%%                   same step, together with the cell's own runoff.
+%%     ABSORBING     the cell produced no runoff (spare infiltration
+%%                   capacity): run-on stops here and is offered to its
+%%                   next vertical step as q_runon, where the infiltration
+%%                   solver decides how much re-infiltrates; any excess
+%%                   becomes that cell's runoff and is routed next step.
+%%     OUTLET        a TRANSMITTING outlet cell passes water and mass out
+%%                   of the domain; a dry outlet cell absorbs like any
+%%                   other dry cell (it is a full cell of field, not a
+%%                   channel) and exports only once it is at capacity.
+%%     PIT           an interior cell with no lower neighbour keeps what
+%%                   reaches it (offered back as q_runon).
+%%
+%%   On a hillslope that is generating runoff everywhere (a storm) this
+%%   gives same-step delivery to the outlet, as overland travel times
+%%   (minutes) demand; a one-hop-per-step rule would instead walk the
+%%   water down the slope over N hours and offer it re-infiltration at
+%%   every hop after the rain has stopped -- a systematic bias toward
+%%   retention.  Where runoff meets dry ground, the run-on stops and is
+%%   allowed to infiltrate, the classic runoff-runon mechanism.  Solute
+%%   moves with the water (upwind, fully mixed at each confluence).  The
+%%   scheme is mass-exact; the guard at the end enforces it.
 %%
 %%   No topography attached -> no weights, no outlet: every cell keeps its
 %%   own runoff (q_deliver == runoff), the pre-topography behaviour.
@@ -43,7 +61,7 @@ function [q_deliver_mm, C_deliver, exit_water_m3, exit_mass, diag, ...
 %%   exit_water_m3     scalar water leaving at outlets [m3]
 %%   exit_mass         [N_species x 1] solute mass leaving at outlets
 %%   diag              .edge_flux_m3 [N_edges x 1] overland water per edge
-%%                     .pit_cells    interior cells with nowhere to drain
+%%                     (a->b positive), .pit_cells, .transmitting (logical)
 %%   exit_by_cell_m3   [N_cells x 1] outlet water attributed per cell
 %%   exit_mass_by_cell [N_cells x N_species] outlet mass per cell
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -71,7 +89,8 @@ A = topo.cell_area_m2(:);
 has_topo = isfield(topo,'edge_overland_weight_ab') && ...
     isfield(topo,'cell_z_m') && ~isempty(topo.cell_z_m);
 
-diag = struct('edge_flux_m3',zeros(topo.N_edges,1),'pit_cells',[]);
+diag = struct('edge_flux_m3',zeros(topo.N_edges,1),'pit_cells',[], ...
+    'transmitting',false(N_cells,1));
 exit_water_m3      = 0;
 exit_by_cell_m3    = zeros(N_cells,1);
 exit_mass_by_cell  = zeros(N_cells,max(N_sp,1));
@@ -96,24 +115,60 @@ if isfield(topo,'edge_overland_weight_ba')
 else
     w_ba = zeros(topo.N_edges,1);
 end
+z = topo.cell_z_m(:);
 
 pond_m3 = (runoff_mm/1000).*A;                       % this step's own runoff
 mass    = zeros(N_cells,max(N_sp,1));
 if track_solute; mass(:,1:N_sp) = pond_m3 .* C_runoff; end
+%% A cell that produced runoff is at capacity this step and transmits
+%% run-on; a tolerance keeps round-off residue from flagging a dry cell.
+transmitting = runoff_mm > 1e-9;
 
+inflow_m3   = zeros(N_cells,1);                      % run-on arriving this step
+inflow_mass = zeros(N_cells,max(N_sp,1));
 delivered_m3   = zeros(N_cells,1);
 delivered_mass = zeros(N_cells,max(N_sp,1));
 pit = false(N_cells,1);
 
-for c = 1:N_cells
-    Vc = pond_m3(c);
+%% Process every contributor before the cell it drains to.  The order is
+%% a topological sort of the drainage digraph the WEIGHTS define, not of
+%% elevation: with the nodal drop the two coincide, but user-supplied
+%% weights or outlet overrides could make them differ, and water pushed
+%% onto an already-swept cell would be stranded (the mass-balance guard
+%% below would then abort the run).  Descending elevation is the
+%% fallback if the weight graph is somehow cyclic.
+src = [topo.edge_a(w_ab > 0); topo.edge_b(w_ba > 0)];
+dst = [topo.edge_b(w_ab > 0); topo.edge_a(w_ba > 0)];
+order = [];
+if ~isempty(src)
+    G = digraph(src(:),dst(:),ones(numel(src),1),N_cells);
+    if isdag(G)
+        order = toposort(G);
+    else
+        warning('Surface_Runoff_Routing:CyclicWeights', ...
+            ['The overland weight graph contains a cycle; sweeping in ' ...
+             'descending elevation instead.']);
+    end
+end
+if isempty(order); [~,order] = sort(z,'descend'); end
+order = order(:).';
+for c = order
+    Vc = pond_m3(c) + inflow_m3(c);
+    Mc = mass(c,:) + inflow_mass(c,:);
     if Vc <= 0; continue; end
+    if ~transmitting(c)
+        %% Spare infiltration capacity: run-on stops here (own runoff is
+        %% zero by definition of ~transmitting, up to the tolerance).
+        %% This holds at an outlet cell too -- it is a full cell of field,
+        %% not a channel, and only exports once it is itself at capacity.
+        delivered_m3(c)     = delivered_m3(c) + Vc;
+        delivered_mass(c,:) = delivered_mass(c,:) + Mc;
+        continue
+    end
     if is_outlet(c)
         exit_water_m3      = exit_water_m3 + Vc;
         exit_by_cell_m3(c) = exit_by_cell_m3(c) + Vc;
-        if track_solute
-            exit_mass_by_cell(c,1:N_sp) = exit_mass_by_cell(c,1:N_sp) + mass(c,1:N_sp);
-        end
+        exit_mass_by_cell(c,:) = exit_mass_by_cell(c,:) + Mc;
         continue
     end
     ea_out = find(topo.edge_a == c & w_ab > 0);
@@ -125,30 +180,18 @@ for c = 1:N_cells
     wsum = sum(weights);
     if wsum <= 0
         pit(c) = true;
-        delivered_m3(c) = delivered_m3(c) + Vc;
-        if track_solute
-            delivered_mass(c,1:N_sp) = delivered_mass(c,1:N_sp) + mass(c,1:N_sp);
-        end
+        delivered_m3(c)     = delivered_m3(c) + Vc;
+        delivered_mass(c,:) = delivered_mass(c,:) + Mc;
         continue
     end
     weights = weights/wsum;
-    if track_solute; Cc = mass(c,1:N_sp)/max(Vc,eps); end
+    Cc = Mc/Vc;                                      % mixed concentration
     for t = 1:numel(targets)
         nt = targets(t);
         dV = Vc*weights(t);
         diag.edge_flux_m3(edges(t)) = diag.edge_flux_m3(edges(t)) + esign(t)*dV;
-        if is_outlet(nt)
-            exit_water_m3       = exit_water_m3 + dV;
-            exit_by_cell_m3(nt) = exit_by_cell_m3(nt) + dV;
-            if track_solute
-                exit_mass_by_cell(nt,1:N_sp) = exit_mass_by_cell(nt,1:N_sp) + dV*Cc;
-            end
-        else
-            delivered_m3(nt) = delivered_m3(nt) + dV;
-            if track_solute
-                delivered_mass(nt,1:N_sp) = delivered_mass(nt,1:N_sp) + dV*Cc;
-            end
-        end
+        inflow_m3(nt)     = inflow_m3(nt) + dV;
+        inflow_mass(nt,:) = inflow_mass(nt,:) + dV*Cc;
     end
 end
 
@@ -165,6 +208,7 @@ else
     exit_mass_by_cell = zeros(N_cells,0);
 end
 diag.pit_cells = find(pit);
+diag.transmitting = transmitting;
 
 %% Mass-balance guard.
 in_water  = sum((runoff_mm/1000).*A);

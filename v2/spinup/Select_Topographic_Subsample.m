@@ -66,23 +66,50 @@ end
 [strata_u,~,strata] = unique(codes,'rows');
 n_target = max(1, round(fraction*N));
 
+%% Seed the local draw but hand the caller's stream back on exit: a seed
+%% left behind would restart every later stochastic step in the session
+%% from the same point.
+prev_rng = rng; restore_rng = onCleanup(@() rng(prev_rng)); %#ok<NASGU>
 rng(opt.Seed);
-idx = [];
-per_stratum = max(opt.MinPerStratum, ceil(n_target/size(strata_u,1)));
-for s = 1:size(strata_u,1)
-    members = find(strata == s);
-    take = min(numel(members), per_stratum);
-    idx = [idx; members(randperm(numel(members),take))]; %#ok<AGROW>
+
+%% Two-stage allocation.  Stage 1 gives every non-empty stratum its
+%% guaranteed MinPerStratum cells; those are never trimmed, so the
+%% forest is always trained across the whole feature space.  Stage 2
+%% distributes what is left of the budget in proportion to stratum size
+%% (largest remainder), so the sample also tracks the field's actual
+%% composition.  Trimming at random -- the previous behaviour -- could
+%% drop whole strata, leaving their cells both extrapolated by the
+%% forest and seeded from a neighbour in a different stratum.
+n_strata = size(strata_u,1);
+members = arrayfun(@(s) find(strata == s), 1:n_strata, 'UniformOutput',false);
+sizes = cellfun(@numel, members).';
+guaranteed = min(sizes, opt.MinPerStratum);
+if sum(guaranteed) > n_target
+    n_target = sum(guaranteed);
+    fprintf(['Select_Topographic_Subsample: %d strata x %d minimum ' ...
+        'exceeds the %.0f%% budget; raising the sample to %d cells so no ' ...
+        'stratum is dropped\n'], n_strata, opt.MinPerStratum, ...
+        100*fraction, n_target);
 end
-%% Top up (or trim) to the target count.
-if numel(idx) < n_target
-    rest = setdiff((1:N).', idx);
-    add  = rest(randperm(numel(rest), min(numel(rest), n_target-numel(idx))));
-    idx  = [idx; add];
-elseif numel(idx) > n_target
-    idx = idx(randperm(numel(idx), n_target));
+spare = sizes - guaranteed;
+extra = zeros(n_strata,1);
+budget = n_target - sum(guaranteed);
+if budget > 0 && sum(spare) > 0
+    share = budget*spare/sum(spare);
+    extra = min(spare, floor(share));
+    [~,order] = sort(share-floor(share),'descend');
+    left = budget - sum(extra);
+    for k = order(:).'
+        if left <= 0; break; end
+        if extra(k) < spare(k); extra(k) = extra(k)+1; left = left-1; end
+    end
 end
-idx = sort(unique(idx));
+idx = cell(n_strata,1);
+for s = 1:n_strata
+    take = guaranteed(s) + extra(s);
+    idx{s} = members{s}(randperm(sizes(s), take));
+end
+idx = sort(unique(vertcat(idx{:})));
 
 fprintf(['Select_Topographic_Subsample: %d of %d cells (%.1f%%) across ' ...
     '%d strata\n'], numel(idx), N, 100*numel(idx)/N, size(strata_u,1));

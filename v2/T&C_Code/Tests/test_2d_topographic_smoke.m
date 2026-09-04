@@ -56,7 +56,7 @@ check('topography attaches to the sub-field graph', ...
 check('a downslope outlet is identified', any(topo.cell_is_outlet));
 check('edge elevation drops are non-trivial', max(abs(topo.edge_dz_m)) > 0.1);
 
-[Dom, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours);
+[Dom, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours, 1);
 
 %% --- ledger + state checks -----------------------------------------
 check('driver completes without error', isstruct(Dom));
@@ -92,6 +92,52 @@ check('total domain water export is non-negative and finite', ...
 check('no NaN in the area-weighted pore pH series', ...
     all(isfinite(Dom.PH_pore_d(Dom.PH_pore_d ~= 0))));
 
+%% --- WET pass: force overland runoff so the surface path is covered ---
+%% The bundled window is dry, so without amplified rain the router, the
+%% ponded-solute store and the ERW overland export never execute.
+%% One day is enough to drive the routing, the ponded-solute store and
+%% the ERW overland export.  Amplifying the whole 5-day window instead
+%% keeps the column saturated, which sends the adaptive Darcy sub-stepping
+%% into a grind, and 20x rainfall is not a physical test in any case.
+%% The bundled window can be dry for days, so scaling its rain proves
+%% nothing; inject a storm instead -- 25 mm/h for four hours (100 mm), a
+%% heavy but physical Virginia convective event -- which exceeds any
+%% loam's infiltration capacity and forces overland flow on the slope.
+wet_hours = min(n_hours,24);
+fprintf('  --- wet pass (25 mm/h storm, hours 6-9 of %d) ---\n', wet_hours);
+[DomW, runoffW_m3] = run_topographic_driver(R1, code, topo, wet_hours, 1, 25);
+check('the wet pass actually generates overland runoff', runoffW_m3 > 1e-6, ...
+    sprintf('runoff %.4g m3', runoffW_m3));
+surfW_out = sum(DomW.lateral.surface_water_out_m3);
+surfW_reinf = sum(DomW.lateral.surface_reinfilt_m3);
+check('routed runoff is conserved (outlet export + re-infiltration = runoff)', ...
+    abs((surfW_out + surfW_reinf) - runoffW_m3) < 1e-6*max(1,runoffW_m3), ...
+    sprintf('out %.6g + reinf %.6g vs runoff %.6g', ...
+    surfW_out, surfW_reinf, runoffW_m3));
+check('the topographic outlet exported water', surfW_out > 0, ...
+    sprintf('exported %.4g m3',surfW_out));
+check('solute left with it, and only where water did', ...
+    all(isfinite(DomW.exit_mass_surface_g)) && all(DomW.exit_mass_surface_g >= -1e-9) && ...
+    any(DomW.exit_mass_surface_g > 0));
+check('the field-origin export never exceeds the total export', ...
+    DomW.exit_water_field_surface_m3 <= sum(DomW.exit_water_surface_m3) + 1e-9 && ...
+    DomW.exit_water_field_surface_m3 >= -1e-9, ...
+    sprintf('field %.6g of %.6g m3', DomW.exit_water_field_surface_m3, ...
+    sum(DomW.exit_water_surface_m3)));
+check('field-origin solute export is bounded by the total likewise', ...
+    all(DomW.exit_mass_surface_field_g <= DomW.exit_mass_surface_g + 1e-9) && ...
+    all(DomW.exit_mass_surface_field_g >= -1e-9));
+check('ERW aqueous species are exported overland too (Na, Al, An, DIC)', ...
+    numel(DomW.exit_mass_surface_erw_umol) == 4 && ...
+    all(isfinite(DomW.exit_mass_surface_erw_umol)) && ...
+    all(DomW.exit_mass_surface_erw_umol >= -1e-6), ...
+    sprintf('%s umol', mat2str(DomW.exit_mass_surface_erw_umol.',3)));
+check('DIC leaves with the exported water, so alkalinity export is not lost', ...
+    DomW.exit_mass_surface_erw_umol(4) > 0, ...
+    sprintf('DIC export %.6g umol', DomW.exit_mass_surface_erw_umol(4)));
+check('the wet pass keeps pore pH finite', ...
+    all(isfinite(DomW.PH_pore_d(DomW.PH_pore_d ~= 0))));
+
 fprintf('  ---------------------------------------\n');
 fprintf('  %d passed, %d failed\n\n', n_pass, n_fail);
 if n_fail > 0
@@ -100,7 +146,8 @@ end
 end
 
 %% =======================================================================
-function [Domain, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours)
+function [Domain, runoff_total_m3] = run_topographic_driver(R1, code, topo, n_hours, rain_factor, storm_mm_h)
+if nargin < 6; storm_mm_h = 0; end
 %% Rebuild the caller context MAIN_FRAME_BG_ERW_2D expects (mirrors
 %% test_2d_driver_equivalence/run_driver_single) but for N_col > 1 with a
 %% topography-attached topology, and truncate the forcing to n_hours.
@@ -111,7 +158,12 @@ ms = R1.ms; cc = R1.cc; Zs = R1.Zs; dt = R1.dt; dth = R1.dth;  %#ok<NASGU>
 cr = @(a) a(:, 1:min(size(a,2),n_hours));
 cm = @(a) a(1:min(size(a,1),n_hours), :);
 Datam = cm(R1.Datam); Date = cr(R1.Date);                     %#ok<NASGU>
-Pr=cr(R1.Pr); Ta=cr(R1.Ta); Ds=cr(R1.Ds); Ws=cr(R1.Ws);      %#ok<NASGU>
+Pr=cr(R1.Pr)*rain_factor; Ta=cr(R1.Ta); Ds=cr(R1.Ds); Ws=cr(R1.Ws); %#ok<NASGU>
+if storm_mm_h > 0
+    hrs = 6:min(9,numel(Pr));
+    Pr(hrs) = Pr(hrs) + storm_mm_h;          % [mm/h] synthetic storm
+    Ta(hrs) = max(Ta(hrs),4);                % keep it rain, not snow
+end
 ea=cr(R1.ea); N=cr(R1.N); Pre=cr(R1.Pre); Tdew=cr(R1.Tdew);   %#ok<NASGU>
 SAB1=cr(R1.SAB1); SAB2=cr(R1.SAB2); SAD1=cr(R1.SAD1); SAD2=cr(R1.SAD2); %#ok<NASGU>
 PARB=cr(R1.PARB); PARD=cr(R1.PARD); Ca=cr(R1.Ca); Oa=R1.Oa;   %#ok<NASGU>

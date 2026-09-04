@@ -34,6 +34,8 @@ function out = Run_Field_Length_Scales(shape_file, dem_source, varargin)
 %%   'NyquistK'        cells per correlation length (default 3)
 %%   'ComputeCapCells' largest total cell count the ERW run can afford
 %%                     ([] = no cap)
+%%   'Seed'            seed of the DEM-point subsample used for the
+%%                     terrain variogram (default 0, reproducible)
 %%
 %% OUTPUT struct with .L_soil_m .L_terr_m .dem_native_m .h_target_m
 %%   .h_coverage_min_m .h_recommended_m .per_attribute (table) and the
@@ -45,7 +47,7 @@ v2   = fileparts(here);
 addpath(here, fullfile(v2,'T&C_Code'));
 
 opt = struct('FeatureIndices',[],'SampleFile','','SampleSheet',2, ...
-    'Attributes',{{}},'NyquistK',3,'ComputeCapCells',[]);
+    'Attributes',{{}},'NyquistK',3,'ComputeCapCells',[],'Seed',0);
 for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
 
 %% --- field setups + calibrated coverage cell size ------------------
@@ -61,8 +63,16 @@ end
 points = Read_Sample_Points(sample_file,opt.SampleSheet,'lng (X)','lat (Y)');
 attrs = opt.Attributes;
 if isempty(attrs)
-    candidates = {'pH','pH_BL','Bulk pH','sand','clay','sand_pct','clay_pct', ...
-        'OM','OM_pct','organic matter','CEC','CEC_meq'};
+    %% The same names Krige_Cell_Agronomic_Values' default map knows, so
+    %% the two auto-detectors in this module agree on what the site's
+    %% attributes are called (the workbook says 'Cation Exchange
+    %% Capacity' and 'Organic Matter'; the catalogue export 'CEC Value',
+    %% 'Organic Matter (%)', 'Sand Mass (%)', 'Clay Mass (%)').
+    candidates = {'pH','pH Value','pH_BL','Bulk pH', ...
+        'sand','clay','sand_pct','clay_pct','Sand Mass (%)','Clay Mass (%)', ...
+        'Percent Sand','Percent Clay', ...
+        'OM','OM_pct','organic matter','Organic Matter (%)', ...
+        'CEC','CEC_meq','CEC Value','Cation Exchange Capacity'};
     attrs = candidates(ismember(lower(candidates), lower(points.Properties.VariableNames)));
     %% case-insensitive resolve back to the real column names
     for a = 1:numel(attrs)
@@ -76,38 +86,43 @@ if isempty(attrs)
          '''Attributes'' explicitly.'], sample_file);
 end
 
-rows = cell(0,4);
+%% One variogram PER POLYGON and attribute.  Project_Sample_Points returns
+%% x_grid_m/y_grid_m in each setup's OWN local frame (its own origin and
+%% grid rotation), so coordinates from different polygons cannot be
+%% pooled into one cloud -- the pairwise distances across polygons would
+%% be meaningless.  L_soil is the minimum over the resolved fits.
+rows = cell(0,5);
 L_soil = inf; soil_variograms = struct();
 for a = 1:numel(attrs)
     col = attrs{a};
-    inside = [];
     for k = 1:numel(setups)
         s = Project_Sample_Points(points,setups(k),'lng (X)','lat (Y)');
         v = Numeric_Sample_Column(s,col);
         good = isfinite(v);
-        inside = [inside; s.x_grid_m(good), s.y_grid_m(good), v(good)]; %#ok<AGROW>
-    end
-    if size(inside,1) < 10
-        rows(end+1,:) = {col, size(inside,1), NaN, 'too few samples'}; %#ok<AGROW>
-        continue
-    end
-    try
-        vg = Fit_Empirical_Variogram_Range(inside(:,1),inside(:,2),inside(:,3));
-        soil_variograms.(matlab.lang.makeValidName(col)) = vg;
-        if vg.resolved
-            note = sprintf('rmse %.3g',vg.rmse);
-            L_soil = min(L_soil, vg.range_m);
-        else
-            note = sprintf('unresolved (nugget %.0f%%, lag>=%.0f m)', ...
-                100*vg.nugget_fraction, vg.shortest_lag_m);
+        xk = s.x_grid_m(good); yk = s.y_grid_m(good); vk = v(good);
+        if numel(vk) < 10
+            rows(end+1,:) = {col, k, numel(vk), NaN, 'too few samples'}; %#ok<AGROW>
+            continue
         end
-        rows(end+1,:) = {col, vg.n_samples, vg.range_m, note}; %#ok<AGROW>
-    catch e
-        rows(end+1,:) = {col, size(inside,1), NaN, e.message}; %#ok<AGROW>
+        try
+            vg = Fit_Empirical_Variogram_Range(xk,yk,vk);
+            soil_variograms.(sprintf('%s_polygon_%d', ...
+                matlab.lang.makeValidName(col),k)) = vg;
+            if vg.resolved
+                note = sprintf('rmse %.3g',vg.rmse);
+                L_soil = min(L_soil, vg.range_m);
+            else
+                note = sprintf('unresolved (nugget %.0f%%, lag>=%.0f m)', ...
+                    100*vg.nugget_fraction, vg.shortest_lag_m);
+            end
+            rows(end+1,:) = {col, k, vg.n_samples, vg.range_m, note}; %#ok<AGROW>
+        catch e
+            rows(end+1,:) = {col, k, numel(vk), NaN, e.message}; %#ok<AGROW>
+        end
     end
 end
 per_attribute = cell2table(rows, ...
-    'VariableNames',{'attribute','n_samples','range_m','note'});
+    'VariableNames',{'attribute','polygon','n_samples','range_m','note'});
 if ~isfinite(L_soil)
     warning('Run_Field_Length_Scales:NoSoilRange', ...
         'No attribute yielded a variogram range; L_soil left as NaN.');
@@ -121,7 +136,10 @@ z = dem.Z; ok = isfinite(z);
 xr = XX(ok); yr = YY(ok); zr = z(ok);
 G = [xr-mean(xr), yr-mean(yr), ones(nnz(ok),1)];
 resid = zr - G*(G\zr);                           % remove the regional plane
-n = numel(zr); idx = randperm(n, min(n,4000));   % subsample for tractability
+%% Reproducible subsample for tractability (private stream: the caller's
+%% global generator is left alone).
+n = numel(zr);
+idx = randperm(RandStream('mt19937ar','Seed',opt.Seed), n, min(n,4000));
 vg_terr = Fit_Empirical_Variogram_Range(xr(idx), yr(idx), resid(idx), ...
     'NBins',20,'MinPairs',50);
 L_terr = vg_terr.range_m;

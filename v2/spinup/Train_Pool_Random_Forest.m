@@ -49,6 +49,10 @@ if n < 2*opt.KFold
         2*opt.KFold, opt.KFold, n);
 end
 
+%% Seed the global stream for TreeBagger's bootstrap draws, but hand the
+%% caller's stream back on exit -- a seed left behind would make every
+%% later stochastic step in the session restart from the same point.
+prev_rng = rng; restore_rng = onCleanup(@() rng(prev_rng)); %#ok<NASGU>
 rng(opt.Seed);
 forests = cell(1,n_target);
 cv_rel  = nan(1,n_target);

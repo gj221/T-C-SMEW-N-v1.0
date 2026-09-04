@@ -428,11 +428,78 @@ lateral_diag = struct('water_buf_to_main', zeros(NNd,1), ...
 exit_water_vert_m3 = zeros(N_col,1);
 exit_water_surface_m3 = zeros(N_col,1);
 exit_mass_surface_g = zeros(N_lateral_species,1);   %% solute exported at outlets
+exit_mass_surface_erw_umol = zeros(4,1);            %% Na, Al, An, DIC
+exit_mass_surface_erw_field_umol = zeros(4,1);
+erw_pond_umol = zeros(N_col,4);                     %% ponded ERW run-on load
+erw_pond_field_umol = zeros(N_col,4);               %% its field-origin part
+%% ------------------------------------------------------------------
+%% SOLAR WINDOW FOR THE TOPOGRAPHIC BEAM PROJECTION
+%%   SetSunVariables averages the sun over [HR-t_bef, HR+t_aft].  The run
+%%   scripts pass t_bef=-0.67, t_aft=1.67, i.e. [HR+0.67, HR+1.67]; the
+%%   ERA5-Land forcing labels each record with the END of its accumulation
+%%   hour, so record HR covers [HR-1, HR].  The two differ by ~1.7 h, which
+%%   is ~25 deg of azimuth at midday -- enough to reverse the east/west
+%%   aspect contrast that the topographic projection exists to resolve.
+%%   The 1-D energy balance is far less sensitive to this and its
+%%   calibration is a separate question, so the global t_bef/t_aft is left
+%%   alone and only the per-cell BEAM PROJECTION uses the forcing's own
+%%   convention.  Override with TOPO_SOLAR_WINDOW = [t_bef t_aft].
+if ~exist('TOPO_SOLAR_WINDOW','var') || isempty(TOPO_SOLAR_WINDOW)
+    TOPO_SOLAR_WINDOW = [1 0];          %% hour-ending, matching ERA5-Land
+end
+topo_t_bef = TOPO_SOLAR_WINDOW(1);
+topo_t_aft = TOPO_SOLAR_WINDOW(2);
+if topography_attached
+    %% Report how well the chosen window tracks the observed shortwave, on
+    %% a subsample, so a forcing with a different time convention is
+    %% visible in the run log instead of silently rotating every aspect.
+    probe = 1:max(1,floor(NN/500)):NN;
+    Rsw_probe = SAB1(probe)+SAB2(probe)+SAD1(probe)+SAD2(probe);
+    sh_topo = zeros(numel(probe),1); sh_run = zeros(numel(probe),1);
+    for pk = 1:numel(probe)
+        sh_topo(pk) = max(0,sin(SetSunVariables(Datam(probe(pk),:), ...
+            DeltaGMT,Lon,Lat,topo_t_bef,topo_t_aft)));
+        sh_run(pk) = max(0,sin(SetSunVariables(Datam(probe(pk),:), ...
+            DeltaGMT,Lon,Lat,t_bef,t_aft)));
+    end
+    if std(Rsw_probe(:)) > 0 && std(sh_topo) > 0
+        c_topo = corr(sh_topo,Rsw_probe(:));
+        c_run  = corr(sh_run,Rsw_probe(:));
+        fprintf(['  topographic solar window [HR%+.2f, HR%+.2f]: sun-vs-' ...
+            'shortwave correlation %.3f (run-script window %.3f)\n'], ...
+            -topo_t_bef,topo_t_aft,c_topo,c_run);
+        if c_topo < c_run
+            warning('MAIN_FRAME_BG_ERW_2D:SolarWindowMismatch', ...
+                ['The forcing tracks the run-script solar window (%.3f) ' ...
+                 'better than the topographic one (%.3f); set ' ...
+                 'TOPO_SOLAR_WINDOW to match this forcing time convention ' ...
+                 'or the per-cell beam projection will be rotated.'], ...
+                c_run,c_topo);
+        end
+    end
+end
+%% Polygon-overlap fraction per cell, needed inside the hourly loop to
+%% carry field-origin provenance through the overland router.
+[~,~,field_fraction] = Field_Aggregation_Areas(topo);
 %% Overland routing carries this step's ponded runoff to the NEXT step's
 %% re-infiltration opportunity (q_runon).  T&C's operator split is
 %% 1-step-lagged by design; overland travel times over a farm field are
 %% far below one hydrologic step (test_lateral_routing #14).
 q_runon_next = zeros(N_col,1);
+%% Solute that arrived with routed run-on and is still ponded on the
+%% surface, waiting for the next vertical step to infiltrate it or run it
+%% off again [gX/m2].  Crediting it straight to the soil pool would strand
+%% it: the water it rode in on has not infiltrated yet, and the part that
+%% leaves again as infiltration-excess runoff must take its share with it.
+pond_mass_area = zeros(N_col,N_lateral_species);
+%% Field-origin provenance of the pond store: the water depth [mm] and the
+%% solute [gX/m2] that came from inside the polygon.  Carried with the
+%% store so a stop-over on a partial perimeter cell does not re-label the
+%% load with that cell's own overlap fraction.
+pond_field_water_mm = zeros(N_col,1);
+pond_field_mass_area = zeros(N_col,N_lateral_species);
+exit_water_field_surface_m3 = 0;    %% field-origin part of the outlet export
+exit_mass_surface_field_g = zeros(N_lateral_species,1);
 lateral_diag.surface_water_out_m3 = zeros(NNd,1);
 lateral_diag.surface_mass_out_g   = zeros(NNd,N_lateral_species);
 lateral_diag.surface_reinfilt_m3  = zeros(NNd,1);
@@ -668,7 +735,7 @@ for i = i_resume:NN
     if topography_attached
         SvF_c = topo.cell_svf(:);
         [h_S_i,~,zeta_S_i] = SetSunVariables( ...
-            Datam(i,:),DeltaGMT,Lon,Lat,t_bef,t_aft);
+            Datam(i,:),DeltaGMT,Lon,Lat,topo_t_bef,topo_t_aft);
         beta = atan(topo.cell_slope(:));
         asp  = topo.cell_aspect_deg(:)*pi/180;
         if isfinite(h_S_i) && sin(h_S_i) > 0.10 && ...
@@ -1137,36 +1204,113 @@ for i = i_resume:NN
             Rh_c = reshape(Rh(i,1,:),N_col,1);
             Rd_c = reshape(Rd(i,1,:),N_col,1);
             runoff_step_mm = max(Rh_c + Rd_c, 0);                 % [N_col x 1]
+            depth_m = runoff_step_mm/1000;                        % [N_col x 1]
             [~,mobile_now] = Biogeo_Lateral_Pools(P_cells);
             mobile_now = mobile_now .* lateral_fraction;          % [N_col x N_sp]
             C_soil = Biogeo_Lateral_Concentration( ...
                 mobile_now,A_cell,theta_new,Zlayer_m,bio_active_fraction);
             C_soil = reshape(C_soil(:,1,:),N_col,N_lateral_species);
-            %% Saturation-excess runoff (Rd) carries soil-water chemistry;
-            %% infiltration-excess runoff (Rh) carries ~precip chemistry
-            %% (~0 for the mobile pools; wet deposition is handled apart).
-            Rd_frac = Rd_c ./ max(runoff_step_mm,eps);
-            C_surf = C_soil .* Rd_frac;
-            depth_m = runoff_step_mm/1000;                        % [N_col x 1]
-            %% cap so the routed export can never exceed the mobile pool
-            C_surf = min(C_surf, mobile_now ./ max(depth_m,eps));
-            C_surf(~isfinite(C_surf)) = 0;
 
-            [q_deliver_mm,C_deliver,~,~,~,exit_cell_m3,exit_cell_g] = ...
-                Surface_Runoff_Routing(topo,runoff_step_mm,C_surf,dth);
+            %% TWO SOURCES OF SURFACE SOLUTE.
+            %%  Saturation-excess runoff (Rd) is soil water reaching the
+            %%  surface, so it carries the active-zone concentration.
+            %%  Infiltration-excess runoff (Rh) is ponded water: rain,
+            %%  drip, melt (~0 for these pools; wet deposition is handled
+            %%  apart) mixed with whatever run-on arrived last step and has
+            %%  not infiltrated -- the pond_mass_area store.  Crediting
+            %%  that store to the soil on arrival would strand it in the
+            %%  first absorbing cell it reached.
+            %%  WIS is exactly the water Rh is defined against
+            %%  (Rh = (WIS - f)*dth in HYDROLOGIC_UNIT): throughfall +
+            %%  drip + snowmelt + run-on, in mm on the surface, so the share
+            %%  of the pond that leaves again is Rh/WIS, capped at 1.
+            WIS_c    = reshape(WIS(i,1,:),N_col,1);               % [mm]
+            runon_mm = reshape(q_runon(i,1,:),N_col,1)*dth;       % [mm]
+            out_frac = min(1, Rh_c./max(WIS_c,eps));
+            out_frac(WIS_c <= 0) = 0;
+            pond_out_area = pond_mass_area .* out_frac;           % leaves with Rh
+            pond_in_area  = pond_mass_area - pond_out_area;       % infiltrates here
+            pond_in_water_mm = runon_mm.*(1-out_frac);            % [mm]
 
-            removed_area   = depth_m .* C_surf;                   % [N_col x N_sp] gX/m2
-            delivered_area = (q_deliver_mm/1000) .* C_deliver;    % [N_col x N_sp] gX/m2
-            P_cells = Biogeo_Lateral_Pools(P_cells, delivered_area - removed_area);
+            %% Soil-derived load, capped at the mobile pool it comes from.
+            soil_out_area = min((Rd_c/1000).*C_soil, mobile_now);
+            soil_out_area(~isfinite(soil_out_area) | soil_out_area < 0) = 0;
+            %% Concentration of the runoff that actually leaves [gX/m3].
+            C_surf = (soil_out_area + pond_out_area) ./ max(depth_m,eps);
+            C_surf(~isfinite(C_surf) | C_surf < 0) = 0;
+            %% Recompute both removals from the concentration that is
+            %% really routed, so the ledger cannot drift from it.
+            removed_area = depth_m .* C_surf;                     % [gX/m2]
+            soil_share = soil_out_area ./ max(soil_out_area+pond_out_area,eps);
+            soil_removed_area = removed_area .* soil_share;
+
+            %% FIELD-ORIGIN provenance as passive tracer columns: routed
+            %% water mixes at confluences, so provenance cannot be
+            %% recovered afterwards; carried as a tracer it mixes linearly
+            %% and comes out exact.  Water: the Rd part is this cell's own
+            %% (its overlap fraction); the Rh part is surface water whose
+            %% field share is the pond's own provenance plus local rain.
+            %% Solute likewise.  Without this the field ledger would weight
+            %% the export by the OUTLET cell's overlap -- a clipped
+            %% perimeter cell -- and a stop-over would re-label the load.
+            surf_field_mm = pond_field_water_mm + ...
+                max(WIS_c - runon_mm,0).*field_fraction;
+            rh_field_frac = surf_field_mm ./ max(WIS_c,eps);
+            water_tracer = (Rd_c.*field_fraction + Rh_c.*rh_field_frac) ./ ...
+                max(runoff_step_mm,eps);
+            pond_field_out_area = pond_field_mass_area .* out_frac;
+            mass_tracer = (soil_removed_area.*field_fraction + pond_field_out_area) ./ ...
+                max(depth_m,eps);
+            water_tracer(~isfinite(water_tracer)) = 0;
+            mass_tracer(~isfinite(mass_tracer)) = 0;
+            C_route = [C_surf, water_tracer, mass_tracer];
+            [q_deliver_mm,C_deliver,~,exit_tracer,~,exit_cell_m3,exit_cell_g] = ...
+                Surface_Runoff_Routing(topo,runoff_step_mm,C_route,dth);
+            delivered_area = (q_deliver_mm/1000) .* C_deliver(:,1:N_lateral_species);
+
+            %% Only what infiltrated out of last step's run-on joins the
+            %% soil pools; the routed load stays on the surface, with its
+            %% provenance.
+            P_cells = Biogeo_Lateral_Pools(P_cells, pond_in_area - soil_removed_area);
             P(j,:,:) = reshape(P_cells.',1,79,N_col);
+            pond_mass_area       = delivered_area;
+            pond_field_water_mm  = q_deliver_mm .* C_deliver(:,N_lateral_species+1);
+            pond_field_mass_area = (q_deliver_mm/1000) .* ...
+                C_deliver(:,N_lateral_species+2:end);
 
-            q_runon_next          = q_deliver_mm;
+            %% ERW aqueous stores (Na, Al, residual anion An, DIC and hence
+            %% alkalinity) ride the same water as the T&C cations in the
+            %% subsurface step, so they must be exported overland too --
+            %% otherwise water leaving the field carries Ca and Mg but no
+            %% DIC and the exported solution is not charge balanced, while
+            %% the CDR ledger misses the overland pathway entirely.  Same
+            %% two-limb, pond-store treatment as the pools above.
+            if OPT_ERW == 1 && all(cellfun(@(x) isfield(x,'init') && x.init,ERW))
+                [ERW,erw_surf] = ERW_Surface_Export(ERW,topo,runoff_step_mm,Rd_c, ...
+                    out_frac,erw_pond_umol,erw_pond_field_umol,pond_in_water_mm, ...
+                    field_fraction,dth);
+                erw_pond_umol       = erw_surf.delivered_umol;
+                erw_pond_field_umol = erw_surf.delivered_field_umol;
+                exit_mass_surface_erw_umol = ...
+                    exit_mass_surface_erw_umol + erw_surf.exit_umol;
+                exit_mass_surface_erw_field_umol = ...
+                    exit_mass_surface_erw_field_umol + erw_surf.exit_field_umol;
+            end
+
+            %% q_runon is a RATE [mm/h]; q_deliver_mm is a depth per step.
+            q_runon_next          = q_deliver_mm/dth;
             exit_water_surface_m3 = exit_water_surface_m3 + exit_cell_m3;
-            exit_mass_surface_g   = exit_mass_surface_g + sum(exit_cell_g,1).';
+            exit_mass_surface_g   = exit_mass_surface_g + ...
+                sum(exit_cell_g(:,1:N_lateral_species),1).';
+            exit_water_field_surface_m3 = exit_water_field_surface_m3 + ...
+                exit_tracer(N_lateral_species+1);
+            exit_mass_surface_field_g = exit_mass_surface_field_g + ...
+                exit_tracer(N_lateral_species+2:end);
             lateral_diag.surface_water_out_m3(j) = ...
                 lateral_diag.surface_water_out_m3(j) + sum(exit_cell_m3);
             lateral_diag.surface_mass_out_g(j,:) = ...
-                lateral_diag.surface_mass_out_g(j,:) + sum(exit_cell_g,1);
+                lateral_diag.surface_mass_out_g(j,:) + ...
+                sum(exit_cell_g(:,1:N_lateral_species),1);
             lateral_diag.surface_reinfilt_m3(j) = ...
                 lateral_diag.surface_reinfilt_m3(j) + sum((q_deliver_mm/1000).*A_cell);
 
@@ -1269,7 +1413,7 @@ fprintf('\nCOMPUTATIONAL TIME [h] %.3f   (%.1f ms per column-step)\n', ...
 %% ========================================================================
 %% DOMAIN AGGREGATION  --  polygon-overlap weighted where available
 %% ========================================================================
-[A_field,w_col,field_fraction] = Field_Aggregation_Areas(topo);
+[A_field,w_col,~] = Field_Aggregation_Areas(topo);
 A_field_total = sum(A_field);
 A_simulated_total = sum(A_cell);
 Domain.area_m2 = A_field_total;
@@ -1304,13 +1448,27 @@ Domain.exit_water_vert_m3 = exit_water_vert_m3;
 Domain.exit_water_surface_m3 = exit_water_surface_m3;
 Domain.exit_water_total_m3 = exit_water_vert_m3+exit_water_surface_m3;
 Domain.exit_water_field_vert_m3 = sum(exit_water_vert_m3.*field_fraction);
-Domain.exit_water_field_surface_m3 = sum(exit_water_surface_m3.*field_fraction);
+if topography_attached
+    %% Routed export is attributed to the OUTLET cell, which on a
+    %% polygon-clipped grid is a partial perimeter cell, so weighting it
+    %% by that cell's own overlap fraction would discard most of the
+    %% export.  The field-origin volume is carried through the router as a
+    %% passive tracer instead, which mixes correctly at confluences.
+    Domain.exit_water_field_surface_m3 = exit_water_field_surface_m3;
+    Domain.exit_mass_surface_field_g = exit_mass_surface_field_g;
+else
+    Domain.exit_water_field_surface_m3 = sum(exit_water_surface_m3.*field_fraction);
+end
 Domain.exit_water_field_total_m3 = Domain.exit_water_field_vert_m3+ ...
     Domain.exit_water_field_surface_m3;
 %% Solute exported at the topographic outlet(s) with overland runoff
 %% [g element], one entry per lateral species (Domain.lateral.species_names).
 Domain.exit_mass_surface_g = exit_mass_surface_g;
 Domain.exit_mass_surface_species = lateral_species;
+%% ERW aqueous species exported overland [umol], ordered as
+%% Domain.lateral.erw_species_names (Na, Al, An, DIC).
+Domain.exit_mass_surface_erw_umol = exit_mass_surface_erw_umol;
+Domain.exit_mass_surface_erw_field_umol = exit_mass_surface_erw_field_umol;
 Domain.cell_region   = topo.cell_region;
 Domain.cell_area_m2  = A_cell;
 Domain.cell_overlap_area_m2 = A_field;
