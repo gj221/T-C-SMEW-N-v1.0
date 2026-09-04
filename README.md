@@ -460,12 +460,88 @@ Following Lian et al. (2025, *WRR* 10.1029/2025WR040260, T&C-BG-2D), the
 2-D field driver can resolve elevation-driven lateral and vertical flow.
 Attach a DEM to any multi-cell topology and the lateral solver switches
 from matric-head-only to **total hydraulic head** `H = psi + z`
-(`Darcy_Lateral_Topology`), overland runoff is routed down the DEM by
-Quinn (1991) multiple-flow-direction weights and leaves only at the
-topographic outlet (`Surface_Runoff_Routing`), and the direct solar beam
-is projected onto each cell's slope and aspect with a sky-view diffuse
-correction. Without a DEM every run is flat and bit-identical to before
+(`Darcy_Lateral_Topology`; the flux runs along the slope distance and
+crosses the slope-normal layer thickness `Zlayer cos(beta)`, likewise for
+lateral heat conduction). The elevation term is the **nodal** drop
+`z(a) - z(b)`: the two-point flux must be a difference of cell-centred
+potentials, or a uniform total head is no longer an equilibrium and the
+drops no longer sum to zero around graph cycles, leaving a closed domain
+with a permanent circulation. The sub-field graph's buffer strips span
+the whole domain, so their centres sit laterally offset from the cells
+they touch; the **slope** of such a face is measured over the true
+centre-to-centre distance (`topo.edge_centre_distance_m`), while the
+resistance path keeps the graph's own face-separation convention scaled
+by `1/cos(beta)`, so a zero-relief DEM leaves every flux bit-identical
+to a run with no DEM. The first-order two-point error on an offset face
+is thus the one the flat model has always carried, and it is
+equilibrium-preserving. The review caught an earlier attempt to project
+the drop onto the face normal instead: it broke both invariants above
+and made the overland weights disagree with the routing sweep, so the
+run aborted on the mass-balance guard the moment runoff occurred.
+Overland runoff is routed down the DEM by
+Quinn (1991) multiple-flow-direction weights (`(tan beta)^1.1` times the
+face width) and leaves only at the topographic outlet
+(`Surface_Runoff_Routing`), and the direct solar beam is projected onto
+each cell's slope and aspect with a sky-view diffuse correction. Without
+a DEM every run is flat and bit-identical to before
 (`test_2d_driver_equivalence` still passes at tolerance 0).
+
+Overland routing uses a **runoff-runon connectivity** rule rather than a
+fixed number of hops per step: a cell that produced runoff itself this
+step is at infiltration capacity (Hortonian) or saturated (Dunne), so
+run-on cannot infiltrate there and cascades straight through, in the same
+step, in descending-elevation order; a cell that produced no runoff has
+spare capacity, so run-on stops there and is offered to its next vertical
+step as `q_runon` (a rate, mm h-1). A hillslope generating runoff
+everywhere therefore delivers to the outlet within the hour, as overland
+travel times demand, while runoff that reaches dry ground is allowed to
+re-infiltrate. A dry outlet cell absorbs like any other dry cell: it is a
+full cell of field, not a channel.
+
+Solute rides that water rather than being credited on arrival.
+Saturation-excess runoff carries the active-zone soil-water
+concentration; infiltration-excess runoff carries the **ponded mixture**
+of rain and whatever run-on has not yet infiltrated, held per cell in a
+surface store. The share of that store leaving again is `Rh / WIS`,
+`WIS` being the water that actually reached the surface this step
+(throughfall, drip, melt, run-on) and the quantity `Rh` is defined
+against in `HYDROLOGIC_UNIT`, capped at 1. Crediting delivered mass
+straight to the soil pool would strand it in the first absorbing cell,
+because the water it arrived on has not infiltrated yet and the part that
+runs off again must take its share. The **ERW aqueous stores** (Na, Al,
+residual anion, DIC and hence alkalinity) get the identical two-limb,
+pond-store treatment (`ERW_Surface_Export`), the surface counterpart of
+`ERW_Lateral_Transport`; without it water leaving the field would carry
+Ca and Mg but no DIC, the exported solution would not be charge balanced,
+and the CDR ledger would miss the overland pathway. Field-origin
+provenance is carried through the router as passive tracers **and
+through the pond store**, because routed water mixes at confluences, the
+outlet is a polygon-clipped perimeter cell whose own overlap fraction
+says nothing about where its water came from, and a stop-over on such a
+cell must not re-label the load.
+`Tests/test_surface_runoff_routing.m` (21 checks) covers the cascade, the
+absorbing stop and dry outlet, confluence mixing, conservation and pits;
+`test_2d_topographic_smoke` adds a wet pass that drives the whole path
+end to end. Two deliberate assumptions remain: the domain perimeter is
+closed to overland flow except at the outlet cells (a side boundary on a
+cross-slope does not leak), and cast shadows (`Shadow_Effect`) are not
+applied -- both negligible on a smooth field with 0.4-16 % slopes and a
+431 m terrain autocorrelation length.
+
+**Solar time convention.** `SetSunVariables` averages the sun over
+`[HR-t_bef, HR+t_aft]`, and the run scripts pass `t_bef=-0.67,
+t_aft=1.67`, i.e. `[HR+0.67, HR+1.67]`. The ERA5-Land forcing labels each
+record with the *end* of its accumulation hour, so record `HR` covers
+`[HR-1, HR]`. Checked against the bundled forcing, the hour-ending window
+tracks the observed shortwave far better (correlation 0.88 against 0.69;
+diurnal centroid 12.35 h against 10.73 h for an observed 12.43 h), and
+the two windows differ by 25 degrees of azimuth at midday -- enough to
+reverse the east/west aspect contrast the projection exists to resolve.
+The per-cell **beam projection** therefore uses the forcing's own
+convention (`TOPO_SOLAR_WINDOW`, default `[1 0]`) and reports the
+correlation at startup, while the global `t_bef`/`t_aft` feeding the 1-D
+energy balance is left untouched, since that is a separate calibration
+question and changing it would move every existing result.
 
 The vertical column stays strictly 1-D in 2-D mode: `SOIL_MOISTURES_RICH_COMP`
 drives its internal kinematic lateral loss from `sin(atan(Slo_top))`, so a
@@ -481,15 +557,23 @@ correction that is lost this way is below 0.2 %.
 addpath(fullfile('v2','interpolation'));
 Run_Field_DEM('AdamWilbourne_Control_Fields.shp', ...
     fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
-    'FeatureIndices',[1 2]);
+    'FeatureIndices',[1 2 3]);
 
 %% compute the process-grid cell size from the site's own length scales
 Run_Field_Length_Scales( ...
     fullfile('v2','Spatial inputs','Bruce Farm Virginia','Whole farm', ...
     'AdamWilbourne_Control_Fields.shp'), ...
     fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
-    'FeatureIndices',[1 2]);
+    'FeatureIndices',[1 2 3]);
 ```
+
+`Load_Field_DEM` mosaics the tiles, reprojects NAD83 -> WGS84 UTM through
+`projinv`/`projfwd`, and when the requested spacing is coarser than the
+1 m lidar it returns the **area mean** of the source cells under each
+output cell (an r x r box filter) rather than a point sample, so slope,
+curvature and TWI statistics are not aliased by microtopography. Cell
+aspects are sampled from the grid as a unit vector (sin/cos), never as
+raw degrees across the 0/360 wrap.
 
 `Run_Field_Length_Scales` fits an empirical variogram to each measured
 Bruce Farm soil attribute (shortest range = `L_soil`) and to the
@@ -541,22 +625,94 @@ Apply_Kriged_Cell_Values(template_file,kriged_files{1}, ...
 A cell is promoted from baseline to measured only when the kriged
 estimate is not an extrapolation (inside the convex hull of the fitting
 samples) and its relative standard deviation clears `MaxRelativeStd`;
-every other cell keeps exactly what the template already had. Soil
-**texture** (sand/clay) is not in the Bruce Farm geochem workbook and
-stays out of this bridge -- SSURGO/SoilGrids remain its source.
+every other cell keeps exactly what the template already had.
+
+**Uncertainty.** Ten samples per control plot cannot resolve a
+semivariogram (`Fit_Empirical_Variogram_Range` reports `resolved =
+false`), so the variogram range is neither fitted nor assumed: it is
+integrated out by Monte Carlo (`Krige_Attribute_Range_Ensemble`, 200
+draws) over a log-uniform prior whose support the sample geometry itself
+sets (`Kriging_Range_Prior_Bounds`: median nearest-neighbour spacing to
+sample-cloud diameter -- 23-100 m and 29-159 m on the two plots). The
+**sill** is treated as uncertain too, since the kriging variance is
+proportional to a sill that ten samples also only estimate: its sampling
+distribution is the scaled inverse-chi-square with `n-1` degrees of
+freedom, and because scaling sill and nugget together leaves the kriging
+weights (hence the prediction) untouched and scales the variance
+linearly, its expectation is applied in closed form -- `E[Var | range]`
+times `nu/(nu-2)` -- rather than drawn, which would only add sampling
+noise. The review table's `<stem>_std` is the total by the law of total
+variance, `E[Var | range, sill] + Var(E | range)`, with its components
+beside it; `RangeDraws=0` recovers the classical single fit at the 80 m
+notebook default, flagged `range_assumed = true`. The leave-one-out
+check re-derives sill, nugget and prior inside every fold from that
+fold's own samples, so the held-out value can never leak into the
+variance it is scored against.
+
+Calibration was measured rather than assumed, on 300 synthetic Gaussian
+fields whose range was itself unknown (drawn 10-150 m), 10 samples each,
+scored at in-hull points:
+
+| estimator | rms standardised error | 95 % interval covers |
+|---|---|---|
+| fixed 80 m range | 1.60 | 80.5 % |
+| Monte Carlo range only | 1.27 | 88.3 % |
+| Monte Carlo range + closed-form sill inflation | **1.13** | **92.2 %** |
+
+So the classical single fit was substantially overconfident, and the
+ensemble removes most but **not all** of that: at 1.13 it is still
+mildly optimistic, because `n-1` degrees of freedom ignores that
+spatially correlated samples carry a smaller effective sample size.
+Treat `<stem>_std` as a good lower bound on the uncertainty, not an
+exact one. Every attribute is also leave-one-out cross-validated
+(`Krige_Attribute_Cross_Validate`), each fold re-deriving its own sill
+and prior so nothing leaks. On Control 2 the rms standardised error is
+1.05 (pH), 1.14 (OM) and 1.16 (CEC) with the ensemble against 1.39,
+1.56 and 1.55 for the fixed 80 m fit -- calibrated. On Control 3 it is
+0.88 for pH but 1.61 (OM) and 1.97 (CEC), against 0.99, 1.95 and 2.33
+classical: better, but still overconfident for the two attributes whose
+ten samples include one far-out value, and the review table says so
+(`rms_z` per attribute in the printed report). A single sample changing
+the verdict this much is itself the finding: for OM and CEC on that plot
+the kriged surface is a screened estimate, not a measurement. `Tests/test_kriging_uncertainty.m` (25 checks)
+covers the decomposition, the prior, the sill inflation factor,
+reproducibility, exactness and the calibration check against a synthetic
+field of known range.
 
 The workbook's control-plot samples use `BLC`/`R1C`/`R2C` stage labels
-(not the treated-field `BL`/`BLP`/`R1`/`R2`). **Control 2** (polygon 1 of
-`AdamWilbourne_Control_Fields.shp`) has 10 `BLC` samples and krieges
-cleanly: 580 of 1630 cells (36 %) fall inside their convex hull and are
-promoted, 0 rejected on uncertainty. **Control 1** (polygon 2) has no
-`BLC` sample inside it at all -- confirmed against
-`v2/figures/Bruce_Control_Interpolation_Timepoints.csv`, which likewise
-shows no `BLC` row for Control 1, only `R1C`/`R2C`. **Decision: do not
-substitute `R1C` (or any other stage) as a baseline proxy for Control
-1.** It runs on pedotransfer baseline values only, `use_measured_* =
-false` for every cell, until a genuine baseline-stage sample exists
-there.
+(not the treated-field `BL`/`BLP`/`R1`/`R2`), and
+`AdamWilbourne_Control_Fields.shp` carries **three** features: Control 2
+(feature 1), Control 1 (feature 2) and Control 3 (feature 3);
+`Krige_Cell_Agronomic_Values` defaults to all of them. **Control 2 and
+Control 3** each hold 10 `BLC` samples (`Field ID` `Buck` in the
+workbook, `Buck Control` in the complete sample-catalogue export -- the
+same points) and krige cleanly: 580 of 1630 and 466 of 1357 cells fall
+inside their convex hulls. At `MaxRelativeStd = 0.35` every in-hull cell
+passes for pH on both plots and for everything on Control 2; on Control
+3 the honest std rejects 175 (OM) and 146 (CEC) of the 466 in-hull cells
+where the fixed-range fit would have rejected only 21 and 16. That plot
+holds one sample far above the rest (OM 7.4 %, CEC 7.3 cmolc kg-1
+against 2.4-3.7 % and 2.6-4.6 elsewhere), which is exactly the case
+where ten samples understate the field's variability. **Control 1** (feature 2, 6.5 km south -- the HWY 58 Hay West
+control) has no baseline-stage sample inside it at all, confirmed
+against `v2/figures/Bruce_Control_Interpolation_Timepoints.csv`, only
+`R1C`/`R2C`. **Decision: do not substitute `R1C` (or any other stage) as
+a baseline proxy for Control 1.** It runs on pedotransfer baseline
+values only, `use_measured_* = false` for every cell, until a genuine
+baseline-stage sample exists there.
+
+The complete sample-catalogue export (`MSFT_Lithos_Yale_Complete_Dataset.csv`
+in the same `Data` folder; `sme_lng`/`sme_lat`, `pH Value`,
+`Organic Matter (%)`, `CEC Value`) is accepted directly
+(`'SampleSheet',1`; coordinate and attribute columns are auto-detected)
+and reproduces the workbook predictions to within 0.005 pH and
+0.02 cmolc kg-1. Soil **texture** (`Sand Mass (%)`, `Clay Mass (%)`) is
+kriged when the file carries it, but no control-plot sample does (the
+nearest textured sample is 3.3 km away), so SSURGO/SoilGrids remain its
+source there. The bulk-density survey (`Bulk_Density_Full_Field.xlsx`,
+fields F1-F8, 0-15 cm) lies 4 km from the control plots with no site
+inside them, so per-cell bulk density is likewise not available; the
+pedotransfer value from `Soil_parameters` stands.
 
 ### Charge-balanced random-forest spin-up
 

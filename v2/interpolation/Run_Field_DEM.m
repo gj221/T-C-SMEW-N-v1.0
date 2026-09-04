@@ -71,7 +71,8 @@ dem = [];
 
 for k = 1:n
     topo = setups(k);
-    d = Load_Field_DEM(dem_source, topo, 'OutResolutionM',opt.CellSizeM);
+    d = Load_Field_DEM(dem_source, topo, ...
+        'OutResolutionM',dem_resolution(opt.CellSizeM,topo));
     if isempty(dem); dem = d; end
     topo = Attach_Topography_To_Topology(topo, d);
     topo_by_polygon{k} = topo;
@@ -130,5 +131,19 @@ try
     s = Field_Setup_Label(features, setup.source_feature_indices, k);
 catch
     s = sprintf('polygon %d', k);
+end
+end
+
+%% =======================================================================
+function r = dem_resolution(requested,topo)
+%% Default the DEM spacing to the process-grid cell size rather than the
+%% tile's native 1 m.  Terrain attributes are sampled at cell centres, so
+%% a DEM far finer than the cell aliases sub-cell microtopography into
+%% slope / curvature / TWI (and slope, a gradient magnitude, is biased
+%% one-sided by it).  Load_Field_DEM area-averages to whatever spacing it
+%% is given.
+r = requested;
+if isempty(r) && isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m)
+    r = topo.cell_size_m;
 end
 end

@@ -8,10 +8,14 @@ function [output_file,log] = Apply_Kriged_Cell_Values( ...
 %% Agronomic_Templates / Resolve_Cell_Agronomic_Inputs). A cell is
 %% promoted from its baseline value to the kriged measured value only
 %% when the estimate is NOT an extrapolation (inside the sample convex
-%% hull) AND its kriging standard deviation is acceptably small relative
-%% to the prediction. Every other cell is left exactly as the template
-%% had it (baseline, or a hand-entered measurement) -- this never
-%% silently overwrites a value the user already set.
+%% hull) AND its standard deviation is acceptably small relative to the
+%% prediction. That <stem>_std is Krige_Cell_Agronomic_Values' TOTAL
+%% uncertainty -- interpolation error plus the variogram-range
+%% uncertainty integrated out by Monte Carlo -- not the classical
+%% kriging variance at one assumed range. Every other cell is left
+%% exactly as the template had it (baseline, or a hand-entered
+%% measurement) -- this never silently overwrites a value the user
+%% already set.
 %%
 %% INPUTS
 %%   template_file  a Cell_Agronomic_*.csv from Write_Field_Agronomic_Templates
@@ -94,6 +98,37 @@ if isempty(stems)
 end
 
 [~,it,ik] = intersect(T.cell_id,K.cell_id,'stable');
+%% cell_id is 1..N within ONE polygon setup and is regenerated for every
+%% (shapefile, cell size, feature) combination, so the same integer can
+%% name different ground in two tables.  Refuse to merge unless the rows
+%% also agree on the polygon and, when both sides carry them, on the
+%% projected cell centres (the tolerance Resolve_Cell_Agronomic_Inputs
+%% itself applies).
+if all(ismember({'polygon_index'},T.Properties.VariableNames)) && ...
+        all(ismember({'polygon_index'},K.Properties.VariableNames))
+    if any(T.polygon_index(it) ~= K.polygon_index(ik))
+        error('Apply_Kriged_Cell_Values:PolygonMismatch', ...
+            ['The template and the kriged table disagree on polygon_index ' ...
+             'for matched cells; they were built from different polygons.']);
+    end
+end
+xy_cols = {'cell_x_projected_m','cell_y_projected_m'};
+if all(ismember(xy_cols,T.Properties.VariableNames)) && ...
+        all(ismember(xy_cols,K.Properties.VariableNames))
+    dx = abs(T.cell_x_projected_m(it) - K.cell_x_projected_m(ik));
+    dy = abs(T.cell_y_projected_m(it) - K.cell_y_projected_m(ik));
+    if any(dx > 1e-6 | dy > 1e-6)
+        error('Apply_Kriged_Cell_Values:CellCoordinateMismatch', ...
+            ['Matched cell_ids sit at different projected centres (max ' ...
+             '%.3g m apart): the kriged table was built on a different ' ...
+             'grid than the template.'],max([dx;dy]));
+    end
+elseif ~all(ismember(xy_cols,K.Properties.VariableNames))
+    warning('Apply_Kriged_Cell_Values:NoCoordinateCheck', ...
+        ['The kriged table carries no projected cell centres, so the merge ' ...
+         'is matched on cell_id alone; regenerate it with the current ' ...
+         'Krige_Cell_Agronomic_Values to enable the geometry check.']);
+end
 log_rows = cell(numel(stems),6);
 accept_of_stem = struct();
 for a = 1:numel(stems)
@@ -140,15 +175,27 @@ log = cell2table(log_rows,'VariableNames',{'attribute','n_cells', ...
 %% A toggle shared by several stems (use_measured_texture covers both
 %% sand_fraction and clay_fraction) is only set true for cells every
 %% co-toggled attribute accepted -- a good sand estimate does not license
-%% turning on an unreviewed clay estimate.
+%% turning on an unreviewed clay estimate.  The co-toggle group is taken
+%% from the TEMPLATE, not from whichever stems happen to be in the kriged
+%% table: if the template has both texture stems but the sample file
+%% carried only sand, the toggle must stay off, because switching it on
+%% would also switch on an unreviewed (NaN) measured clay.
 unique_toggles = unique(cellfun(@(s) toggle_of(s),stems,'UniformOutput',false));
 for u = 1:numel(unique_toggles)
     use_col = unique_toggles{u};
-    co_stems = stems(cellfun(@(s) strcmp(toggle_of(s),use_col),stems));
+    group = template_toggle_group(use_col,T.Properties.VariableNames);
+    missing_from_K = setdiff(group,stems);
+    if ~isempty(missing_from_K)
+        warning('Apply_Kriged_Cell_Values:IncompleteToggleGroup', ...
+            ['%s also covers %s, which the kriged table does not carry; ' ...
+             'the toggle is left unchanged for every cell.'], ...
+            use_col,strjoin(missing_from_K,', '));
+        continue
+    end
     joint_accept = true(numel(ik),1);
-    for c = 1:numel(co_stems)
+    for c = 1:numel(group)
         joint_accept = joint_accept & ...
-            accept_of_stem.(matlab.lang.makeValidName(co_stems{c}));
+            accept_of_stem.(matlab.lang.makeValidName(group{c}));
     end
     Uv = T.(use_col);
     Uv(it(joint_accept)) = true;
@@ -181,6 +228,31 @@ if isstruct(spec)
     if isfield(spec,stem); v = spec.(stem); else; v = 0.35; end
 else
     v = double(spec);
+end
+end
+
+%% =======================================================================
+function group = template_toggle_group(use_col,template_columns)
+%% Every stem the TEMPLATE routes to this toggle: the canonical aliases
+%% plus any exact-name stem, kept only if the template carries its
+%% baseline_/measured_ pair.
+alias = containers.Map( ...
+    {'bulk_pH','sand_fraction','clay_fraction','OM_fraction','CEC_cmolc_kg'}, ...
+    {'bulk_pH','texture',      'texture',      'OM',         'CEC'});
+short = erase(use_col,'use_measured_');
+group = {};
+for k = keys(alias)
+    stem = k{1};
+    if strcmp(alias(stem),short) || strcmp(stem,short)
+        if all(ismember({sprintf('baseline_%s',stem),sprintf('measured_%s',stem)}, ...
+                template_columns))
+            group{end+1} = stem; %#ok<AGROW>
+        end
+    end
+end
+if isempty(group) && all(ismember({sprintf('baseline_%s',short), ...
+        sprintf('measured_%s',short)},template_columns))
+    group = {short};
 end
 end
 

@@ -107,7 +107,8 @@ if strcmpi(opt.Method,'rf')
 end
 
 if strcmpi(opt.Method,'rf')
-    dem = Load_Field_DEM(char(opt.FieldDEM),topo,'OutResolutionM',opt.GridCellSizeM);
+    dem = Load_Field_DEM(char(opt.FieldDEM),topo, ...
+        'OutResolutionM',dem_resolution(opt.GridCellSizeM,topo));
     topo = Attach_Topography_To_Topology(topo,dem);
     [sub_idx,~] = Select_Topographic_Subsample(topo,resolved,opt.SubsampleFraction);
     sub_states = repmat(run_cell_spinup(sub_idx(1)), numel(sub_idx), 1);
@@ -151,5 +152,19 @@ end
 function delete_if_present(file_name)
 if isfile(file_name)
     delete(file_name)
+end
+end
+
+%% =======================================================================
+function r = dem_resolution(requested,topo)
+%% Default the DEM spacing to the process-grid cell size rather than the
+%% tile's native 1 m.  Terrain attributes are sampled at cell centres, so
+%% a DEM far finer than the cell aliases sub-cell microtopography into
+%% slope / curvature / TWI (and slope, a gradient magnitude, is biased
+%% one-sided by it).  Load_Field_DEM area-averages to whatever spacing it
+%% is given.
+r = requested;
+if isempty(r) && isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m)
+    r = topo.cell_size_m;
 end
 end

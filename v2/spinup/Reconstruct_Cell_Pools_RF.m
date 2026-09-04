@@ -84,7 +84,20 @@ Y_all = rf.predict(X_all);
 CellBGStates = repmat(subsample_states(1), N, 1);
 method_per_cell = strings(N,1);
 gate_pass = false(N,1);
-[~,nn_of] = pdist2(X_sub, X_all, 'euclidean', 'Smallest', 1);   % nearest subsample
+%% Nearest subsample neighbour in STANDARDISED feature space: the raw
+%% features mix metres (elevation), fractions (slope) and log units (TWI),
+%% so an unscaled Euclidean distance is just an elevation match.  The
+%% scale comes from the WHOLE field, not the subsample, so a covariate
+%% the subsample happens not to span still counts at its field-wide
+%% scale; a covariate constant across the field contributes nothing
+%% (dividing by eps instead would let a 1e-16 spread dominate the metric
+%% by thirty orders of magnitude and annihilate every other feature).
+mu_f = mean(X_all,1); sd_f = std(X_all,0,1);
+flat = sd_f <= 1e-12*max(1,max(abs(X_all),[],1));
+sd_f(flat) = 1;
+Xs = (X_sub-mu_f)./sd_f; Xa = (X_all-mu_f)./sd_f;
+Xs(:,flat) = 0; Xa(:,flat) = 0;
+[~,nn_of] = pdist2(Xs, Xa, 'euclidean', 'Smallest', 1);
 
 for c = 1:N
     is_sub = find(subsample_idx == c, 1);
@@ -96,7 +109,24 @@ for c = 1:N
     end
     template = subsample_states(nn_of(c));
     targets = totals_struct(Y_all(c,:), target_names);
-    B_seed = Initialize_BG_State_From_Observations(template.B_out(end,:), targets);
+    %% Carry the template's OWN phosphorus partition into the mapping:
+    %% its SOM C:P sets organic P from the (rescaled) SOM carbon, so
+    %% organic P scales with the RF's carbon prediction and the SOM C:P
+    %% guard stays live; its inorganic fractions keep the converged
+    %% labile/adsorbed/occluded split instead of the cold-start defaults.
+    %% preserve_organic_P_pools would instead freeze B(38) at the
+    %% template's absolute value while SOC moves, drifting SOM C:P and
+    %% switching the guard off in exactly the case that needs it.  With
+    %% the template's own totals this mapping is an identity.
+    Bt = template.B_out(end,:);
+    p_opts = struct();
+    if Bt(38) > 0 && sum(Bt(9:11)) > 0
+        p_opts.organic_P_C_to_P = sum(Bt(9:11))/Bt(38);
+    end
+    if sum(Bt(43:46)) > 0
+        p_opts.inorganic_P_fractions = Bt(43:46)/sum(Bt(43:46));
+    end
+    B_seed = Initialize_BG_State_From_Observations(Bt, targets, p_opts);
 
     seed_state = template;
     seed_state.B_out = B_seed;
@@ -124,13 +154,47 @@ for c = 1:N
         warning('Reconstruct_Cell_Pools_RF:CellFallback', ...
             'Cell %d RF seed failed (%s); cold-start spin-up fallback.', ...
             resolved.cell_id(c), ME.message);
+        %% A real cold start.  Run_BG_Spinup derives its phase
+        %% checkpoints from BG_OUTPUT_FILE and resumes them on whatever
+        %% state they hold, with no record of whether it came from a
+        %% seed -- so simply dropping SPINUP_SEED_FILE would resume the
+        %% failed seeded state and fail again identically.
+        clear_spinup_checkpoints(cell_file);
         settings = rmfield(settings, 'SPINUP_SEED_FILE');
-        Run_Automatic_Site_Spinup(settings);
-        st = load_bg_state(cell_file);
-        Validate_BG_State_For_Transient(st, cell_file);
-        CellBGStates(c) = st;
-        method_per_cell(c) = "fallback";
-        gate_pass(c) = handoff_ready(st);
+        try
+            Run_Automatic_Site_Spinup(settings);
+            st = load_bg_state(cell_file);
+            Validate_BG_State_For_Transient(st, cell_file);
+            CellBGStates(c) = st;
+            method_per_cell(c) = "fallback";
+            gate_pass(c) = handoff_ready(st);
+        catch ME2
+            %% One unreconstructable cell must not discard the whole
+            %% field: keep its nearest-neighbour template, flag it, and
+            %% let the caller decide (report.n_failed).
+            warning('Reconstruct_Cell_Pools_RF:CellFailed', ...
+                ['Cell %d cold-start spin-up also failed (%s); keeping its ' ...
+                 'nearest subsample neighbour state and flagging the cell.'], ...
+                resolved.cell_id(c), ME2.message);
+            %% Stamp the cell's OWN identity and clear the converged /
+            %% handoff flags: a verbatim copy would carry the neighbour's
+            %% cell_id (breaking the one-state-per-cell invariant that
+            %% Load_Field_Spinup_States enforces) and would look converged
+            %% and handoff-ready when it is neither.
+            failed_state = template;
+            failed_state.cell_id = resolved.cell_id(c);
+            failed_state.cell_agronomic_identity = CellInputs(c).agronomic_identity;
+            if isfield(failed_state,'spinup_converged')
+                failed_state.spinup_converged = false;
+            end
+            if isfield(failed_state,'spinup_erw_handoff_ready')
+                failed_state.spinup_erw_handoff_ready = false;
+            end
+            failed_state.reconstruction_failed = true;
+            CellBGStates(c) = failed_state;
+            method_per_cell(c) = "failed";
+            gate_pass(c) = false;
+        end
     end
 end
 
@@ -142,9 +206,34 @@ report.cv_rel_error = rf.cv_rel_error;
 report.n_full = nnz(method_per_cell == "full");
 report.n_rf_seed = nnz(method_per_cell == "rf_seed");
 report.n_fallback = nnz(method_per_cell == "fallback");
-fprintf(['Reconstruct_Cell_Pools_RF: %d full, %d RF-seeded, %d fallback; ' ...
-    'handoff gate pass %.1f%%\n'], report.n_full, report.n_rf_seed, ...
-    report.n_fallback, 100*report.gate_pass_rate);
+report.n_failed = nnz(method_per_cell == "failed");
+fprintf(['Reconstruct_Cell_Pools_RF: %d full, %d RF-seeded, %d fallback, ' ...
+    '%d FAILED; handoff gate pass %.1f%%\n'], report.n_full, report.n_rf_seed, ...
+    report.n_fallback, report.n_failed, 100*report.gate_pass_rate);
+if report.n_failed > 0
+    warning('Reconstruct_Cell_Pools_RF:UnreconstructedCells', ...
+        ['%d cell(s) could not be spun up and hold a neighbour''s state; ' ...
+         'they are listed in report.method_per_cell == "failed".'], ...
+        report.n_failed);
+end
+end
+
+%% =======================================================================
+function clear_spinup_checkpoints(cell_file)
+%% Remove the phase checkpoints Run_BG_Spinup derives from this output
+%% path, so the fallback genuinely cold-starts.
+[d,n] = fileparts(cell_file);
+pattern = fullfile(d,[n '_checkpoint_*.mat']);
+listing = dir(pattern);
+for k = 1:numel(listing)
+    f = fullfile(listing(k).folder,listing(k).name);
+    try
+        delete(f);
+    catch
+        warning('Reconstruct_Cell_Pools_RF:CheckpointNotCleared', ...
+            'Could not delete %s; the fallback may resume a seeded state.',f);
+    end
+end
 end
 
 %% =======================================================================

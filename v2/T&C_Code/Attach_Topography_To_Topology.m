@@ -35,13 +35,25 @@ function topo = Attach_Topography_To_Topology(topo, surface, varargin)
 %% OUTPUT (fields added to topo)
 %%   cell_z_m, cell_slope, cell_aspect_deg, cell_curv_prof, cell_curv_plan,
 %%   cell_twi, cell_svf, cell_Asur = 1./cos(atan(cell_slope))
-%%   edge_dz_m                    z(edge_a) - z(edge_b) [m]
-%%   edge_slope                   |edge_dz_m| / edge_face_distance_m  [-]
-%%   edge_face_distance_surface_m, _a_m, _b_m   slope (down-dip) distances [m]
+%%   edge_dz_m                    z(edge_a) - z(edge_b) [m], a NODAL
+%%                                difference (see the edge-geometry note)
+%%   edge_centre_distance_m       true centre-to-centre plan distance [m];
+%%                                the face separation on a regular grid,
+%%                                longer across an offset buffer-strip face
+%%   edge_slope                   |edge_dz_m| / edge_centre_distance_m [-]
+%%   edge_face_distance_surface_m, _a_m, _b_m   the graph's face-separation
+%%                                path scaled by 1/cos(beta) [m]; equal to
+%%                                the flat distances when beta = 0
 %%   edge_overland_weight_ab, _ba  fraction of a cell's ponded outflow that
-%%                                 leaves along this edge toward b (resp. a);
-%%                                 the weights out of any one cell sum to <= 1,
-%%                                 the deficit draining through the perimeter.
+%%                                 leaves along this edge toward b (resp. a):
+%%                                 Quinn (1991) (tan beta)^p * face width,
+%%                                 normalised so the weights out of a cell
+%%                                 sum to 1 (0 for a pit / outlet cell).
+%%                                 Water crosses the domain perimeter only
+%%                                 at cell_is_outlet cells; a side boundary
+%%                                 on a cross-slope is closed (see
+%%                                 derive_outlets) -- a documented
+%%                                 treatment-comparison assumption.
 %%   cell_is_outlet               logical [N_cells x 1]
 %%   topography_attached          true
 %%   topography_source            provenance string
@@ -76,7 +88,7 @@ if ~isstruct(topo) || ~isscalar(topo) || ~isfield(topo,'N_cells')
         'topo must be a scalar Build_*_Topology struct.');
 end
 required_topo = {'N_cells','N_edges','edge_a','edge_b','cell_xc','cell_yc', ...
-    'edge_face_distance_m','outer_face_width_m','adj'};
+    'edge_face_distance_m','edge_face_width_m','outer_face_width_m','adj'};
 missing = required_topo(~isfield(topo,required_topo));
 if ~isempty(missing)
     error('Attach_Topography_To_Topology:BadTopology', ...
@@ -104,11 +116,26 @@ attr = struct();
 if isfield(surface,'Z')
     %% (b) gridded elevation model -------------------------------------
     grid = Field_Topographic_Attributes(surface);
+    %% Terrain attributes are sampled at the cell centre, so a DEM much
+    %% finer than the cell aliases microtopography (furrows, lidar noise)
+    %% into slope / curvature / TWI -- and slope is a gradient magnitude,
+    %% so the bias is one-sided.  Load_Field_DEM box-filters to the
+    %% requested spacing; say so when it was not asked to.
+    if isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m) && ...
+            grid.cellsize < 0.5*topo.cell_size_m
+        warning('Attach_Topography_To_Topology:UnfilteredDEM', ...
+            ['DEM spacing %.2f m is much finer than the %.2f m cells and ' ...
+             'attributes are point-sampled at cell centres: slope, ' ...
+             'curvature and TWI will carry sub-cell microtopography. ' ...
+             'Pass the DEM at the cell size (Load_Field_DEM ' ...
+             '''OutResolutionM'') to area-average it first.'], ...
+            grid.cellsize, topo.cell_size_m);
+    end
     x = grid.x; y = grid.y;
     sample = @(F) sample_grid(x,y,F,xc,yc);
     attr.cell_z_m        = sample(grid.Z);
     attr.cell_slope      = max(0,sample(grid.slope));
-    attr.cell_aspect_deg = sample(grid.aspect_deg);
+    attr.cell_aspect_deg = sample_aspect(x,y,grid.aspect_deg,xc,yc);
     attr.cell_curv_prof  = sample(grid.curv_prof);
     attr.cell_curv_plan  = sample(grid.curv_plan);
     attr.cell_twi        = sample(grid.twi);
@@ -159,13 +186,33 @@ attr.cell_svf = min(1,max(0,attr.cell_svf));
 attr.cell_Asur = 1./cos(atan(attr.cell_slope));
 
 %% --- edge geometry -------------------------------------------------
+%% NODAL elevation drop.  The two-point flux (h_a+z_a) - (h_b+z_b) must
+%% be a difference of cell-centred potentials: only then does a uniform
+%% total head give zero flux on every face (hydrostatic equilibrium), and
+%% only then does the drop sum to zero around every cycle of the graph.
+%% A "face-normal" projection of the drop is not such a difference -- it
+%% leaves a closed domain with no zero-flux steady state and a permanent
+%% divergence-free circulation, and it makes the overland weights
+%% disagree with the elevation order the router sweeps in.
+%%
+%% The SLOPE of a face is measured over the true centre-to-centre
+%% distance (on Build_Cell_Topology's buffer strips the centres are
+%% laterally offset, so that distance exceeds the face separation).  The
+%% two-point RESISTANCE path keeps the graph's own convention -- the
+%% face separation the flat model has always used -- scaled by 1/cos of
+%% that slope, so a zero-relief DEM leaves every flux bit-identical to a
+%% run with no DEM at all.  The first-order two-point error on an offset
+%% face is therefore the one the flat model already carries, not a new
+%% one, and it is equilibrium-preserving.
 z = attr.cell_z_m;
 ea = topo.edge_a(:); eb = topo.edge_b(:);
 edge_dz_m = z(ea) - z(eb);
-plan_dist = topo.edge_face_distance_m(:);
-edge_slope = abs(edge_dz_m)./max(plan_dist,eps);
+xc = topo.cell_xc(:); yc = topo.cell_yc(:);
+face_sep = topo.edge_face_distance_m(:);
+edge_centre_distance_m = max(hypot(xc(eb)-xc(ea), yc(eb)-yc(ea)), face_sep);
+edge_slope = abs(edge_dz_m)./max(edge_centre_distance_m,eps);
 surf_factor = 1./cos(atan(edge_slope));
-edge_face_distance_surface_m = plan_dist.*surf_factor;
+edge_face_distance_surface_m = face_sep.*surf_factor;
 if isfield(topo,'edge_face_distance_a_m') && isfield(topo,'edge_face_distance_b_m')
     edge_face_distance_surface_a_m = topo.edge_face_distance_a_m(:).*surf_factor;
     edge_face_distance_surface_b_m = topo.edge_face_distance_b_m(:).*surf_factor;
@@ -175,8 +222,11 @@ else
 end
 
 %% --- overland multiple-flow-direction weights (Quinn 1991) ---------
-[w_ab,w_ba] = overland_weights(topo,z,edge_face_distance_surface_m, ...
-    opt.MFDExponent);
+%% Driven by the nodal drop over the true slope distance between the
+%% two centres, so the weights agree with the elevation order the router
+%% sweeps in (w_ab > 0  <=>  z_a > z_b).
+[w_ab,w_ba] = overland_weights(topo,edge_dz_m, ...
+    edge_centre_distance_m.*surf_factor,topo.edge_face_width_m(:),opt.MFDExponent);
 
 %% --- outlet cells -------------------------------------------------
 if ~isempty(opt.OutletCells)
@@ -187,7 +237,7 @@ if ~isempty(opt.OutletCells)
     end
     is_outlet = false(N_cells,1); is_outlet(ids) = true;
 else
-    is_outlet = derive_outlets(topo,z);
+    is_outlet = derive_outlets(topo,edge_dz_m,z);
 end
 
 %% --- pack --------------------------------------------------------
@@ -201,6 +251,7 @@ topo.cell_svf           = attr.cell_svf;
 topo.cell_Asur          = attr.cell_Asur;
 topo.edge_dz_m                    = edge_dz_m;
 topo.edge_slope                   = edge_slope;
+topo.edge_centre_distance_m       = edge_centre_distance_m;
 topo.edge_face_distance_surface_m = edge_face_distance_surface_m;
 topo.edge_face_distance_surface_a_m = edge_face_distance_surface_a_m;
 topo.edge_face_distance_surface_b_m = edge_face_distance_surface_b_m;
@@ -223,6 +274,17 @@ if any(bad)
     Gn = griddedInterpolant({y,x},F,'nearest','nearest');
     v(bad) = Gn(yq(bad),xq(bad));
 end
+end
+
+%% =======================================================================
+function v = sample_aspect(x,y,A_deg,xq,yq)
+%% Interpolate the unit downslope vector, not the angle: bilinear
+%% interpolation of degrees across the 0/360 wrap would turn a cell between
+%% a 350 deg and a 10 deg node into a 180 deg (south-facing) one.
+s = sample_grid(x,y,sind(A_deg),xq,yq);
+c = sample_grid(x,y,cosd(A_deg),xq,yq);
+v = mod(atan2d(s,c),360);
+v(~isfinite(v)) = 0;
 end
 
 %% =======================================================================
@@ -252,39 +314,49 @@ if ~isempty(cols)
     for k = 1:numel(picks)
         if picks(k) == 1; gx = c(k); else; gy = c(k); end
     end
-    resid = (z-mean(z)) - G*c;
 else
-    resid = z-mean(z);
 end
 slope = hypot(gx,gy);
 aspect = mod(atan2d(-gx,-gy),360);          % steepest-descent direction, from N
 attr.cell_slope = repmat(slope,nz,1);
 attr.cell_aspect_deg = repmat(aspect,nz,1);
-scale = max(hypot(xr,yr),eps);
-attr.cell_curv_prof = -2*resid./scale.^2;    % convex-up positive
+%% A first-order plane has zero curvature by construction.  Dividing the
+%% plane's residual by the distance from the centroid is not a second
+%% derivative and diverges (order 1e28 1/m) for a cell sitting at the
+%% centroid, which would then dominate any quantile binning that uses
+%% curvature as a feature.  Report the honest value: no curvature
+%% information from an elevation-only injection.  A real run supplies a
+%% DEM, where Field_Topographic_Attributes computes the true
+%% Zevenbergen-Thorne profile and plan curvature.
+attr.cell_curv_prof = zeros(nz,1);
 attr.cell_curv_plan = zeros(nz,1);
 end
 
 %% =======================================================================
-function [w_ab,w_ba] = overland_weights(topo,z,surf_dist,p)
-%% Multiple-flow-direction partition of ponded outflow on the cell graph.
-%% w_ab(e): fraction of cell edge_a(e)'s ponded outflow that leaves along
-%% edge e toward edge_b(e).  Weights out of a cell sum to <= 1; the rest
-%% leaves through the perimeter (handled by the caller / outlet mask).
+function [w_ab,w_ba] = overland_weights(topo,edge_dz_m,surf_dist,face_width,p)
+%% Multiple-flow-direction partition of ponded outflow on the cell graph
+%% (Quinn et al. 1991; Freeman 1991 exponent p): the share leaving cell a
+%% across face e is proportional to (tan beta_e)^p * L_e, where L_e is the
+%% face (contour) width.  The width factor is what makes the partition
+%% right on the partial cells a field polygon clips at its boundary --
+%% on a regular interior grid every face has the same width and it
+%% cancels.  Weights out of a cell sum to 1 over its downslope faces (0
+%% for a cell with no lower neighbour: a pit, or an outlet).
 N_edges = topo.N_edges;
 w_ab = zeros(N_edges,1);
 w_ba = zeros(N_edges,1);
-gain = zeros(topo.N_cells,1);               % sum of downslope (drop/dist)^p
+gain = zeros(topo.N_cells,1);               % sum of downslope (drop/dist)^p * L
 for e = 1:N_edges
     a = topo.edge_a(e); b = topo.edge_b(e);
     d = surf_dist(e);
-    s_ab = (z(a)-z(b))/d;                   % positive: a drains to b
+    L = face_width(e);
+    s_ab = edge_dz_m(e)/d;                  % positive: a drains to b
     if s_ab > 0
-        w_ab(e) = s_ab^p;
+        w_ab(e) = s_ab^p*L;
         gain(a) = gain(a) + w_ab(e);
-    else
+    elseif s_ab < 0
         s_ba = -s_ab;
-        w_ba(e) = s_ba^p;
+        w_ba(e) = s_ba^p*L;
         gain(b) = gain(b) + w_ba(e);
     end
 end
@@ -296,15 +368,18 @@ end
 end
 
 %% =======================================================================
-function is_outlet = derive_outlets(topo,z)
-%% A cell is an outlet if it borders the domain perimeter and no graph
-%% neighbour is lower -- ponded water there leaves through the perimeter.
+function is_outlet = derive_outlets(topo,edge_dz_m,z)
+%% A cell is an outlet if it borders the domain perimeter and no face
+%% drains away from it -- ponded water there leaves through the perimeter.
+%% Uses the same face-normal drop as the flux law and the MFD weights, so
+%% "has a downslope neighbour" means exactly what the router acts on.
 N_cells = topo.N_cells;
 is_outlet = false(N_cells,1);
 on_perimeter = topo.outer_face_width_m(:) > 0;
 for c = find(on_perimeter).'
-    nb = [topo.edge_b(topo.edge_a==c); topo.edge_a(topo.edge_b==c)];
-    if isempty(nb) || all(z(nb) >= z(c) - 1e-9)
+    drains = any(edge_dz_m(topo.edge_a==c) > 1e-9) || ...
+             any(edge_dz_m(topo.edge_b==c) < -1e-9);
+    if ~drains
         is_outlet(c) = true;
     end
 end

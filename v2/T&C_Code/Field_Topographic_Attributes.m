@@ -22,10 +22,13 @@ function grid = Field_Topographic_Attributes(dem)
 %%   .cellsize     nominal grid spacing 0.5*(dx+dy) [m]
 %%   .slope        steepest slope [-] (fraction, = tan of the slope angle)
 %%   .aspect_deg   aspect [deg from north, clockwise]
+%%   .dzdx .dzdy   surface gradient components [-] (x east, y north)
 %%   .curv_prof    profile (down-slope) curvature [1/m], convex-up positive
 %%   .curv_plan    plan (contour) curvature [1/m], divergent positive
 %%   .twi          topographic wetness index ln(a / tan beta) [-]
-%%   .contrib_area specific catchment area a [m] (MFD, Quinn 1991)
+%%   .contrib_area specific catchment area a [m] (MFD, Quinn 1991) =
+%%                 upslope_area_m2 / grid spacing
+%%   .upslope_area_m2  total upslope (contributing) area [m2]
 %%   .svf          sky-view factor [-] in [0,1]
 %%   .flow_i .flow_j   D-infinity downslope unit vector components [-]
 %%
@@ -102,12 +105,15 @@ try
     flow_j =  cos(Rdir);
     flow_i(~isfinite(flow_i)) = 0;
     flow_j(~isfinite(flow_j)) = 0;
-catch
+catch ME
+    warning('Field_Topographic_Attributes:NoFlowDirection', ...
+        'dem_flow failed (%s); D-infinity display vectors set to zero.', ...
+        ME.message);
     flow_i = zeros(ny,nx); flow_j = zeros(ny,nx);
 end
 
 %% Contributing area (MFD, Quinn 1991) and TWI.
-[contrib_area,specific_area] = mfd_contributing_area(Z,dx,dy);
+[upslope_area_m2,specific_area] = mfd_contributing_area(Z,dx,dy);
 beta = atan(max(slope,1e-4));
 twi = log(specific_area./tan(beta));
 
@@ -115,17 +121,32 @@ twi = log(specific_area./tan(beta));
 try
     [HZ,Zasp] = Horizon_Angle(Z,cellsize);
     svf = Sky_View_Factor(Z,atan(slope)*180/pi,aspect_deg,HZ,Zasp);
+    %% Guard BEFORE clipping: max/min drop NaN silently, which would turn
+    %% an undefined sky view into total obstruction (0).
+    bad = ~isfinite(svf) & isfinite(Z);
+    if any(bad(:))
+        warning('Field_Topographic_Attributes:SkyViewNaN', ...
+            '%d sky-view values undefined; set to open sky (1).',nnz(bad));
+        svf(bad) = 1;
+    end
     svf = min(1,max(0,svf));
-catch
+    svf(~isfinite(Z)) = NaN;   % genuinely missing nodes stay undefined
+catch ME
+    %% Never silently: an unobstructed sky (svf = 1) is a physics change
+    %% (no diffuse shading, no terrain-reflected term), so say so.
+    warning('Field_Topographic_Attributes:NoSkyView', ...
+        ['Sky-view factor could not be computed (%s); using svf = 1 ' ...
+         '(open sky) everywhere.'], ME.message);
     svf = ones(ny,nx);
 end
 
 Z(missing) = NaN;   % restore genuine gaps in the returned elevation
 
 grid = struct('Z',Z,'x',x,'y',y,'cellsize',cellsize, ...
-    'slope',slope,'aspect_deg',aspect_deg, ...
+    'slope',slope,'aspect_deg',aspect_deg,'dzdx',gx,'dzdy',gy, ...
     'curv_prof',curv_prof,'curv_plan',curv_plan, ...
-    'twi',twi,'contrib_area',contrib_area,'svf',svf, ...
+    'twi',twi,'contrib_area',specific_area, ...
+    'upslope_area_m2',upslope_area_m2,'svf',svf, ...
     'flow_i',flow_i,'flow_j',flow_j,'missing',missing);
 end
 

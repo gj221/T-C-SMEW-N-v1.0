@@ -21,7 +21,9 @@ function dem = Load_Field_DEM(source, topo_or_crs, varargin)
 %%
 %% Name/value options
 %%   'OutResolutionM'  output spacing [m] (default: native, snapped to
-%%                     {0.5 1 2 3 5 10 30}).
+%%                     {0.5 1 2 3 5 10 30}).  A coarser output is the
+%%                     area mean of the source cells it covers (box
+%%                     filter), not a point sample.
 %%   'BufferM'         margin kept around the field [m] (default 100).
 %%   'BBoxLatLon'      [lonW lonE latS latN] clip window (WGS84 degrees).
 %%   'FillMaxCells'    largest NaN void filled by interpolation (default 50).
@@ -49,7 +51,29 @@ tiles = cell(numel(files),1);
 src_crs = [];
 for k = 1:numel(files)
     [Z,R] = readgeoraster(files{k},'OutputType','double');
-    Z(Z <= -9990 | Z >= 9000) = NaN;              % common NoData sentinels
+    %% readgeoraster does not apply the file's own NoData value, so read
+    %% it rather than guessing: -999, -99 and 0 are all in use and would
+    %% otherwise enter the interpolant as real elevations.  The sentinel
+    %% test stays as a fallback for files that declare nothing.
+    have_nd = false;
+    try
+        nd = georasterinfo(files{k}).MissingDataIndicator;
+        if ~isempty(nd); Z = standardizeMissing(Z,nd); have_nd = true; end
+    catch
+    end
+    Z(Z <= -9990 | Z >= 9000) = NaN;              % -9999, -32768, -3.4e38
+    if ~have_nd
+        %% No declared indicator: also trap the smaller sentinels some
+        %% exports use.  0 is left alone (it can be a real elevation), but
+        %% is counted so a tile of zeros is not silently believed.
+        Z(ismember(Z,[-999 -99])) = NaN;
+        if mean(Z(:) == 0) > 0.05
+            warning('Load_Field_DEM:ManyZeros', ...
+                ['%s declares no NoData value and %.0f%% of its cells are ' ...
+                 'exactly 0; if 0 is its NoData sentinel, set them to NaN ' ...
+                 'before use.'],files{k},100*mean(Z(:) == 0));
+        end
+    end
     if ~(isprop(R,'ProjectedCRS') && ~isempty(R.ProjectedCRS))
         error('Load_Field_DEM:GeographicSource', ...
             ['%s is not in a projected CRS. Re-export the DEM from the ' ...
@@ -57,18 +81,28 @@ for k = 1:numel(files)
     end
     if isempty(src_crs); src_crs = R.ProjectedCRS; end
     nx = R.RasterSize(2); ny = R.RasterSize(1);
-    %% Ascending pixel-centre coordinates.  Z rows run north->south when
-    %% ColumnsStartFrom is 'north', so flip Z (not ys) to match ascending y.
-    xs = R.XWorldLimits(1) + ((1:nx)-0.5)*R.CellExtentInWorldX;
-    ys = R.YWorldLimits(1) + ((1:ny)-0.5)*R.CellExtentInWorldY;
+    %% Ascending sample coordinates.  A cell-registered raster stores
+    %% pixel CENTRES half a cell inside its world limits; a point
+    %% (postings) raster stores the samples ON the limits and reports
+    %% SampleSpacingInWorld*, so the half-cell offset must not be applied.
+    if isprop(R,'RasterInterpretation') && strcmp(R.RasterInterpretation,'postings')
+        dx = R.SampleSpacingInWorldX; dy = R.SampleSpacingInWorldY;
+        xs = R.XWorldLimits(1) + (0:nx-1)*dx;
+        ys = R.YWorldLimits(1) + (0:ny-1)*dy;
+    else
+        dx = R.CellExtentInWorldX; dy = R.CellExtentInWorldY;
+        xs = R.XWorldLimits(1) + ((1:nx)-0.5)*dx;
+        ys = R.YWorldLimits(1) + ((1:ny)-0.5)*dy;
+    end
+    %% Z rows run north->south when ColumnsStartFrom is 'north', so flip
+    %% Z (not ys) to match ascending y.
     if ~isprop(R,'ColumnsStartFrom') || strcmp(R.ColumnsStartFrom,'north')
         Z = flipud(Z);
     end
     if isprop(R,'RowsStartFrom') && strcmp(R.RowsStartFrom,'east')
         Z = fliplr(Z);
     end
-    tiles{k} = struct('Z',Z,'x',xs,'y',ys, ...
-        'res',mean([R.CellExtentInWorldX R.CellExtentInWorldY]));
+    tiles{k} = struct('Z',Z,'x',xs,'y',ys,'res',mean([dx dy]));
 end
 native_res = tiles{1}.res;
 out_res = opt.OutResolutionM;
@@ -77,6 +111,21 @@ if isempty(out_res); out_res = snap_resolution(native_res); end
 %% --- target CRS + clip window (in the TARGET CRS) --------------
 [tgt_crs,tgt_epsg,bounds_xy] = resolve_target(topo_or_crs,src_crs,opt);
 reproject = ~same_crs(src_crs,tgt_crs);
+%% projinv/projfwd carry no datum transformation, so a same-zone datum
+%% difference (the USGS tiles are NAD83, the field topology WGS84) passes
+%% through as an identity and its ~1-1.5 m offset in CONUS is absorbed as
+%% a registration error.  That is tolerable for a field-scale DEM but
+%% must not be silent -- the header promises this warning.
+if reproject
+    da = datum_name(src_crs); db = datum_name(tgt_crs);
+    if ~isempty(da) && ~isempty(db) && ~strcmp(da,db)
+        warning('Load_Field_DEM:DatumNotTransformed', ...
+            ['DEM datum "%s" differs from the target datum "%s"; ' ...
+             'projinv/projfwd apply no datum shift, so the DEM keeps a ' ...
+             'residual horizontal offset (about 1-1.5 m in CONUS for ' ...
+             'NAD83 vs WGS84).'], da, db);
+    end
+end
 
 xt = (bounds_xy(1)+out_res/2) : out_res : bounds_xy(2);
 yt = (bounds_xy(3)+out_res/2) : out_res : bounds_xy(4);
@@ -87,25 +136,43 @@ if numel(xt) < 3 || numel(yt) < 3
 end
 [XT,YT] = meshgrid(xt,yt);
 
-%% target grid points -> source-CRS coordinates for sampling
-if reproject
-    [latq,lonq] = projinv(tgt_crs,XT,YT);
-    [XS,YS]     = projfwd(src_crs,latq,lonq);
-else
-    XS = XT; YS = YT;
-end
-
 %% --- sample tiles, average overlaps ----------------------------
+%% When the output is coarser than the source, each output cell is the
+%% AREA MEAN of an r x r stencil of source samples inside it (r = the
+%% resolution ratio), not a single point sample: point-sampling a 1 m
+%% lidar surface onto a 5 m grid aliases the microtopography into the
+%% slope / curvature / TWI statistics the flow code depends on.
+r = max(1,round(out_res/native_res));
+offs = ((1:r)-(r+1)/2)*(out_res/r);
 acc = zeros(size(XT)); cnt = zeros(size(XT));
-for k = 1:numel(tiles)
-    G = griddedInterpolant({tiles{k}.y,tiles{k}.x},tiles{k}.Z,'linear','none');
-    v = G(YS,XS);
-    ok = isfinite(v);
-    acc(ok) = acc(ok) + v(ok);
-    cnt(ok) = cnt(ok) + 1;
+interp = cellfun(@(t) griddedInterpolant({t.y,t.x},t.Z,'linear','none'), ...
+    tiles,'UniformOutput',false);
+for oi = 1:r
+    for oj = 1:r
+        Xq = XT+offs(oj); Yq = YT+offs(oi);
+        %% target grid points -> source-CRS coordinates for sampling
+        if reproject
+            [latq,lonq] = projinv(tgt_crs,Xq,Yq);
+            [XS,YS]     = projfwd(src_crs,latq,lonq);
+        else
+            XS = Xq; YS = Yq;
+        end
+        for k = 1:numel(tiles)
+            v = interp{k}(YS,XS);
+            ok = isfinite(v);
+            acc(ok) = acc(ok) + v(ok);
+            cnt(ok) = cnt(ok) + 1;
+        end
+    end
 end
 Z = acc./cnt;
 Z(cnt == 0) = NaN;
+if r == 1 && reproject
+    %% keep the source-frame extent diagnostic meaningful below
+    [latq,lonq] = projinv(tgt_crs,XT,YT); [XS,YS] = projfwd(src_crs,latq,lonq);
+elseif r == 1
+    XS = XT; YS = YT;
+end
 if all(isnan(Z(:)))
     error('Load_Field_DEM:NoOverlap', ...
         ['DEM tiles do not cover the requested area. Tile 1 spans ' ...
@@ -168,6 +235,15 @@ try
     tf = strcmp(char(wktstring(a)),char(wktstring(b)));
 catch
     tf = strcmp(char(a.Name),char(b.Name));
+end
+end
+
+%% =======================================================================
+function name = datum_name(crs)
+name = '';
+try
+    name = char(crs.GeographicCRS.Datum.Name);
+catch
 end
 end
 
