@@ -121,19 +121,25 @@ end
 %% --- figure --------------------------------------------------------
 rows = V; cols = ternary(have_flat, 3, 2);
 fig = figure('Color','w','Position',[60 60 360*cols 300*rows]);
+try; fig.Theme = 'light'; catch; end       % batch sessions default to dark axes
 tl = tiledlayout(fig, rows, cols, 'TileSpacing','compact','Padding','compact');
+%% Local metres: projected coordinates (7.26e5, 4.07e6) would push an
+%% axis exponent into the panel titles.
+xl = x - min(x); yl = y - min(y);
 for v = 1:V
     nexttile(tl);
-    scatter(x, y, 18, pools_topo(:,v), 'filled'); axis image; colorbar;
+    scatter(xl, yl, 18, pools_topo(:,v), 'filled'); axis image; colorbar;
     title(sprintf('%s  (2-D topographic)', names{v}), 'FontWeight','normal');
-    if v == 1; ylabel(sprintf('%s',opt.Tag),'FontWeight','bold'); end
+    xlabel('x [m]'); ylabel('y [m]');
+    if v == 1; ylabel(sprintf('%s   y [m]',opt.Tag),'FontWeight','bold','Interpreter','none'); end
 
     if have_flat
         nexttile(tl);
         d = pools_topo(:,v) - pools_flat(:,v);
-        scatter(x, y, 18, d, 'filled'); axis image; colorbar;
+        scatter(xl, yl, 18, d, 'filled'); axis image; colorbar;
         try; colormap(gca, redbluecmap); catch; colormap(gca, parula); end
         title(sprintf('%s  (2-D minus flat)', names{v}), 'FontWeight','normal');
+        xlabel('x [m]'); ylabel('y [m]');
     end
 
     nexttile(tl);
@@ -143,6 +149,7 @@ for v = 1:V
         hold on; xx = linspace(min(twi),max(twi),20);
         plot(xx, polyval(polyfit(twi(isfinite(d)),d(isfinite(d)),1), xx), 'k-');
         title(sprintf('slope %.3g per TWI unit', twi_slope(v)), 'FontWeight','normal');
+        ax = gca; ax.YAxis.Exponent = 0;    % keep the exponent out of the title
     else
         scatter(twi, pools_topo(:,v), 14, curv, 'filled');
         ylabel(names{v}); title('vs TWI', 'FontWeight','normal');

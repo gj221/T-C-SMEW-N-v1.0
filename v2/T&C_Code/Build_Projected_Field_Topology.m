@@ -1,5 +1,15 @@
 function topo = Build_Projected_Field_Topology( ...
-        field_polygon,cell_size_m,metadata,source_feature_indices)
+        field_polygon,cell_size_m,metadata,source_feature_indices, ...
+        required_field_fraction)
+%% required_field_fraction: the share of retained full-cell area that must
+%% lie inside the polygon (default 0.95 -- the production rule that no
+%% simulated column is mostly outside the field).  Lowering it is a
+%% DIAGNOSTIC choice only: coarser cells can then be built, but the
+%% retained grid covers less of the polygon and the field ledgers are for
+%% that interior core, not for the field.
+if nargin < 5 || isempty(required_field_fraction)
+    required_field_fraction = 0.95;
+end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Calibrate and annotate one connected projected field-grid setup.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -24,12 +34,13 @@ grid_calibration.outside_grid_area_m2 = ...
     topo.simulated_area_m2-topo.field_area_m2;
 grid_calibration.outside_grid_fraction = ...
     grid_calibration.outside_grid_area_m2/topo.simulated_area_m2;
-grid_calibration.required_field_fraction = 0.95;
+grid_calibration.required_field_fraction = required_field_fraction;
 if grid_calibration.field_fraction <= grid_calibration.required_field_fraction
     error('Build_Projected_Field_Topology:CoverageBelowTarget', ...
         ['%.6g m cells place only %.3f%% of retained full-cell area inside ' ...
-         'the polygon; more than 95%% is required.'], ...
-        cell_size_m,100*grid_calibration.field_fraction);
+         'the polygon; more than %.0f%% is required.'], ...
+        cell_size_m,100*grid_calibration.field_fraction, ...
+        100*required_field_fraction);
 end
 topo.grid_calibration = grid_calibration;
 topo.grid_rotation_degrees = grid_calibration.rotation_degrees;

@@ -68,8 +68,12 @@ if ~ismember('cell_id',K.Properties.VariableNames)
 end
 
 %% Attribute stems present as <stem>_predicted in K, matched to
-%% baseline_<stem> / measured_<stem> (always the full stem,
-%% Write_Field_Agronomic_Templates) and use_measured_<toggle> in T.
+%% measured_<stem> (always the full stem, Write_Field_Agronomic_Templates)
+%% and use_measured_<toggle> in T.  baseline_<stem> is optional: the
+%% base-saturation fractions are measured-only attributes (there is no
+%% pedotransfer baseline for the exchanger; a cell without a measurement
+%% has its exchanger derived from pH in the spin-up), so their absence of
+%% a baseline column must not exclude them.
 %% The toggle column uses a shorter alias for some stems (one
 %% use_measured_texture covers both sand_fraction and clay_fraction; OM
 %% and CEC drop their unit/kind suffix) -- resolve it rather than assume
@@ -81,8 +85,7 @@ toggle_of = containers.Map();
 keep = false(size(stems));
 for a = 1:numel(stems)
     s = stems{a};
-    if ~all(ismember({sprintf('baseline_%s',s),sprintf('measured_%s',s)}, ...
-            T.Properties.VariableNames))
+    if ~ismember(sprintf('measured_%s',s),T.Properties.VariableNames)
         continue
     end
     tog = resolve_toggle_column(s,T.Properties.VariableNames);
@@ -93,8 +96,8 @@ end
 stems = stems(keep);
 if isempty(stems)
     error('Apply_Kriged_Cell_Values:NoMatchingAttributes', ...
-        ['No kriged attribute matches a baseline_/measured_/' ...
-         'use_measured_ triple in the template.']);
+        ['No kriged attribute matches a measured_/use_measured_ ' ...
+         'pair in the template.']);
 end
 
 [~,it,ik] = intersect(T.cell_id,K.cell_id,'stable');
@@ -159,7 +162,12 @@ for a = 1:numel(stems)
 
     baseline_col = sprintf('baseline_%s',s);
     pre_use = logical(T.(toggle_of(s))(it));   % toggle state before this call
-    still_bare = ~accept & ~pre_use & isnan(T.(baseline_col)(it));
+    if ismember(baseline_col,T.Properties.VariableNames)
+        no_baseline = isnan(T.(baseline_col)(it));
+    else
+        no_baseline = true(numel(it),1);       % measured-only attribute
+    end
+    still_bare = ~accept & ~pre_use & no_baseline;
     log_rows(a,:) = {s, numel(ik), nnz(accept), nnz(~hull_ok), ...
         nnz(hull_ok & ~rel_ok), nnz(still_bare)};
     fprintf(['Apply_Kriged_Cell_Values: %-14s accepted %4d / %4d cells ' ...
@@ -235,23 +243,23 @@ end
 function group = template_toggle_group(use_col,template_columns)
 %% Every stem the TEMPLATE routes to this toggle: the canonical aliases
 %% plus any exact-name stem, kept only if the template carries its
-%% baseline_/measured_ pair.
+%% measured_ column (a baseline_ column is optional, see above).
 alias = containers.Map( ...
-    {'bulk_pH','sand_fraction','clay_fraction','OM_fraction','CEC_cmolc_kg'}, ...
-    {'bulk_pH','texture',      'texture',      'OM',         'CEC'});
+    {'bulk_pH','sand_fraction','clay_fraction','OM_fraction','CEC_cmolc_kg', ...
+     'bs_Ca_fraction','bs_Mg_fraction','bs_K_fraction'}, ...
+    {'bulk_pH','texture',      'texture',      'OM',         'CEC', ...
+     'base_saturation','base_saturation','base_saturation'});
 short = erase(use_col,'use_measured_');
 group = {};
 for k = keys(alias)
     stem = k{1};
     if strcmp(alias(stem),short) || strcmp(stem,short)
-        if all(ismember({sprintf('baseline_%s',stem),sprintf('measured_%s',stem)}, ...
-                template_columns))
+        if ismember(sprintf('measured_%s',stem),template_columns)
             group{end+1} = stem; %#ok<AGROW>
         end
     end
 end
-if isempty(group) && all(ismember({sprintf('baseline_%s',short), ...
-        sprintf('measured_%s',short)},template_columns))
+if isempty(group) && ismember(sprintf('measured_%s',short),template_columns)
     group = {short};
 end
 end
@@ -264,8 +272,10 @@ function col = resolve_toggle_column(stem,template_columns)
 %% use_measured_CEC, and {sand_fraction,clay_fraction} share one
 %% use_measured_texture. bulk_pH's toggle matches its stem exactly.
 alias = containers.Map( ...
-    {'bulk_pH','sand_fraction','clay_fraction','OM_fraction','CEC_cmolc_kg'}, ...
-    {'bulk_pH','texture',      'texture',      'OM',         'CEC'});
+    {'bulk_pH','sand_fraction','clay_fraction','OM_fraction','CEC_cmolc_kg', ...
+     'bs_Ca_fraction','bs_Mg_fraction','bs_K_fraction'}, ...
+    {'bulk_pH','texture',      'texture',      'OM',         'CEC', ...
+     'base_saturation','base_saturation','base_saturation'});
 exact = sprintf('use_measured_%s',stem);
 if ismember(exact,template_columns)
     col = exact;

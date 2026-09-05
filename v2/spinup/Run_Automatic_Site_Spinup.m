@@ -68,35 +68,10 @@ OPT_BUFFER_PERENNIAL = RunConfig.OPT_BUFFER_PERENNIAL;
 %% READ SCENARIO PARAMETERS  (from ERW_MOD_PARAM_parameters.xlsx)
 %% ========================================================================
 MOD_PARAM_file = fullfile(Input_Directory,'ERW_MOD_PARAM_parameters.xlsx');
-MOD_PARAM_opts = detectImportOptions(MOD_PARAM_file,"Sheet",'MOD_PARAM');
-MOD_PARAM_opts.DataRange = "A2";
-MOD_PARAM_vars = MOD_PARAM_opts.VariableNames;
-MOD_PARAM_num = {'Number','Lat','Lon','t_res','NumberOfDays','rsd','Pcla','Psan','Porg','Zbio','Cbare','cc','Kbot','f_O_in','soil_temp','DomainArea_m2','BufferWidth_m','pH_DilutionFactor', ...
-    'InitTotalP_mgP_kg','InitOrganicP_C_to_P','InitP_solution_fraction', ...
-    'InitP_primary_fraction','InitP_secondary_fraction','InitP_occluded_fraction', ...
-    'InitSOM_C_to_P_min','InitSOM_C_to_P_max'};
-MOD_PARAM_str = {'ExperimentFullName','Location','MOD_PARAM','Year','Zs','Ccrown','ZR95_L','PFT_type','stature_type',...
-    'id_location','forcing_file','transient_start','transient_end','scenario_transient',...
-    'source_data_file','meteo_file','rain_chem_file','meteo_start','meteo_end','rain_chem_start','rain_chem_end'};
-MOD_PARAM_opts = setvartype(MOD_PARAM_opts, intersect(MOD_PARAM_num, MOD_PARAM_vars), 'double');
-MOD_PARAM_opts = setvartype(MOD_PARAM_opts, intersect(MOD_PARAM_str, MOD_PARAM_vars), 'string');
-MOD_PARAM_input = readtable(MOD_PARAM_file,MOD_PARAM_opts);
-
-ERW_PARAM_opts = detectImportOptions(MOD_PARAM_file,"Sheet",'ERW_MOD');
-ERW_PARAM_opts.DataRange ="A2";
-ERW_PARAM_vars = ERW_PARAM_opts.VariableNames;
-ERW_PARAM_num = {'Number','Lat','Lon','opt_TC_biochem','opt_crop','keyword_add', ...
-    'CEC_tot_in','MgCO3_in','CaCO3_in','Mg_in','Ca_in','K_in','Na_in','Si_in', ...
-    'Al_w_in','M_rock_in','rho_rock','SSA_in','diss_f_original','diss_f', ...
-    'Alk_rain','num_rock_app'};
-ERW_PARAM_str = {'ExperimentFullName','Location','ExperimentalDescription', ...
-    'fX_conc_convention','rock_dist_data','rock_filepath','rock_type','soil', ...
-    'f_CEC_in','mineral','rock_f_in','d_in','psd_in'};
-ERW_PARAM_opts = setvartype(ERW_PARAM_opts, intersect(ERW_PARAM_num, ERW_PARAM_vars), 'double');
-ERW_PARAM_opts = setvartype(ERW_PARAM_opts, intersect(ERW_PARAM_str, ERW_PARAM_vars), 'string');
-ERW_PARAM_opts = setvaropts(ERW_PARAM_opts, intersect({'f_CEC_in','rock_filepath','mineral','rock_f_in'}, ERW_PARAM_vars), 'FillValue','NaN');
-
-ERW_PARAM_input = readtable(MOD_PARAM_file, ERW_PARAM_opts);
+%% One reader for the workbook (Read_Parameter_Workbook): the field
+%% launcher builds its per-cell override rows from the same typing, so
+%% the override validation below compares like with like.
+[MOD_PARAM_input, ERW_PARAM_input] = Read_Parameter_Workbook(MOD_PARAM_file);
 
 ERW_PARAM_input = ERW_PARAM_input(ERW_PARAM_input.Number == NN_case_study_ERW_MOD, :);
 MOD_PARAM_input = MOD_PARAM_input(MOD_PARAM_input.Number == NN_case_study_ERW_MOD, :);
@@ -365,7 +340,7 @@ end
 fprintf('  pH target: %.4f (field mean; SEM %.4f)\n', ...
     PHs, pH_sem);
 if use_daily_meteo
-    daily_meteo_path = fullfile(Data_Directory,daily_meteo_file);
+    daily_meteo_path = resolve_meteo_file(daily_meteo_file,Data_Directory,Input_Directory);
     if IS_BG_SPINUP
         if isnan(spinup_start) || isnan(spinup_end)
             error('MOD_PARAM case %d requires meteo_start/meteo_end for daily-meteo spin-up.', NN_case_study_ERW_MOD);
@@ -373,7 +348,7 @@ if use_daily_meteo
         if spinup_end < spinup_start
             error('TC_SMEW_N_run:SpinupWindow', 'meteo_end must be greater than or equal to meteo_start.');
         end
-        [spinup_all_met, spinup_met_info] = Load_Daily_Meteo(daily_meteo_path, ...
+        [spinup_all_met, spinup_met_info] = Load_Spinup_Meteo(daily_meteo_path, ...
             spinup_start, spinup_end, Lat, Lon, DeltaGMT);
         [spinup_all_yr, ~, ~] = datevec(spinup_all_met.Date);
         spinup_avail_years = unique(spinup_all_yr)';
@@ -420,7 +395,7 @@ if use_daily_meteo
         if isnan(met_start) || isnan(met_end)
             error('MOD_PARAM case %d requires transient_start/transient_end for daily meteo.', NN_case_study_ERW_MOD);
         end
-        [daily_met, daily_info] = Load_Daily_Meteo(daily_meteo_path, met_start, met_end, Lat, Lon, DeltaGMT);
+        [daily_met, daily_info] = Load_Spinup_Meteo(daily_meteo_path, met_start, met_end, Lat, Lon, DeltaGMT);
         Date = daily_met.Date;    Pr = daily_met.Pr;      Ta = daily_met.Ta;
         Ws = daily_met.Ws;        ea = daily_met.ea;      Pre = daily_met.Pre;
         SAD1 = daily_met.SAD1;    SAD2 = daily_met.SAD2;
@@ -657,10 +632,16 @@ end
 end
 
 function override = validate_parameter_override(override,base,label)
+%% The override must carry every workbook column; it may carry more --
+%% the optional columns table_value reads with a default (meteo_file,
+%% meteo_start, meteo_end, transient_start, transient_end, forcing_file,
+%% id_location, the InitExch* observation targets) are exactly what a
+%% caller supplies this way when the workbook row does not.
 if ~istable(override) || height(override) ~= 1 || ...
-        ~isequal(override.Properties.VariableNames,base.Properties.VariableNames)
+        ~all(ismember(base.Properties.VariableNames,override.Properties.VariableNames))
     error('Run_Automatic_Site_Spinup:BadParameterOverride', ...
-        '%s must be a one-row table with the workbook parameter columns.',label);
+        ['%s must be a one-row table carrying every workbook parameter ' ...
+         'column (extra optional columns are allowed).'],label);
 end
 end
 
@@ -759,4 +740,20 @@ end
 if ~isfile(file_out)
     error('Input file not found: %s', file_out);
 end
+end
+
+function path_out = resolve_meteo_file(file_name,Data_Directory,Input_Directory)
+%% A spin-up meteo file is an absolute path, or a name resolved first in
+%% the Data directory (daily station files) and then in Inputs (the
+%% hourly forcing .mat files Load_Spinup_Meteo accepts directly).
+file_name = char(file_name);
+candidates = {file_name, fullfile(Data_Directory,file_name), ...
+    fullfile(Input_Directory,file_name)};
+hit = find(cellfun(@isfile,candidates),1);
+if isempty(hit)
+    error('Run_Automatic_Site_Spinup:MeteoFileNotFound', ...
+        'Spin-up meteo file %s not found (tried %s and %s).', ...
+        file_name,candidates{2},candidates{3});
+end
+path_out = candidates{hit};
 end

@@ -73,7 +73,8 @@ end
 reserve = [Nreserve,Preserve,Kreserve,Careserve,Mgreserve,Sireserve];
 if any(~isfinite(reserve)) || any(reserve < 0)
     error('Nutrients_Available:InvalidReserve',...
-        'Plant nutrient reserves must be finite and nonnegative.');
+        'Plant nutrient reserves must be finite and nonnegative (N P K Ca Mg Si = %s).', ...
+        mat2str(reserve,6));
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%% Total Nutrient Content 

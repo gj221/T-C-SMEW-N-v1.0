@@ -26,7 +26,8 @@ if ~isstruct(options) || ~isscalar(options)
 end
 
 recognized_targets = {'POC_gCm2','MAOC_gCm2','DOC_gCm2','MBC_gCm2', ...
-    'total_N_gNm2','NH4_gNm2','NO3_gNm2','total_P_gPm2'};
+    'total_N_gNm2','NH4_gNm2','NO3_gNm2','total_P_gPm2', ...
+    'exch_Ca_gCam2','exch_Mg_gMgm2','exch_K_gKm2'};
 target_present = isfield(targets, recognized_targets);
 applied_fields = recognized_targets(target_present);
 for ii = find(target_present)
@@ -75,6 +76,22 @@ if isfield(targets, 'NH4_gNm2')
 end
 if isfield(targets, 'NO3_gNm2')
     B(32) = targets.NO3_gNm2;
+end
+%%% Exchangeable bases are observed stocks on the exchanger (base
+%%% saturation x CEC).  They map one-to-one onto the exchangeable pools
+%%% B(61) Ca, B(69) Mg, B(53) K; the solution pools B(60)/B(68)/B(52)
+%%% then equilibrate with them through the model's own exchange kinetics,
+%%% and the ERW handoff derives its exchanger from that pore water with
+%%% the same Gaines-Thomas law, so the measurement reaches the ERW
+%%% exchange complex without a second, parallel representation.
+if isfield(targets, 'exch_Ca_gCam2')
+    B(61) = targets.exch_Ca_gCam2;
+end
+if isfield(targets, 'exch_Mg_gMgm2')
+    B(69) = targets.exch_Mg_gMgm2;
+end
+if isfield(targets, 'exch_K_gKm2')
+    B(53) = targets.exch_K_gKm2;
 end
 
 N_changed = microbial_target || isfield(targets, 'NH4_gNm2') || ...

@@ -20,7 +20,9 @@ function [idx, strata] = Select_Topographic_Subsample(topo, resolved, fraction, 
 %% Name/value
 %%   'MinPerStratum'  at least this many cells per non-empty stratum
 %%                    (default 1)
-%%   'Bins'           quantile bins per continuous feature (default 3)
+%%   'Bins'           quantile bins per continuous feature (default []:
+%%                    3, coarsened to 2 when 3 leave more non-empty strata
+%%                    than the budget -- see below)
 %%   'Seed'           RNG seed for reproducibility (default 42)
 %%
 %% OUTPUTS
@@ -33,25 +35,15 @@ if ~isfield(topo,'topography_attached') || ~topo.topography_attached
         'Attach a DEM to the topology first (Attach_Topography_To_Topology).');
 end
 if nargin < 3 || isempty(fraction); fraction = 0.12; end
-opt = struct('MinPerStratum',1,'Bins',3,'Seed',42);
+opt = struct('MinPerStratum',1,'Bins',[],'Seed',42);
 for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
 
 N = topo.N_cells;
 feat = [topo.cell_z_m(:), topo.cell_slope(:), ...
     cosd(topo.cell_aspect_deg(:)), topo.cell_curv_prof(:), topo.cell_twi(:)];
-%% Quantile-bin each continuous feature.
-codes = zeros(N, size(feat,2));
-for f = 1:size(feat,2)
-    v = feat(:,f);
-    if range(v) < eps
-        codes(:,f) = 1;
-    else
-        edges = quantile(v, linspace(0,1,opt.Bins+1));
-        edges(1) = -inf; edges(end) = inf;
-        [~,~,codes(:,f)] = histcounts(v, unique(edges));
-    end
-end
+n_target = max(1, round(fraction*N));
 %% Soil / vegetation classes, if supplied.
+class_codes = zeros(N,0);
 if ~isempty(resolved) && istable(resolved)
     class_cols = intersect(lower({'soil_class','texture_class','pft', ...
         'vegetation','land_cover'}), lower(resolved.Properties.VariableNames));
@@ -59,12 +51,29 @@ if ~isempty(resolved) && istable(resolved)
         hit = find(strcmpi(resolved.Properties.VariableNames,class_cols{c}),1);
         col = resolved.(resolved.Properties.VariableNames{hit});
         [~,~,cc] = unique(string(col));
-        codes = [codes, cc(:)]; %#ok<AGROW>
+        class_codes = [class_codes, cc(:)]; %#ok<AGROW>
     end
 end
-
-[strata_u,~,strata] = unique(codes,'rows');
-n_target = max(1, round(fraction*N));
+%% Quantile-bin each continuous feature.  Three bins over five features
+%% can leave more non-empty strata than the budget on a small grid, and
+%% the guarantee of one full spin-up per stratum would then raise the
+%% sample far above the requested fraction (35 of 54 cells on a 15 m
+%% diagnostic grid).  With Bins = [] the binning is coarsened to two
+%% bins in that case, which keeps every stratum represented while
+%% honouring the budget where two bins can; an explicit Bins is used
+%% as given.
+if isempty(opt.Bins); candidates = [3 2]; else; candidates = opt.Bins; end
+for b = candidates
+    codes = [bin_codes(feat,b), class_codes];
+    [strata_u,~,strata] = unique(codes,'rows');
+    if size(strata_u,1) <= n_target; break; end
+end
+if numel(candidates) > 1 && b ~= candidates(1)
+    fprintf(['Select_Topographic_Subsample: %d quantile bins leave more ' ...
+        'strata than the %.0f%% budget (%d cells); using %d bins ' ...
+        '(%d strata)\n'], candidates(1), 100*fraction, n_target, b, ...
+        size(strata_u,1));
+end
 
 %% Seed the local draw but hand the caller's stream back on exit: a seed
 %% left behind would restart every later stochastic step in the session
@@ -113,4 +122,21 @@ idx = sort(unique(vertcat(idx{:})));
 
 fprintf(['Select_Topographic_Subsample: %d of %d cells (%.1f%%) across ' ...
     '%d strata\n'], numel(idx), N, 100*numel(idx)/N, size(strata_u,1));
+end
+
+%% =======================================================================
+function codes = bin_codes(feat,bins)
+%% Quantile-bin each column of feat into `bins` classes (1..bins); a
+%% constant column is one class.
+codes = zeros(size(feat));
+for f = 1:size(feat,2)
+    v = feat(:,f);
+    if range(v) < eps
+        codes(:,f) = 1;
+    else
+        edges = quantile(v, linspace(0,1,bins+1));
+        edges(1) = -inf; edges(end) = inf;
+        [~,~,codes(:,f)] = histcounts(v, unique(edges));
+    end
+end
 end

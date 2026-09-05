@@ -131,6 +131,10 @@ NBLeaf_L =zeros(NNd,cc);PARI_L=zeros(NNd,cc,3) ; NBLI_L=zeros(NNd,cc);
 NupI_H=zeros(NNd,cc,6);
 NupI_L=zeros(NNd,cc,6);
 NavlI=zeros(NNd,6);
+%%%% Daily biogeochemical environment, recorded for the spin-up (Phase 1
+%%%% averages them into the mean forcing of the stand-alone Phase 2).
+WFPS_bio_out = nan(NNd,1); Se_bio_out = nan(NNd,1); Psi_bio_out = nan(NNd,1);
+VSUM_out = nan(NNd,1); VTSUM_out = nan(NNd,1); Tdp_bio_out = nan(NNd,1);
 %%%%
 RB_L=zeros(NNd,cc,7);
 RB_H=zeros(NNd,cc,7);
@@ -222,6 +226,14 @@ LEAK_Si = zeros(NNd,1);
 %%%%%%%%%%%%%%%%%
 AgrHarNut =  zeros(NNd,6);
 SeedInput =  zeros(NNd,7); %% [C N P K Ca Mg Si], [g element m-2 ground]
+%%%% Per-crown ledgers for the spin-up's Phase-3 nutrient budgets
+%%%% (Run_BG_Spinup): harvest reserve export and planting input per crown
+%%%% [N P K Ca Mg Si] (g element m-2 crown), and the daily phosphorus
+%%%% inputs [fertilizer deposition uplift] BIOGEO_UNIT reports.
+AgrHarNut_H = zeros(NNd,cc,6); AgrHarNut_L = zeros(NNd,cc,6);
+PlantingNut_H = zeros(NNd,cc,6); PlantingNut_L = zeros(NNd,cc,6);
+PlantingP_H = zeros(NNd,cc); PlantingP_L = zeros(NNd,cc);
+P_inputs = zeros(NNd,3);
 jDay=zeros(NNd,1);L_day=zeros(NNd,1);
 
 Ccrown_t =ones(NNd,cc);
@@ -353,6 +365,12 @@ for i=2:NN
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%% Biogeochemistry Unit
         [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,L_bio,WFPS_bio]=Biogeo_environment(Tdp(pdind,:),O(pdind,:),V(pdind,:),Soil_Param,Phy,SPAR,Bio_Zs,Zbio);
+        WFPS_bio_out(j) = mean(WFPS_bio(:),'omitnan');
+        Se_bio_out(j)   = mean(Se_bio(:),  'omitnan');
+        Psi_bio_out(j)  = mean(Psi_bio(:), 'omitnan');
+        VSUM_out(j)     = VSUM;
+        VTSUM_out(j)    = VTSUM;
+        Tdp_bio_out(j)  = mean(Tdp_bio(:), 'omitnan');
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         if OPT_SoilBiogeochemistry == 1
             IS= Ccrown*squeeze(ISOIL_L(j-1,:,:)) + Ccrown*squeeze(ISOIL_H(j-1,:,:));
@@ -381,7 +399,7 @@ for i=2:NN
                 RexmyI(j,:),...
                 R_litter(j),R_microbe(j),R_litter_sur(j),R_ew(j),VOL(j),N2flx(j),Min_N(j),Min_P(j),...
                 R_bacteria(j),RmycAM(j),RmycEM(j),Prod_B(j),Prod_F(j),BfixN(j),NavlI(j,:),LitFirEmi(j,:),N2Oflx(j),...
-                FertN_d(j),DepN_d(j),NITflx(j),DENITflx(j),N2Oflx_nit(j)]=BIOGEO_UNIT(P(j-1,:),IS,Zbio,sum(Bio_Zs.*rsd),...
+                FertN_d(j),DepN_d(j),NITflx(j),DENITflx(j),N2Oflx_nit(j),P_inputs(j,:)]=BIOGEO_UNIT(P(j-1,:),IS,Zbio,sum(Bio_Zs.*rsd),...
                 PH_bulk,Tdp_bio,mean(Ta(pdind)),Psi_bio,Se_bio,Se_fc,VSUM,VTSUM,Ccrown,Bio_Zs,RfH_Zs,RfL_Zs,...
                 sum(Lk(pdind)),sum(T_H(pdind,:),1),sum(T_L(pdind,:),1),B_H(j-1,:,3),B_L(j-1,:,3),LAI_H(j-1,:),LAI_L(j-1,:),...
                 SupN_H(j-1,:),SupP_H(j-1,:),SupK_H(j-1,:),SupN_L(j-1,:),SupP_L(j-1,:),SupK_L(j-1,:),...
@@ -487,6 +505,8 @@ for i=2:NN
                         AgrHarNut(j,:),AgrHarNut_cc,Ccrown(cc));
                     SeedInput(j,:) = Plant_Seed_Input_Accumulator( ...
                         SeedInput(j,:),SeedInput_cc,Ccrown(cc));
+                    AgrHarNut_H(j,cc,:) = AgrHarNut_cc;                 % per crown, for the spin-up budgets
+                    PlantingNut_H(j,cc,:) = SeedInput_cc(2:7); PlantingP_H(j,cc) = SeedInput_cc(3);
                     %%%%
                 else
                     hc_H(j,cc)= hc_H(j-1,cc); %%%[m]
@@ -583,6 +603,8 @@ for i=2:NN
                         AgrHarNut(j,:),AgrHarNut_cc,Ccrown(cc));
                     SeedInput(j,:) = Plant_Seed_Input_Accumulator( ...
                         SeedInput(j,:),SeedInput_cc,Ccrown(cc));
+                    AgrHarNut_L(j,cc,:) = AgrHarNut_cc;                 % per crown, for the spin-up budgets
+                    PlantingNut_L(j,cc,:) = SeedInput_cc(2:7); PlantingP_L(j,cc) = SeedInput_cc(3);
                 else
                     hc_L(j,cc)= hc_L(j-1,cc); %%%[m]
                     if OPT_VCA == 1
@@ -1254,5 +1276,5 @@ CkExC = Tex - sum(IS(1:9));
 clear dB_H  dB_L dNres_H  dNres_L  dPres_H dKres_H  dPres_L dKres_L ed dCares_H  dCares_L dMgres_H  dMgres_L dSires_H  dSires_L
 clear Se_bio Psi_bio Tdp_bio VSUM VTSUM IS Tex 
 clear  Tstm0 snow_alb  kj m p  pdind STOT  PARAM_IC
-clear Bam Bem FireA Se_fc REXMY
+clear Bam Bem FireA REXMY   % Se_fc (bio-layer field-capacity saturation) stays: Run_BG_Spinup carries it into Phase 2
 

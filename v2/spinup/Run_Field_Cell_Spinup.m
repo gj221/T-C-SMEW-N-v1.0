@@ -5,7 +5,8 @@ function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_fi
 
 opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'GridCellSizeM',[],'CaseNumber',5,'OutputFile','','DryRun',false, ...
-    'Method','per_cell','FieldDEM','','SubsampleFraction',0.12);
+    'Method','per_cell','FieldDEM','','SubsampleFraction',0.12, ...
+    'MinCoverage',[],'MODParamColumns',[]);
 if mod(numel(varargin),2) ~= 0
     error('Run_Field_Cell_Spinup:BadOptions','Options must be name/value pairs.');
 end
@@ -35,7 +36,7 @@ code_directory = fullfile(v2_directory,'T&C_Code');
 input_directory = fullfile(code_directory,'Inputs');
 addpath(code_directory,fullfile(code_directory,'Parameters'),spinup_directory);
 setups = Build_Shapefile_Grid_Setups(shape_file,opt.GridCellSizeM, ...
-    opt.FieldFeatureIndices);
+    opt.FieldFeatureIndices,opt.MinCoverage);
 if isempty(opt.FieldPolygonIndex)
     if numel(setups) ~= 1
         error('Run_Field_Cell_Spinup:DisconnectedField', ...
@@ -55,8 +56,7 @@ resolved = Resolve_Cell_Agronomic_Inputs(topo, ...
     readtable(agronomic_file,'VariableNamingRule','preserve'));
 
 workbook = fullfile(input_directory,'ERW_MOD_PARAM_parameters.xlsx');
-MOD = readtable(workbook,'Sheet','MOD_PARAM','VariableNamingRule','preserve');
-ERW = readtable(workbook,'Sheet','ERW_MOD','VariableNamingRule','preserve');
+[MOD, ERW] = Read_Parameter_Workbook(workbook);   % the spin-up's own typing
 MOD = MOD(MOD.Number == opt.CaseNumber,:);
 ERW = ERW(ERW.Number == opt.CaseNumber,:);
 if height(MOD) ~= 1 || height(ERW) ~= 1
@@ -64,6 +64,23 @@ if height(MOD) ~= 1 || height(ERW) ~= 1
         'CaseNumber %d must select one MOD and one ERW row.',opt.CaseNumber);
 end
 CellInputs = Configure_Cell_Agronomic_Inputs(MOD,ERW,resolved);
+if ~isempty(opt.MODParamColumns)
+    %% Optional MOD_PARAM columns the workbook row does not carry (the
+    %% spin-up meteo and transient windows, a forcing file), applied to
+    %% every cell's row; the spin-up reads them through table_value.
+    if ~isstruct(opt.MODParamColumns) || ~isscalar(opt.MODParamColumns)
+        error('Run_Field_Cell_Spinup:BadMODParamColumns', ...
+            'MODParamColumns must be a scalar struct of column values.');
+    end
+    names = fieldnames(opt.MODParamColumns);
+    for c = 1:numel(CellInputs)
+        for k = 1:numel(names)
+            v = opt.MODParamColumns.(names{k});
+            if ischar(v) || iscellstr(v); v = string(v); end   % text columns are strings
+            CellInputs(c).MOD_PARAM.(names{k}) = v;
+        end
+    end
+end
 
 state_file = char(opt.OutputFile);
 if isempty(state_file)

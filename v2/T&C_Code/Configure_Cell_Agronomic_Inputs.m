@@ -40,6 +40,16 @@ for c = 1:n
     M.Pcla = resolved.clay_fraction(c);
     M.Porg = resolved.OM_fraction(c);
     E.CEC_tot_in = resolved.CEC_cmolc_kg(c);
+    %% Measured exchangeable bases become spin-up observation targets for
+    %% this cell (BG_Observation_Targets reads these MOD_PARAM columns and
+    %% maps them onto the exchangeable pools); absent -> the spin-up's own
+    %% exchanger stands, exactly as before.
+    if ismember('exch_Ca_cmolc_kg',resolved.Properties.VariableNames) && ...
+            isfinite(resolved.exch_Ca_cmolc_kg(c))
+        M.InitExchCa_cmolc_kg = resolved.exch_Ca_cmolc_kg(c);
+        M.InitExchMg_cmolc_kg = resolved.exch_Mg_cmolc_kg(c);
+        M.InitExchK_cmolc_kg  = resolved.exch_K_cmolc_kg(c);
+    end
     CellInputs(c).cell_id = resolved.cell_id(c);
     CellInputs(c).MOD_PARAM = M;
     CellInputs(c).ERW_PARAM = E;
