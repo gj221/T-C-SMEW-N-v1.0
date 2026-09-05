@@ -166,13 +166,17 @@ if ~p1_done && ~p2_done && ~p3_done
         'p1_SupN_L_acc'; 'p1_SupP_L_acc'; 'p1_SupK_L_acc'; ...
         'p1_SupCa_L_acc'; 'p1_SupMg_L_acc'; 'p1_SupSi_L_acc'; ...
         'p1_IS_acc'; 'p1_REXMY_acc'; ...
-        'OPT_SoilBiogeochemistry_saved'; 'OPT_pH_saved'; ...
+        'OPT_SoilBiogeochemistry_saved'; 'OPT_pH_saved'; 'OPT_ERW_saved'; ...
         'id_location'; 't_bef'; 't_aft'; 'DeltaGMT'; 'Lon'; 'Lat'; 'O_out'}];
 
     OPT_SoilBiogeochemistry_saved = OPT_SoilBiogeochemistry;
     OPT_pH_saved                  = OPT_pH;
+    OPT_ERW_saved                 = OPT_ERW;
     OPT_SoilBiogeochemistry = 0;
     OPT_pH                  = 0;
+    %% ERW chemistry is seeded from the biogeochemical pools (B_out) and
+    %% cannot run in this T&C-only phase; it returns with them in Phase 2.
+    OPT_ERW                 = 0;
 
     for p1_yi = 1:n_spinup_years
         if p1_yi > 1
@@ -271,6 +275,7 @@ if ~p1_done && ~p2_done && ~p3_done
 
     OPT_SoilBiogeochemistry = OPT_SoilBiogeochemistry_saved;
     OPT_pH                  = OPT_pH_saved;
+    OPT_ERW                 = OPT_ERW_saved;
 
     % Fail fast rather than propagate NaN/Inf averages into Phase 2 if Phase 1
     % accumulated no timesteps (e.g. an empty or misconfigured spin-up window).
@@ -325,6 +330,7 @@ if ~p1_done && ~p2_done && ~p3_done
     p1_avgs.IS           = p1_IS_acc    / p1_n;
     p1_avgs.REXMY        = p1_REXMY_acc / p1_n;
     p1_avgs.Se_fc        = Se_fc;  % constant soil parameter, preserved from MAIN_FRAME
+    p1_avgs.L_bio        = L_bio;  % pore-size distribution index of the active layer, constant, preserved from MAIN_FRAME
     p1_avgs.O_out        = O_out;
     p1_avgs.phase1_complete = p1_n == n_spinup_years;
     p1_avgs.phase1_water_state_physical = p1_water_state_physical;
@@ -434,6 +440,7 @@ if ~p2_done && ~p3_done
     p2_IS        = p1_avgs.IS;
     p2_REXMY     = p1_avgs.REXMY;
     p2_Se_fc     = p1_avgs.Se_fc;
+    p2_L_bio     = p1_avgs.L_bio;
 
     % Initial BG state: resume in-progress or cold start
     p2ip_compatible = false;
@@ -526,7 +533,7 @@ if ~p2_done && ~p3_done
              p2_RexmyI, ...                         % 28
              p2_R_litter, p2_R_microbe, p2_R_litter_sur, p2_R_ew, ~,~,~,~, ... % 29-36
              ~,~,~,~,~,~, p2_NavlI, ~, ...         % 37-43, 44
-             ~,~,~,~, p2_P_inputs] = ...            % 45-49
+             ~,~,~,~,~,~, p2_P_inputs] = ...        % 45-51 (v1.0: N2Oflx FertN DepN NITflx DENITflx N2Oflx_nit P_inputs)
                 BIOGEO_UNIT(p2_P_now, p2_IS, Zbio, sum(Bio_Zs.*rsd), ...
                 PH, p2_Tdp_bio, p2_Ta, p2_Psi_bio, p2_Se_bio, p2_Se_fc, p2_VSUM, p2_VTSUM, ...
                 Ccrown, Bio_Zs, RfH_Zs, RfL_Zs, ...
@@ -535,8 +542,8 @@ if ~p2_done && ~p3_done
                 p2_SupCa_H, p2_SupMg_H, p2_SupSi_H, p2_SupCa_L, p2_SupMg_L, p2_SupSi_L, ...
                 p2_REXMY, p2_RexmyI, ExEM, p2_NavlI, Pcla, Psan, ...
                 B_IO_day, Datam_day, 0, 0, ...
-                0, OPT_BfixN_p2, ...
-                [], [], p2_WFPS_bio);
+                0, OPT_BfixN_p2, ...              % v1.0 tail: opt_ERW (off in Phase 2), opt_BfixN,
+                p2_L_bio, p2_WFPS_bio);           % pore-size index of the active layer, WFPS
             p2_R_het_day = p2_R_microbe + p2_R_litter + p2_R_ew - p2_R_litter_sur;
             if isfinite(p2_R_het_day)
                 p2_R_het_year_sum = p2_R_het_year_sum + p2_R_het_day;
@@ -681,7 +688,7 @@ if isnan(transient_start) || isnan(transient_end)
     error('Run_BG_Spinup:NoTransientWindow', ...
         'transient_start/transient_end must be set in MOD_PARAM for Phase 3.');
 end
-[p3_met, ~] = Load_Daily_Meteo(daily_meteo_path, transient_start, transient_end, ...
+[p3_met, ~] = Load_Spinup_Meteo(daily_meteo_path, transient_start, transient_end, ...
     Lat, Lon, DeltaGMT);
 
 % Initialise BG state for Phase 3 from Phase 2 output
@@ -889,7 +896,8 @@ while ~p3_converged
     p3_nutrient_budgets.P = p3_p_budget;
     p3_names = {'N','K','Ca','Mg','Si'};
     p3_soil_idx = {23:34,48:55,56:63,64:71,72:79};
-    p3_fert = {FertNdiag.released_N(p3_rows), ...
+    %%% v1.0: BIOGEO_UNIT adds the day's B_IO.FertN rate directly and reports it as FertN_d.
+    p3_fert = {FertN_d(p3_rows), ...
         Spinup_Fertilizer_Series(B_IO.FertK,jDay(p3_rows),cycle_year,'Krate'), ...
         Spinup_Fertilizer_Series(B_IO.FertCa,jDay(p3_rows),cycle_year,'Carate'), ...
         Spinup_Fertilizer_Series(B_IO.FertMg,jDay(p3_rows),cycle_year,'Mgrate'), ...
@@ -923,7 +931,9 @@ while ~p3_converged
         p3_reserve_harvest = reshape(AgrHarNut_H(p3_rows,:,p3_n_i),numel(p3_rows),cc) + reshape(AgrHarNut_L(p3_rows,:,p3_n_i),numel(p3_rows),cc);
         p3_terms.harvest = sum(p3_cover.*(p3_tex_h{p3_x}(p3_rows,:) + p3_tex_l{p3_x}(p3_rows,:) - p3_litter + p3_reserve_harvest),'all');
         p3_terms.leaching = sum(p3_leach{p3_x}(p3_rows));
-        p3_terms.gaseous_loss = strcmp(p3_names{p3_x},'N')*sum(VOL(p3_rows)+F_N2flx(p3_rows)+N2Oflx(p3_rows)+NOflx(p3_rows));
+        %%% v1.0 gas partition (BIOGEOCHEMISTRY_DYNAMIC3): N2 from denitrification and
+        %%% total N2O (nitrification + denitrification); there is no NO pathway.
+        p3_terms.gaseous_loss = strcmp(p3_names{p3_x},'N')*sum(VOL(p3_rows)+N2flx(p3_rows)+N2Oflx(p3_rows));
         p3_terms.soil_start = sum(P(1,p3_soil_idx{p3_x}));
         p3_terms.soil_end = sum(P(j,p3_soil_idx{p3_x}));
         p3_terms.plant_start = sum(CcrownFIX.*(p3_plant_h{p3_x}(1,:) + p3_plant_l{p3_x}(1,:) + p3_reserve_h{p3_x}(1,:) + p3_reserve_l{p3_x}(1,:)));
@@ -1647,6 +1657,7 @@ if isfield(checkpoint, 'p1_avgs')
         isequal(p1_avgs.spinup_cycle_years, cycle_years) && ...
         isfield(p1_avgs, 'standing_nutrient_state_vers') && ...
         isequal(p1_avgs.standing_nutrient_state_vers, expected_version) && ...
+        isfield(p1_avgs, 'L_bio') && ...
         isfield(p1_avgs, 'O_out') && ...
         isnumeric(p1_avgs.O_out) && isreal(p1_avgs.O_out) && ...
         isvector(p1_avgs.O_out) && ~isempty(p1_avgs.O_out) && ...

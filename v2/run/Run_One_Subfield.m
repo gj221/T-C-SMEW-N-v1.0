@@ -37,7 +37,7 @@ opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
     'FieldShapefile','','GridCellSizeM',[], ...
     'FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'CellAgronomicFile','','CellSpinupStateFile','', ...
-    'FieldDEM','','DEMResolutionM',[], ...
+    'FieldDEM','','DEMResolutionM',[],'FieldMinCoverage',[], ...
     'AppeloAlpha',[],'AppeloLogKH',[],'SaveResults',true,'ResultDirectory','');
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
@@ -137,7 +137,8 @@ addpath(Directory, Input_Directory, Parameter_Directory);
 field_setups = [];
 if has_field_shape
     field_setups = Build_Shapefile_Grid_Setups( ...
-        opt.FieldShapefile,opt.GridCellSizeM,opt.FieldFeatureIndices);
+        opt.FieldShapefile,opt.GridCellSizeM,opt.FieldFeatureIndices, ...
+        opt.FieldMinCoverage);
     if isempty(opt.FieldPolygonIndex)
         if numel(field_setups) ~= 1
             error('Run_One_Subfield:DisconnectedField', ...
@@ -392,6 +393,15 @@ if ~isempty(opt.AppeloLogKH)
     logkh_parts = arrayfun(@number_tag,opt.AppeloLogKH,'UniformOutput',false);
     ckpt_tag = sprintf('%s__logkh%s',ckpt_tag,strjoin(logkh_parts,'_'));
 end
+if ~isempty(opt.FieldDEM) && topo.N_cells > 1
+    %% A topographic and a flat run of the same grid must never share a
+    %% checkpoint or a result file.
+    ckpt_tag = sprintf('%s__dem%s',ckpt_tag, ...
+        number_tag(dem_resolution(opt.DEMResolutionM,topo)));
+end
+if ~isempty(opt.FieldMinCoverage)
+    ckpt_tag = sprintf('%s__cov%s',ckpt_tag,strrep(sprintf('%g',opt.FieldMinCoverage),'.','p'));
+end
 ckpt_tag = sprintf('%s__%dd__from%s',ckpt_tag,NN/24,datestr(Date(1),'yyyymmdd'));
 ERW_ckpt_file = fullfile(ckpt_dir, ...
     sprintf('ckpt_run%02d_%s.mat',R.id,ckpt_tag));
@@ -451,6 +461,13 @@ if opt.SaveResults
     if ~isempty(opt.AppeloLogKH)
         logkh_parts = arrayfun(@number_tag,opt.AppeloLogKH,'UniformOutput',false);
         tag = sprintf('%s__logkh%s',tag,strjoin(logkh_parts,'_'));
+    end
+    if ~isempty(opt.FieldDEM) && topo.N_cells > 1
+        tag = sprintf('%s__dem%s',tag, ...
+            number_tag(dem_resolution(opt.DEMResolutionM,topo)));
+    end
+    if ~isempty(opt.FieldMinCoverage)
+        tag = sprintf('%s__cov%s',tag,strrep(sprintf('%g',opt.FieldMinCoverage),'.','p'));
     end
     if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
     if ~isempty(start_datenum); tag = sprintf('%s__from%s',tag,datestr(start_datenum,'yyyymmdd')); end

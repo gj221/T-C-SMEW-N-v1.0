@@ -1,0 +1,56 @@
+function [MOD, ERW] = Read_Parameter_Workbook(workbook)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Read_Parameter_Workbook
+%%
+%% The MOD_PARAM and ERW_MOD sheets of ERW_MOD_PARAM_parameters.xlsx with
+%% the column types the spin-up and the parameter scripts expect: text
+%% columns as strings (Zs and Ccrown are parsed from their text with
+%% eval/append in MOD_PARAM_Kantola_Maize_Soy, which needs a text
+%% scalar), numeric columns as double.  Name-based, so the workbook's
+%% column order is free and optional columns may be absent.
+%%
+%% Run_Automatic_Site_Spinup and Run_Field_Cell_Spinup both read through
+%% here and must: a per-cell override row is validated against, and then
+%% parsed by, exactly this typing.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+workbook = char(workbook);
+if ~isfile(workbook)
+    error('Read_Parameter_Workbook:MissingFile', ...
+        'Parameter workbook not found: %s', workbook);
+end
+
+MOD_opts = detectImportOptions(workbook,"Sheet",'MOD_PARAM');
+MOD_opts.DataRange = "A2";
+MOD_vars = MOD_opts.VariableNames;
+MOD_num = {'Number','Lat','Lon','t_res','NumberOfDays','rsd','Pcla','Psan', ...
+    'Porg','Zbio','Cbare','cc','Kbot','f_O_in','soil_temp','DomainArea_m2', ...
+    'BufferWidth_m','pH_DilutionFactor', ...
+    'InitTotalP_mgP_kg','InitOrganicP_C_to_P','InitP_solution_fraction', ...
+    'InitP_primary_fraction','InitP_secondary_fraction','InitP_occluded_fraction', ...
+    'InitSOM_C_to_P_min','InitSOM_C_to_P_max', ...
+    'InitExchCa_cmolc_kg','InitExchMg_cmolc_kg','InitExchK_cmolc_kg'};
+MOD_str = {'ExperimentFullName','Location','MOD_PARAM','Year','Zs','Ccrown', ...
+    'ZR95_L','PFT_type','stature_type', ...
+    'id_location','forcing_file','transient_start','transient_end','scenario_transient', ...
+    'source_data_file','meteo_file','rain_chem_file','meteo_start','meteo_end', ...
+    'rain_chem_start','rain_chem_end'};
+MOD_opts = setvartype(MOD_opts, intersect(MOD_num, MOD_vars), 'double');
+MOD_opts = setvartype(MOD_opts, intersect(MOD_str, MOD_vars), 'string');
+MOD = readtable(workbook, MOD_opts);
+
+ERW_opts = detectImportOptions(workbook,"Sheet",'ERW_MOD');
+ERW_opts.DataRange = "A2";
+ERW_vars = ERW_opts.VariableNames;
+ERW_num = {'Number','Lat','Lon','opt_TC_biochem','opt_crop','keyword_add', ...
+    'CEC_tot_in','MgCO3_in','CaCO3_in','Mg_in','Ca_in','K_in','Na_in','Si_in', ...
+    'Al_w_in','M_rock_in','rho_rock','SSA_in','diss_f_original','diss_f', ...
+    'Alk_rain','num_rock_app'};
+ERW_str = {'ExperimentFullName','Location','ExperimentalDescription', ...
+    'fX_conc_convention','rock_dist_data','rock_filepath','rock_type','soil', ...
+    'f_CEC_in','mineral','rock_f_in','d_in','psd_in'};
+ERW_opts = setvartype(ERW_opts, intersect(ERW_num, ERW_vars), 'double');
+ERW_opts = setvartype(ERW_opts, intersect(ERW_str, ERW_vars), 'string');
+ERW_opts = setvaropts(ERW_opts, intersect({'f_CEC_in','rock_filepath','mineral','rock_f_in'}, ERW_vars), ...
+    'FillValue','NaN');
+ERW = readtable(workbook, ERW_opts);
+end

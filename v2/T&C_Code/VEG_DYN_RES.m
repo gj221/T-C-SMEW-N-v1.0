@@ -263,6 +263,36 @@ Kreserve = Kreservetm1 + Kuptake*dtd + (TPOTtm1 - TPOT) - TexK*dtd; %%% [gK/m^2]
 Careserve = Careservetm1 + Cauptake*dtd + (TCALtm1 - TCAL) - TexCa*dtd; %%% [gCa/m^2]
 Mgreserve = Mgreservetm1 + Mguptake*dtd + (TMAGtm1 - TMAG) - TexMg*dtd; %%% [gMg/m^2]
 Sireserve = Sireservetm1 + Siuptake*dtd + (TSILtm1 - TSIL) - TexSi*dtd; %%% [gSi/m^2]
+%%% The reserve is a physical inventory: Plant_Reserve_Growth_Limit scaled
+%%% the carbon fluxes inside the ODE so that no reserve is overdrawn, and
+%%% the balances above recompute it from the integrated tissue content.
+%%% A balance that lands on zero therefore carries the integration and
+%%% round-off error of its terms (-4e-11 gN m-2 was seen at a cold-start
+%%% emergence) and would trip the non-negativity guards downstream.
+%%% Clear a negative within the error the integration can produce: the
+%%% resolved-mass floor the spin-up uses for the soil pools (1e-6 g
+%%% element m-2) plus the ODE relative tolerance (VEGGIE_UNIT runs ode45
+%%% at its default RelTol 1e-3) applied to the balance terms.  The tissue
+%%% term is a DIFFERENCE of two contents that each carry the relative
+%%% error of the integrated biomass, so its error scales with the contents
+%%% themselves, not with their difference (-1.4e-5 g Si m-2 was seen in a
+%%% coupled mid-season step, 0.5 % of the day's change but 5e-6 of the
+%%% content).  A larger negative is a real overdraw and is left for the
+%%% guards to report with its value.
+RESERVE_NEG_TOL = 1e-6; %%% [g element m-2]
+ODE_REL_TOL     = 1e-3; %%% [-] ode45 default RelTol, as used by VEGGIE_UNIT
+tolN  = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TNITtm1)+abs(TNIT) + abs(Nuptake*dtd)  + abs(TexN*dtd));
+tolP  = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TPHOtm1)+abs(TPHO) + abs(Puptake*dtd)  + abs(TexP*dtd));
+tolK  = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TPOTtm1)+abs(TPOT) + abs(Kuptake*dtd)  + abs(TexK*dtd));
+tolCa = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TCALtm1)+abs(TCAL) + abs(Cauptake*dtd) + abs(TexCa*dtd));
+tolMg = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TMAGtm1)+abs(TMAG) + abs(Mguptake*dtd) + abs(TexMg*dtd));
+tolSi = RESERVE_NEG_TOL + ODE_REL_TOL*(abs(TSILtm1)+abs(TSIL) + abs(Siuptake*dtd) + abs(TexSi*dtd));
+if Nreserve  < 0 && Nreserve  >= -tolN;  Nreserve  = 0; end
+if Preserve  < 0 && Preserve  >= -tolP;  Preserve  = 0; end
+if Kreserve  < 0 && Kreserve  >= -tolK;  Kreserve  = 0; end
+if Careserve < 0 && Careserve >= -tolCa; Careserve = 0; end
+if Mgreserve < 0 && Mgreserve >= -tolMg; Mgreserve = 0; end
+if Sireserve < 0 && Sireserve >= -tolSi; Sireserve = 0; end
 
 
 %%% 

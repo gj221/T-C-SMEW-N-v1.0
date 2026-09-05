@@ -3,7 +3,7 @@ function suppression = Plant_Nutrient_Suppression(reserve,capacity,nonstorage,el
 
 if ~isfinite(nonstorage) || nonstorage < 0
     error('Plant_Nutrient_Suppression:InvalidState', ...
-        '%s nonstorage inventory must be finite and nonnegative.',element_name);
+        '%s nonstorage inventory must be finite and nonnegative (%.6g).',element_name,nonstorage);
 end
 
 reserve_fraction = Plant_Reserve_Fraction(reserve,capacity,element_name);

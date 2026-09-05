@@ -405,7 +405,10 @@ polygon:
 ```
 
 The site workbook row must provide `meteo_file`, `meteo_start` and `meteo_end`
-before spin-up can run. This is a hard preflight check. The imported machinery
+before spin-up can run (an hourly forcing `.mat` is accepted as
+`meteo_file`; a row that lacks them can be completed per cell with the
+launcher's `MODParamColumns` option, see *Spin-up forcing* below). This
+is a hard preflight check. The imported machinery
 is from `Model/TC-SMEW-N` commit `31e9e13`. It retains the three spin-up phases,
 checkpoint rejection, convergence checks, 79-pool physicality screen, six
 nutrient budgets and ERW handoff gate.
@@ -583,6 +586,65 @@ per-cell coverage rule. That fixed 80 m "notebook recipe" variogram range
 in `Fit_Ordinary_Kriging` is a default, not a Bruce Farm measurement, and
 is not used for grid sizing.
 
+**Grid convergence.** `Run_Topographic_Grid_Convergence` confirms a width
+by convergence rather than by assertion. Over a ladder of widths (20,
+10, 5, 3.5, 2.5, 1.5 and 1 m) the lidar DEM is area-averaged to each
+width and the terrain statistics the flow code depends on are derived on
+the raster, masked to the polygon, so the question is put to the terrain
+and is not blocked by the coverage rule (which admits no grid coarser
+than 2.33 m here; cell count, outlet count and the share of the polygon
+that drains to an outlet are reported wherever a grid can be built). A
+statistic counts as converged from a width only if every finer step in
+the ladder also changes it by less than the tolerance (5 %), and the
+verdict is reported per statistic: one quiet step between two noisy ones
+is not convergence. On Control 2
+(`v2/figures/Grid_Convergence_AdamWilbourne_Control_Fields_polygon_01.csv`
+and `.png`) mean slope and mean TWI are converged from 10 m and relief
+from 20 m; the spatial std of slope only from 1.5 m and the spatial std
+of TWI not within the ladder. |Plan curvature| is tabulated but excluded
+from the verdict: a second derivative of a surface whose sub-metre
+roughness (furrows, lidar noise) it picks up, it grows without limit as
+the width shrinks (0.012 to 0.127 m-1 from 20 m to 1 m) and has no
+convergence width to find. So the drivers of the lateral physics, slope
+and head, are resolved by the 2.33 m process grid with margin; what is
+left is the micro-roughness that the area-averaging removes at the
+process width (the 3-5 % per halving in the slope std) and the known
+grid dependence of TWI itself, whose specific catchment area scales with
+the flow-tube width (Sorensen & Seibert 2007). With `RedistributionDays`
+> 0 the ladder also makes a short topographic 2-D run at each buildable
+width and adds lateral water moved per m2 per day and the spatial
+coefficient of variation of end-of-run root-zone water.
+
+**Redistribution diagnostic.** `Plot_Topographic_Redistribution` takes a
+topographic run and its flat twin on the same grid and draws, per
+variable, the 2-D field, the 2-D-minus-flat map and that difference
+against TWI, plus a gradient-method feature-importance table
+(elevation, TWI, aspect, curvature). It was exercised on Control 2 at
+10 m (109 columns, coverage rule relaxed to 60 %, Kantola case 5
+physics and forcing on the Bruce geometry) over the wettest warm week
+of the forcing, 24-30 April 2017 (139 mm), after a January window had
+given frozen soil and no signal at all. The flat run has zero spatial
+variance by construction; the topographic run's departures from it are
+small but coherent on this low-relief field (slopes 1.4-7.8 %, relief
+5.6 m):
+
+| variable | 2-D minus flat | relation to TWI |
+|---|---|---|
+| profile water, end of week | -0.52 to +0.55 mm | r = 0.30, wetter at high TWI |
+| profile water, run mean | -0.17 to +0.17 mm | +0.033 mm per TWI unit |
+| NO3 pool, run mean | -0.0008 to +0.0013 g N m-2 | aspect carries 61 % of the sensitivity |
+| Ca in solution, run mean | -0.004 to +0.005 g Ca m-2 | no TWI trend |
+
+No surface runoff was produced by 139 mm on this column (its
+infiltration capacity exceeds the hourly intensities and it drains
+freely at the base), so the whole signal is subsurface lateral flow and
+aspect-dependent radiation. That is a statement about the Kantola
+column on Bruce terrain, not about Bruce Farm: the per-cell texture,
+the perched-water-table lower boundary and the site forcing are the
+deferred sweeps, and they are exactly what would turn lateral flow on.
+`v2/figures/Topographic_Redistribution_Control2_10m_wetweek.png` (and
+`_15d_winter.png` for the null January case).
+
 A topographic run passes `FieldDEM` (and optionally `DEMResolutionM`) to
 the launcher; the DEM is fetched with `Load_Field_DEM` (mosaic + reproject
 + resample) and attached with `Attach_Topography_To_Topology`:
@@ -593,6 +655,20 @@ Run_One_Subfield(1,'FieldShapefile',shape_file, ...
     'FieldDEM',fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM'), ...
     'DEMResolutionM',5)
 ```
+
+The polygon-grid builder's 95 % per-cell coverage rule admits nothing
+coarser than the calibrated width (2.33 m on Control 2), so a coarse
+diagnostic grid has to relax it explicitly: `FieldMinCoverage` on
+`Run_One_Subfield`, `MinCoverage` on `Run_Field_Cell_Spinup` and
+`Krige_Cell_Agronomic_Values`, and the fifth argument of
+`Write_Field_Agronomic_Templates` are passed through to
+`Build_Shapefile_Grid_Setups` / `Build_Projected_Field_Topology` and
+become part of the setup cache key. Lowering the rule is a diagnostic
+choice only: the retained grid then covers less of the polygon and the
+field ledgers are for that interior core, not for the field. Checkpoint
+and result tags carry `__dem<res>` for a topographic run and
+`__cov<frac>` for a relaxed rule, so a topographic and a flat run of the
+same grid, or two coverage rules, never share a file.
 
 The `v2/Spatial inputs/**/DEM/` GeoTIFFs are fetched, not versioned
 (gitignored). For the Adam Wilbourne control fields, the USGS 3DEP 1 m
@@ -626,6 +702,36 @@ A cell is promoted from baseline to measured only when the kriged
 estimate is not an extrapolation (inside the convex hull of the fitting
 samples) and its relative standard deviation clears `MaxRelativeStd`;
 every other cell keeps exactly what the template already had.
+
+**Base saturation.** The workbook's `%Ca Saturation`, `%Mg Saturation`
+and `%K Saturation` columns (`Ca[2+] Base Sat (%)` and so on in the
+catalogue export) are kriged with the same ensemble as pH, OM and CEC,
+as the fractions `bs_Ca_fraction`, `bs_Mg_fraction` and
+`bs_K_fraction`, and enter the template as `measured_bs_*_fraction`
+under one shared toggle, `use_measured_base_saturation`, so a cell is
+promoted only when all three pass the gate. They are measured-only
+attributes: there is no pedotransfer baseline for the exchanger, so the
+template carries no `baseline_bs_*` column, `Apply_Kriged_Cell_Values`
+needs only a `measured_` column and a toggle to recognise an attribute,
+and a cell without a measurement keeps the existing behaviour, in which
+the spin-up derives the exchanger composition from bulk pH. Where the
+measurement is used, `Resolve_Cell_Agronomic_Inputs` converts the
+fractions to exchangeable Ca, Mg and K in cmolc kg-1 against the cell's
+resolved CEC (each fraction must lie in (0, 1) and the three must sum
+to less than one; the remainder is the acid saturation),
+`Configure_Cell_Agronomic_Inputs` passes them as
+`InitExchCa/Mg/K_cmolc_kg`, and `BG_Observation_Targets` maps them onto
+the exchangeable pools B(61), B(69) and B(53) in g m-2 through the
+biogeochemical soil mass `rsd * Zbio`. They act as spin-up
+**observation targets**, not as an override of the ERW exchanger seed
+`f_CEC_in`, which the state-driven handoff overwrites from those same
+pools anyway: the measurement constrains the pools the transient run
+actually reads, and electroneutrality is still closed by the handoff
+chain. `Tests/test_base_saturation_targets.m` (20 checks) covers the
+conversion, its validation, the template columns, the merge and the
+target mapping. Kriged base saturation is as well calibrated as the
+other attributes on Control 2 (leave-one-out rms standardised error
+1.10, 1.17 and 1.30 for Ca, Mg and K) and Control 3 (0.85, 1.08, 1.32).
 
 **Uncertainty.** Ten samples per control plot cannot resolve a
 semivariogram (`Fit_Empirical_Variogram_Range` reports `resolved =
@@ -729,6 +835,83 @@ and pore-water pH are closed by the same code the transient run trusts;
 cells that fail the gate fall back to a cold-start spin-up. The
 charge-closure primitive `ERW_Initial_H_From_Anion_Budget` is ported from
 the `Model/TC-SMEW-N` branch `lian-spinup-convergence`.
+
+**Spin-up forcing.** The automatic spin-up cycles complete
+meteorological years until its phases converge, then runs the handoff
+window. It takes that forcing from the row's `meteo_file`: either a
+daily station file (`Load_Daily_Meteo`, disaggregated to hourly) or,
+through `Load_Spinup_Meteo`, an hourly T&C forcing `.mat` such as
+`Data_Kantola.mat` or `Data_Bruce_Field_Spinup_2014_2023.mat`, used as
+it is with its own diurnal cycle; the file's latitude, longitude and
+clock offset are checked against the row's and a mismatch is reported.
+The workbook's Kantola rows carry none of the spin-up columns
+(`forcing_file`, `meteo_file`, `meteo_start`, `meteo_end`,
+`transient_start`, `transient_end`), so
+`Run_Field_Cell_Spinup(..., 'MODParamColumns', struct(...))` stamps them
+onto every cell's parameter row; the spin-up accepts an override row
+that carries extra optional columns, and both sides read the workbook
+through `Read_Parameter_Workbook`, so an override is typed exactly like
+the workbook row it replaces. `Tests/test_spinup_meteo_loader.m` (10
+checks) covers the slicing, complete-year detection, the cycle-year
+validator and the refusals. The topographically stratified subsample
+(`Select_Topographic_Subsample`) uses three quantile bins per terrain
+feature and coarsens to two when three leave more non-empty strata than
+the requested sample, so a small diagnostic grid is not made to spin up
+two thirds of its cells.
+
+Running the imported spin-up for the first time in this repository
+surfaced four latent breaks, all fixed. Phase 1 (T&C only) now switches
+ERW off together with biogeochemistry, because the ERW chemistry is
+seeded from the biogeochemical pools that Phase 1 does not carry. The
+10-minute driver records the daily biogeochemical environment (soil
+temperature, saturation, matric potential, water sums and WFPS of the
+active layer) that Phase 1 averages into the mean forcing of the
+stand-alone Phase 2, and no longer clears the field-capacity constant
+Phase 2 reads. The plant nutrient reserve is a physical inventory that
+`Plant_Reserve_Growth_Limit` never overdraws, so `VEG_DYN_RES` clears
+the integration round-off of a balance that lands on zero within the
+same 1e-6 g m-2 resolved-mass tolerance the spin-up applies to the soil
+pools (-4e-11 g N m-2 at a cold-start emergence had tripped the
+non-negativity guards, which now report the offending value;
+`Tests/test_plant_reserve_fraction.m`). And the spin-up and the field
+launcher read the parameter workbook through one function, so a per-cell
+override row is typed like the row it replaces.
+Two more were interface drift between the two code lineages: the
+stand-alone Phase 2 called `BIOGEO_UNIT` with the Model-repo signature
+(it now passes v1.0's tail arguments and reads a new `P_inputs` output,
+fertiliser, deposition and uplift phosphorus), and the Phase-3 nutrient
+budgets read per-crown ledgers the Model-repo driver keeps, so the
+10-minute driver now records the per-crown harvest reserve export and
+planting input (`AgrHarNut_H/L`, `PlantingNut_H/L`, `PlantingP_H/L`)
+and the daily phosphorus inputs, while the nitrogen gas loss is summed
+from v1.0's own partition (volatilisation, N2 from denitrification and
+total N2O; there is no NO pathway) and the fertiliser term is what
+`BIOGEO_UNIT` added that day (`FertN_d`).
+
+**Cost, measured on one Control 2 cell with the Kantola case (seven
+cycle years, 2017 handoff), single column, this machine:** Phase 1
+(T&C only) runs at 48 s per forcing year, 5.6 min for the ring; Phase 2
+(stand-alone biogeochemistry under the mean forcing) converged after
+641 mean-forcing years in about 3 min; Phase 3, the fully coupled loop
+with the ERW chemistry solved daily, costs about 70 min per forcing
+year, and its convergence test is taken over complete rings of seven
+years, so a cell costs of the order of 10-20 h before the handoff year.
+That is the cost the random-forest path exists to avoid: the production
+2.33 m Control 2 grid has 1461 cells, and even the ~10-15 % subsample
+the RF trains on is weeks of single-threaded compute, so the field
+spin-up has to be run cell-parallel (the `Run_All_12_Parallel` pattern)
+and is not something a session completes end to end. The pipeline up to
+the spin-up call (templates, kriging, gated merge, resolved per-cell
+inputs, topographic subsample, spin-up configuration) was exercised on
+the real Control 2 grid (54 cells at 15 m under a 50 % coverage rule;
+14 in-hull cells took every kriged attribute including base
+saturation) and is covered by the tests; the single-cell spin-up above
+is the integration check of the spin-up itself. At the time of this
+commit it had completed Phases 1 and 2 and the first coupled Phase-3
+year with all six nutrient budgets closed, and was in its second
+coupled year; the check that the exchangeable pools at handoff equal
+the measured base-saturation targets (cell 17: Ca 1.824, Mg 0.651,
+K 0.081 cmolc kg-1 on a CEC of 3.47) is what it reports at the end.
 
 From PowerShell at the repository root:
 
