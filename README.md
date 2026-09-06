@@ -16,6 +16,8 @@ v2/interpolation/  soil-sample kriging and the grid figure it feeds:
 v2/figures/      every PNG and FIG the plotting scripts write
 v2/Spatial inputs/   field polygons used by full-grid simulations
 v2/T&C_Code/     model source, Inputs, Parameters and Tests
+v2/spinup/       the automatic spin-up and the field (per-cell / RF) launchers
+v2/cluster/      SLURM scripts and entry point for the field spin-up on Bouchet
 v2/SIM/          simulation results (not tracked)
 v2/logs/         worker logs and status files (not tracked)
 v2/Experimental observations/   digitised field data used by the benchmark
@@ -638,7 +640,12 @@ small but coherent on this low-relief field (slopes 1.4-7.8 %, relief
 No surface runoff was produced by 139 mm on this column (its
 infiltration capacity exceeds the hourly intensities and it drains
 freely at the base), so the whole signal is subsurface lateral flow and
-aspect-dependent radiation. That is a statement about the Kantola
+aspect-dependent radiation. The 2-D driver's `Domain.lateral` ledger
+now carries `water_edge_abs_m3`, the daily sum over faces, layers and
+hours of |Q_edge|: the buffer/main ledgers are zero by construction on
+a whole-field polygon grid, and this is the quantity that says how much
+water the topography moved between cells (it is also what the
+convergence ladder's `RedistributionDays` metric reads). That is a statement about the Kantola
 column on Bruce terrain, not about Bruce Farm: the per-cell texture,
 the perched-water-table lower boundary and the site forcing are the
 deferred sweeps, and they are exactly what would turn lateral flow on.
@@ -700,8 +707,18 @@ Apply_Kriged_Cell_Values(template_file,kriged_files{1}, ...
 
 A cell is promoted from baseline to measured only when the kriged
 estimate is not an extrapolation (inside the convex hull of the fitting
-samples) and its relative standard deviation clears `MaxRelativeStd`;
-every other cell keeps exactly what the template already had.
+samples), its relative standard deviation clears `MaxRelativeStd`, and
+the value is physically admissible (fractions in (0, 1), pH in (0, 14),
+CEC positive: ordinary-kriging weights can be negative, and a K
+saturation of 1-3 % can be predicted below zero with a small std);
+every other cell keeps exactly what the template already had. A cell
+whose toggle is already on carries a value someone entered
+deliberately and is never overwritten unless `OverwriteMeasured` is
+set, and attributes that share a toggle (sand and clay; the three
+base-saturation fractions, which must also sum to less than one) are
+written together or not at all, so a cell's texture or exchanger never
+mixes two sources. The log table counts, per attribute, the cells
+accepted, written, rejected by each gate, and kept as already measured.
 
 **Base saturation.** The workbook's `%Ca Saturation`, `%Mg Saturation`
 and `%K Saturation` columns (`Ca[2+] Base Sat (%)` and so on in the
@@ -714,24 +731,34 @@ attributes: there is no pedotransfer baseline for the exchanger, so the
 template carries no `baseline_bs_*` column, `Apply_Kriged_Cell_Values`
 needs only a `measured_` column and a toggle to recognise an attribute,
 and a cell without a measurement keeps the existing behaviour, in which
-the spin-up derives the exchanger composition from bulk pH. Where the
-measurement is used, `Resolve_Cell_Agronomic_Inputs` converts the
-fractions to exchangeable Ca, Mg and K in cmolc kg-1 against the cell's
-resolved CEC (each fraction must lie in (0, 1) and the three must sum
-to less than one; the remainder is the acid saturation),
-`Configure_Cell_Agronomic_Inputs` passes them as
-`InitExchCa/Mg/K_cmolc_kg`, and `BG_Observation_Targets` maps them onto
-the exchangeable pools B(61), B(69) and B(53) in g m-2 through the
-biogeochemical soil mass `rsd * Zbio`. They act as spin-up
-**observation targets**, not as an override of the ERW exchanger seed
-`f_CEC_in`, which the state-driven handoff overwrites from those same
-pools anyway: the measurement constrains the pools the transient run
-actually reads, and electroneutrality is still closed by the handoff
-chain. `Tests/test_base_saturation_targets.m` (20 checks) covers the
+the handoff derives the exchanger composition from the pore water and
+the bulk pH alone. Where the measurement is used,
+`Resolve_Cell_Agronomic_Inputs` checks it (each fraction in (0, 1), the
+three summing to less than one; the remainder is the exchangeable
+acidity), reports the exchangeable Ca, Mg and K it implies in
+cmolc kg-1 against the cell's resolved CEC, and
+`Configure_Cell_Agronomic_Inputs` writes the cell's ERW exchanger seed
+`f_CEC_in = [Ca Mg K Na Al H]` as `[bs_Ca bs_Mg bs_K 0 0 1-sum]`: the
+acidity share starts as exchangeable H+, and Na and Al exchange start
+at zero and follow the handoff equilibrium. That seed is the right
+entry point mechanistically: `Invert_Bulk_pH` treats a supplied
+exchanger seed as a conserved exchangeable inventory that it combines
+with the dissolved cations and re-partitions by the same Gaines-Thomas
+relations the daily ERW solver enforces, at the pore-water pH that
+reproduces the measured bulk pH, so the handoff state is a fixed point
+of the model's own exchange law with the measured stock, not a
+prescribed composition that the first day relaxes away from. The
+spin-up saves that handoff exchanger and the transient starts from it
+(`Load_Cell_Parameters`), and the T&C exchangeable pools B(61), B(69),
+B(53) are re-initialised from it at the first ERW step. (An earlier
+version set those three pools as spin-up observation targets instead;
+the ERW step overwrites them and the T&C exchange kinetics relax them
+within days, so that route never reached the transient exchanger and
+was removed.) `Tests/test_base_saturation_targets.m` covers the
 conversion, its validation, the template columns, the merge and the
-target mapping. Kriged base saturation is as well calibrated as the
-other attributes on Control 2 (leave-one-out rms standardised error
-1.10, 1.17 and 1.30 for Ca, Mg and K) and Control 3 (0.85, 1.08, 1.32).
+seed. Kriged base saturation is as well calibrated as the other
+attributes on Control 2 (leave-one-out rms standardised error 1.10,
+1.17 and 1.30 for Ca, Mg and K) and Control 3 (0.85, 1.08, 1.32).
 
 **Uncertainty.** Ten samples per control plot cannot resolve a
 semivariogram (`Fit_Empirical_Variogram_Range` reports `resolved =
@@ -895,7 +922,10 @@ cycle years, 2017 handoff), single column, this machine:** Phase 1
 641 mean-forcing years in about 3 min; Phase 3, the fully coupled loop
 with the ERW chemistry solved daily, costs about 70 min per forcing
 year, and its convergence test is taken over complete rings of seven
-years, so a cell costs of the order of 10-20 h before the handoff year.
+years. On the test cell the ring drift of the slow fixed-cation pools
+(B(54), B(62), B(70)) was still 0.24 per ring against the 0.01 limit
+after 27 coupled years, falling by about 4 % per year, so a cell is a
+job of days, not hours.
 That is the cost the random-forest path exists to avoid: the production
 2.33 m Control 2 grid has 1461 cells, and even the ~10-15 % subsample
 the RF trains on is weeks of single-threaded compute, so the field
@@ -906,12 +936,13 @@ inputs, topographic subsample, spin-up configuration) was exercised on
 the real Control 2 grid (54 cells at 15 m under a 50 % coverage rule;
 14 in-hull cells took every kriged attribute including base
 saturation) and is covered by the tests; the single-cell spin-up above
-is the integration check of the spin-up itself. At the time of this
-commit it had completed Phases 1 and 2 and the first coupled Phase-3
-year with all six nutrient budgets closed, and was in its second
-coupled year; the check that the exchangeable pools at handoff equal
-the measured base-saturation targets (cell 17: Ca 1.824, Mg 0.651,
-K 0.081 cmolc kg-1 on a CEC of 3.47) is what it reports at the end.
+is the integration check of the spin-up itself: it completed Phases 1
+and 2 and 27 coupled Phase-3 years with all six nutrient budgets closing
+every year, and was stopped unconverged (above). The field spin-up is
+therefore a cluster job: `v2/cluster/README.md` describes the SLURM
+array on Bouchet (one cell per task, finished cells reused, plan /
+assemble / validate steps) and the validation experiment that scores
+the random-forest path against full spin-ups of every cell.
 
 From PowerShell at the repository root:
 

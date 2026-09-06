@@ -503,6 +503,11 @@ exit_mass_surface_field_g = zeros(N_lateral_species,1);
 lateral_diag.surface_water_out_m3 = zeros(NNd,1);
 lateral_diag.surface_mass_out_g   = zeros(NNd,N_lateral_species);
 lateral_diag.surface_reinfilt_m3  = zeros(NNd,1);
+%% Subsurface lateral throughput per day: the sum over faces, layers and
+%% hours of |Q_edge| [m3].  The buffer/main ledgers above are zero on a
+%% whole-field polygon grid (no buffer), so this is the quantity that
+%% says how much water the topography actually moved between cells.
+lateral_diag.water_edge_abs_m3 = zeros(NNd,1);
 
 j = 1;
 tic;
@@ -1321,6 +1326,7 @@ for i = i_resume:NN
         end
 
         lateral_diag.water_buf_to_main(j) = lateral_diag.water_buf_to_main(j) + ldiag.buf_to_main.water;
+        lateral_diag.water_edge_abs_m3(j) = lateral_diag.water_edge_abs_m3(j) + sum(abs(ldiag.Q_edge(:)))*dth;
         lateral_diag.mass_buf_to_main(j,:) = lateral_diag.mass_buf_to_main(j,:) + ldiag.buf_to_main.net.';
         lateral_diag.NO3_buf_to_main(j)   = lateral_diag.NO3_buf_to_main(j) + ldiag.buf_to_main.net(i_lateral_NO3);
         lateral_diag.sub_steps_max(j)     = max(lateral_diag.sub_steps_max(j), ldiag.sub_steps);

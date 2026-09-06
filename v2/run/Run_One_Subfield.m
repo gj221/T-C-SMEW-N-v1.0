@@ -53,6 +53,11 @@ validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
 validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
+validate_optional_positive_scalar(opt.FieldMinCoverage,'FieldMinCoverage');
+if ~isempty(opt.FieldMinCoverage) && opt.FieldMinCoverage >= 1
+    error('Run_One_Subfield:BadOptions', ...
+        'FieldMinCoverage is a fraction of full-cell area and must be below 1.');
+end
 validate_optional_index_vector(opt.FieldFeatureIndices,'FieldFeatureIndices');
 validate_optional_integer(opt.FieldPolygonIndex,'FieldPolygonIndex');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
@@ -381,6 +386,10 @@ if has_field_shape
     ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
         field_grid_tag(opt.FieldShapefile,opt.GridCellSizeM, ...
         opt.FieldPolygonIndex,opt.FieldFeatureIndices));
+elseif R.use_subdomains && (~isempty(opt.GridNx) || ~isempty(opt.GridNy))
+    %% as the result tag: a custom sub-field grid never shares a checkpoint
+    %% with the default grid of the same run
+    ckpt_tag = sprintf('%s__grid%dx%d',ckpt_tag,nx,ny);
 end
 if ~isempty(opt.CellAgronomicFile)
     ckpt_tag = sprintf('%s__%s',ckpt_tag, ...
@@ -470,7 +479,8 @@ if opt.SaveResults
         tag = sprintf('%s__cov%s',tag,strrep(sprintf('%g',opt.FieldMinCoverage),'.','p'));
     end
     if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
-    if ~isempty(start_datenum); tag = sprintf('%s__from%s',tag,datestr(start_datenum,'yyyymmdd')); end
+    %% the forcing day the run actually starts on (snapped), as the checkpoint tag
+    if ~isempty(start_datenum); tag = sprintf('%s__from%s',tag,datestr(Date(1),'yyyymmdd')); end
     result_file = fullfile(fl_save,sprintf('TC_2D_run%02d_%s.mat',R.id,tag));
     tmp_result = [tempname(fl_save) '.mat'];
     try
@@ -577,5 +587,8 @@ function r = dem_resolution(requested,topo)
 r = requested;
 if isempty(r) && isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m)
     r = topo.cell_size_m;
+elseif isempty(r) && isfield(topo,'cell_area_m2') && ~isempty(topo.cell_area_m2)
+    %% sub-field grids carry no cell_size_m; their cells are square
+    r = sqrt(median(topo.cell_area_m2(:)));
 end
 end
