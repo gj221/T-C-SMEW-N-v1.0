@@ -25,9 +25,6 @@ spec = {
     'InitNH4_ugN_g',      'NH4_gNm2',      soil_mass_kg_m2/1000
     'InitNO3_ugN_g',      'NO3_gNm2',      soil_mass_kg_m2/1000
     'InitTotalP_mgP_kg',  'total_P_gPm2',  soil_mass_kg_m2/1000
-    'InitExchCa_cmolc_kg','exch_Ca_gCam2', soil_mass_kg_m2*0.01*(40.078/2)
-    'InitExchMg_cmolc_kg','exch_Mg_gMgm2', soil_mass_kg_m2*0.01*(24.305/2)
-    'InitExchK_cmolc_kg', 'exch_K_gKm2',   soil_mass_kg_m2*0.01*39.098
     };
 
 targets = struct();

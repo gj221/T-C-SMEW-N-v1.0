@@ -41,7 +41,8 @@ function [output_file,log] = Apply_Kriged_Cell_Values( ...
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('MaxRelativeStd',0.35,'RequireInHull',true, ...
-    'OutputFile','','Overwrite',false);
+    'OutputFile','','Overwrite',false, ...
+    'OverwriteMeasured',false);
 for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
 
 if ~isfile(template_file)
@@ -132,10 +133,15 @@ elseif ~all(ismember(xy_cols,K.Properties.VariableNames))
          'is matched on cell_id alone; regenerate it with the current ' ...
          'Krige_Cell_Agronomic_Values to enable the geometry check.']);
 end
-log_rows = cell(numel(stems),6);
-accept_of_stem = struct();
+%% Per stem: the gate.  A value is only WRITTEN in the group pass below,
+%% once every attribute sharing the stem's toggle has passed, so the
+%% three base-saturation fractions (or sand and clay) always come from one
+%% source; and a cell whose toggle is already on carries a value someone
+%% entered deliberately, which the merge never overwrites unless told to.
+accept_of_stem = struct(); pred_of_stem = struct(); counts = struct();
 for a = 1:numel(stems)
     s = stems{a};
+    vn = matlab.lang.makeValidName(s);
     max_rel = threshold_for(opt.MaxRelativeStd,s);
     pred = K.(sprintf('%s_predicted',s))(ik);
     sd   = K.(sprintf('%s_std',s))(ik);
@@ -145,49 +151,38 @@ for a = 1:numel(stems)
     else
         in_hull = true(numel(ik),1);
     end
-
     rel_ok = isfinite(pred) & isfinite(sd) & ...
         (sd <= max_rel*max(abs(pred),eps));
     hull_ok = ~opt.RequireInHull | in_hull;
-    accept = rel_ok & hull_ok;
-    accept_of_stem.(matlab.lang.makeValidName(s)) = accept;
-
-    %% The measured value is written per stem regardless of whether a
-    %% sibling sharing this stem's toggle also accepts -- only the shared
-    %% *toggle* needs every co-toggled attribute to agree (see below).
-    measured_col = sprintf('measured_%s',s);
-    Tv = T.(measured_col);
-    Tv(it(accept)) = pred(accept);
-    T.(measured_col) = Tv;
-
-    baseline_col = sprintf('baseline_%s',s);
+    range_ok = physical_range_ok(s,pred);
     pre_use = logical(T.(toggle_of(s))(it));   % toggle state before this call
-    if ismember(baseline_col,T.Properties.VariableNames)
-        no_baseline = isnan(T.(baseline_col)(it));
+    keep_existing = pre_use & ~opt.OverwriteMeasured;
+    accept = rel_ok & hull_ok & range_ok & ~keep_existing;
+    accept_of_stem.(vn) = accept;
+    pred_of_stem.(vn) = pred;
+    baseline_col = sprintf('baseline_%s',s);
+    has_baseline = ismember(baseline_col,T.Properties.VariableNames);
+    if has_baseline
+        still_bare = ~accept & ~pre_use & isnan(T.(baseline_col)(it));
     else
-        no_baseline = true(numel(it),1);       % measured-only attribute
+        still_bare = false(numel(it),1);       % measured-only: the model's own value stands
     end
-    still_bare = ~accept & ~pre_use & no_baseline;
-    log_rows(a,:) = {s, numel(ik), nnz(accept), nnz(~hull_ok), ...
-        nnz(hull_ok & ~rel_ok), nnz(still_bare)};
-    fprintf(['Apply_Kriged_Cell_Values: %-14s accepted %4d / %4d cells ' ...
-        '(rejected: %d outside sample hull, %d over relative-std %.0f%%); ' ...
-        '%d cell(s) still have neither a baseline nor a measured value\n'], ...
-        s, nnz(accept), numel(ik), nnz(~hull_ok), nnz(hull_ok & ~rel_ok), ...
-        100*max_rel, nnz(still_bare));
+    counts.(vn) = struct('n_cells',numel(ik),'n_accepted',nnz(accept), ...
+        'n_rejected_hull',nnz(~hull_ok),'n_rejected_std',nnz(hull_ok & ~rel_ok), ...
+        'n_rejected_range',nnz(hull_ok & rel_ok & ~range_ok), ...
+        'n_kept_existing',nnz(keep_existing),'n_written',0, ...
+        'n_missing_baseline_and_measured',nnz(still_bare),'has_baseline',has_baseline);
 end
-log = cell2table(log_rows,'VariableNames',{'attribute','n_cells', ...
-    'n_accepted','n_rejected_hull','n_rejected_std', ...
-    'n_missing_baseline_and_measured'});
 
 %% A toggle shared by several stems (use_measured_texture covers both
-%% sand_fraction and clay_fraction) is only set true for cells every
-%% co-toggled attribute accepted -- a good sand estimate does not license
-%% turning on an unreviewed clay estimate.  The co-toggle group is taken
-%% from the TEMPLATE, not from whichever stems happen to be in the kriged
-%% table: if the template has both texture stems but the sample file
-%% carried only sand, the toggle must stay off, because switching it on
-%% would also switch on an unreviewed (NaN) measured clay.
+%% sand_fraction and clay_fraction; use_measured_base_saturation the
+%% three fractions) is only set true, and its values only written, for
+%% cells every co-toggled attribute accepted -- a good sand estimate does
+%% not license turning on an unreviewed clay estimate.  The co-toggle
+%% group is taken from the TEMPLATE, not from whichever stems happen to
+%% be in the kriged table: if the template has both texture stems but the
+%% sample file carried only sand, the toggle must stay off, because
+%% switching it on would also switch on an unreviewed (NaN) measured clay.
 unique_toggles = unique(cellfun(@(s) toggle_of(s),stems,'UniformOutput',false));
 for u = 1:numel(unique_toggles)
     use_col = unique_toggles{u};
@@ -201,14 +196,50 @@ for u = 1:numel(unique_toggles)
         continue
     end
     joint_accept = true(numel(ik),1);
+    group_sum = zeros(numel(ik),1);
     for c = 1:numel(group)
-        joint_accept = joint_accept & ...
-            accept_of_stem.(matlab.lang.makeValidName(group{c}));
+        gvn = matlab.lang.makeValidName(group{c});
+        joint_accept = joint_accept & accept_of_stem.(gvn);
+        group_sum = group_sum + pred_of_stem.(gvn);
+    end
+    if strcmp(use_col,'use_measured_base_saturation')
+        %% the three fractions must leave room for the acid saturation
+        joint_accept = joint_accept & group_sum < 1;
+    end
+    for c = 1:numel(group)
+        gvn = matlab.lang.makeValidName(group{c});
+        measured_col = sprintf('measured_%s',group{c});
+        Tv = T.(measured_col);
+        Tv(it(joint_accept)) = pred_of_stem.(gvn)(joint_accept);
+        T.(measured_col) = Tv;
+        counts.(gvn).n_written = nnz(joint_accept);
     end
     Uv = T.(use_col);
     Uv(it(joint_accept)) = true;
     T.(use_col) = Uv;
 end
+
+log_rows = cell(numel(stems),9);
+for a = 1:numel(stems)
+    s = stems{a}; cs = counts.(matlab.lang.makeValidName(s));
+    log_rows(a,:) = {s,cs.n_cells,cs.n_accepted,cs.n_written,cs.n_rejected_hull, ...
+        cs.n_rejected_std,cs.n_rejected_range,cs.n_kept_existing, ...
+        cs.n_missing_baseline_and_measured};
+    if cs.has_baseline
+        tail = sprintf('%d cell(s) still have neither a baseline nor a measured value', ...
+            cs.n_missing_baseline_and_measured);
+    else
+        tail = 'no baseline column: unaccepted cells keep the model''s own value';
+    end
+    fprintf(['Apply_Kriged_Cell_Values: %-14s accepted %4d / %4d cells, wrote %4d ' ...
+        '(rejected: %d outside sample hull, %d over relative-std %.0f%%, ' ...
+        '%d outside physical range; %d kept as already measured); %s\n'], ...
+        s,cs.n_accepted,cs.n_cells,cs.n_written,cs.n_rejected_hull,cs.n_rejected_std, ...
+        100*threshold_for(opt.MaxRelativeStd,s),cs.n_rejected_range,cs.n_kept_existing,tail);
+end
+log = cell2table(log_rows,'VariableNames',{'attribute','n_cells', ...
+    'n_accepted','n_written','n_rejected_hull','n_rejected_std','n_rejected_range', ...
+    'n_kept_existing','n_missing_baseline_and_measured'});
 
 if numel(it) < height(T)
     warning('Apply_Kriged_Cell_Values:UnmatchedCells', ...
@@ -284,5 +315,23 @@ elseif isKey(alias,stem) && ...
     col = sprintf('use_measured_%s',alias(stem));
 else
     col = '';
+end
+end
+
+%% =======================================================================
+function ok = physical_range_ok(stem,pred)
+%% The gate a kriged value must clear before it can become an input:
+%% fractions in (0,1), pH in (0,14), CEC positive.  Ordinary kriging
+%% weights can be negative, so a small-valued attribute (K saturation of
+%% 1-3 %) can be predicted below zero with a small std and would otherwise
+%% pass the relative-std gate and then abort the whole polygon downstream.
+if endsWith(stem,'_fraction')
+    ok = isfinite(pred) & pred > 0 & pred < 1;
+elseif strcmp(stem,'bulk_pH')
+    ok = isfinite(pred) & pred > 0 & pred < 14;
+elseif strcmp(stem,'CEC_cmolc_kg')
+    ok = isfinite(pred) & pred > 0;
+else
+    ok = isfinite(pred);
 end
 end

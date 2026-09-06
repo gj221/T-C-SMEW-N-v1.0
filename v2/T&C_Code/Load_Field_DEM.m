@@ -46,11 +46,37 @@ if isempty(files)
     error('Load_Field_DEM:NoFiles','No GeoTIFF found at %s.',string(source));
 end
 
-%% --- read tiles onto ascending-(x,y) grids -----------------------
+%% --- the crop window, before any tile is read -----------------------
+%% A 1 m lidar tile is ~10^8 samples: six of them held as double is
+%% ~5 GB, which exhausted the workstation and would exhaust an 8 GB
+%% cluster task.  The clip window is known from the target before any
+%% data is read (only the first tile's georeference is needed for the
+%% source CRS), so every tile is read in its native single precision and
+%% cropped to that window plus a margin before it is kept.  Peak memory
+%% is then one tile.
+info1 = georasterinfo(files{1});
+R1 = info1.RasterReference;
+if ~(isprop(R1,'ProjectedCRS') && ~isempty(R1.ProjectedCRS))
+    error('Load_Field_DEM:GeographicSource', ...
+        ['%s is not in a projected CRS. Re-export the DEM from the ' ...
+         'portal in a projected (UTM) CRS.'], files{1});
+end
+src_crs = R1.ProjectedCRS;
+[tgt_crs,tgt_epsg,bounds_xy] = resolve_target(topo_or_crs,src_crs,opt);
+reproject = ~same_crs(src_crs,tgt_crs);
+crop_margin_m = 100;                       % box-filter offsets + reprojection slack
+cx = bounds_xy([1 2 2 1]); cy = bounds_xy([3 3 4 4]);
+if reproject
+    [clat,clon] = projinv(tgt_crs,cx,cy);
+    [cx,cy] = projfwd(src_crs,clat,clon);
+end
+crop_win = [min(cx)-crop_margin_m, max(cx)+crop_margin_m, ...
+            min(cy)-crop_margin_m, max(cy)+crop_margin_m];
+
+%% --- read tiles onto ascending-(x,y) grids, cropped -------------------
 tiles = cell(numel(files),1);
-src_crs = [];
 for k = 1:numel(files)
-    [Z,R] = readgeoraster(files{k},'OutputType','double');
+    [Z,R] = readgeoraster(files{k},'OutputType','single');
     %% readgeoraster does not apply the file's own NoData value, so read
     %% it rather than guessing: -999, -99 and 0 are all in use and would
     %% otherwise enter the interpolant as real elevations.  The sentinel
@@ -79,7 +105,11 @@ for k = 1:numel(files)
             ['%s is not in a projected CRS. Re-export the DEM from the ' ...
              'portal in a projected (UTM) CRS.'], files{k});
     end
-    if isempty(src_crs); src_crs = R.ProjectedCRS; end
+    if ~same_crs(src_crs,R.ProjectedCRS)
+        error('Load_Field_DEM:MixedSourceCRS', ...
+            '%s is in %s but %s is in %s; the tiles must share one CRS.', ...
+            files{k},char(R.ProjectedCRS.Name),files{1},char(src_crs.Name));
+    end
     nx = R.RasterSize(2); ny = R.RasterSize(1);
     %% Ascending sample coordinates.  A cell-registered raster stores
     %% pixel CENTRES half a cell inside its world limits; a point
@@ -102,15 +132,29 @@ for k = 1:numel(files)
     if isprop(R,'RowsStartFrom') && strcmp(R.RowsStartFrom,'east')
         Z = fliplr(Z);
     end
+    ix = xs >= crop_win(1) & xs <= crop_win(2);
+    iy = ys >= crop_win(3) & ys <= crop_win(4);
+    if ~any(ix) || ~any(iy)
+        tiles{k} = [];                        % this tile lies outside the window
+        clear Z
+        continue
+    end
+    Z = double(Z(iy,ix)); xs = xs(ix); ys = ys(iy);
     tiles{k} = struct('Z',Z,'x',xs,'y',ys,'res',mean([dx dy]));
+    clear Z
+end
+tiles = tiles(~cellfun(@isempty,tiles));
+if isempty(tiles)
+    error('Load_Field_DEM:NoOverlap', ...
+        ['No DEM tile overlaps the requested window (source x=[%.0f %.0f] ' ...
+         'y=[%.0f %.0f]); fetch the tile(s) that cover this field.'], ...
+        crop_win(1),crop_win(2),crop_win(3),crop_win(4));
 end
 native_res = tiles{1}.res;
 out_res = opt.OutResolutionM;
 if isempty(out_res); out_res = snap_resolution(native_res); end
 
-%% --- target CRS + clip window (in the TARGET CRS) --------------
-[tgt_crs,tgt_epsg,bounds_xy] = resolve_target(topo_or_crs,src_crs,opt);
-reproject = ~same_crs(src_crs,tgt_crs);
+%% --- target CRS + clip window (in the TARGET CRS): resolved above ------
 %% projinv/projfwd carry no datum transformation, so a same-zone datum
 %% difference (the USGS tiles are NAD83, the field topology WGS84) passes
 %% through as an identity and its ~1-1.5 m offset in CONUS is absorbed as

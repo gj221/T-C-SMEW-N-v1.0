@@ -62,7 +62,15 @@ feat_sd = std(feat,0,1);
 %% -- rather than 0, which would read as "this driver does not matter".
 %% The elevation-injection topology path is the usual case: it reports a
 %% single slope/aspect and zero curvature for every cell.
-varying = feat_sd > 1e-9*max(1,max(abs(feat),[],1));
+%% A feature that is NaN somewhere (TWI on the elevation-injection path)
+%% is undefined, not constant; it is dropped the same way but said so.
+fn = {'elevation','TWI','aspect','curvature'};
+undefined = ~isfinite(feat_sd);
+varying = isfinite(feat_sd) & feat_sd > 1e-9*max(1,max(abs(feat),[],1));
+if any(undefined)
+    fprintf('Plot_Topographic_Redistribution: %s undefined (NaN) for some cells; importance NaN\n', ...
+        strjoin(fn(undefined),', '));
+end
 featz = (feat - mean(feat,1)) ./ max(feat_sd,eps);
 featz(:,~varying) = 0;
 feature_names = {'elevation','TWI','aspect','curvature'};
@@ -113,8 +121,11 @@ twi_slope = nan(V,1);
 if have_flat
     for v = 1:V
         d = pools_topo(:,v) - pools_flat(:,v);
-        p = polyfit(twi(isfinite(d)), d(isfinite(d)), 1);
-        twi_slope(v) = p(1);
+        ok = isfinite(d) & isfinite(twi);
+        if nnz(ok) >= 2
+            p = polyfit(twi(ok), d(ok), 1);
+            twi_slope(v) = p(1);
+        end
     end
 end
 
@@ -146,8 +157,11 @@ for v = 1:V
     if have_flat
         d = pools_topo(:,v) - pools_flat(:,v);
         scatter(twi, d, 14, curv, 'filled'); ylabel('2-D minus flat');
-        hold on; xx = linspace(min(twi),max(twi),20);
-        plot(xx, polyval(polyfit(twi(isfinite(d)),d(isfinite(d)),1), xx), 'k-');
+        ok = isfinite(d) & isfinite(twi);
+        if nnz(ok) >= 2
+            hold on; xx = linspace(min(twi(ok)),max(twi(ok)),20);
+            plot(xx, polyval(polyfit(twi(ok),d(ok),1), xx), 'k-');
+        end
         title(sprintf('slope %.3g per TWI unit', twi_slope(v)), 'FontWeight','normal');
         ax = gca; ax.YAxis.Exponent = 0;    % keep the exponent out of the title
     else

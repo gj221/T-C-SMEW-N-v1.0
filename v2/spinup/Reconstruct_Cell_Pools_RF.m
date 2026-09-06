@@ -17,9 +17,10 @@ function [CellBGStates, report] = Reconstruct_Cell_Pools_RF( ...
 %%      preserved), seeded from its nearest subsample neighbour's full
 %%      state for everything the RF does not predict (exchange complex,
 %%      pore-water pH, plant reserves, moisture).
-%%   4. That seed is handed to a SHORT Run_Automatic_Site_Spinup: starting
-%%      near equilibrium it converges in tens of cycles instead of ~1000,
-%%      and it runs the standard ERW handoff gate (ERW_Handoff_Readiness),
+%%   4. That seed is handed to the standard Run_Automatic_Site_Spinup with
+%%      the standard convergence criteria: starting near equilibrium it
+%%      needs fewer rings than a cold start, and it runs the ERW handoff
+%%      gate (ERW_Handoff_Readiness),
 %%      so electroneutrality and pH are closed by the same code the
 %%      transient run trusts.  Any cell that fails the gate or does not
 %%      converge falls back to a full per-cell spin-up.
@@ -40,13 +41,22 @@ function [CellBGStates, report] = Reconstruct_Cell_Pools_RF( ...
 %% Name/value
 %%   'CaseNumber'       workbook scenario (default 5)
 %%   'OutputDirectory'  where per-cell seed / state files go
-%%   'ShortSpinupCap'   Phase-3 cycle cap for the seeded spin-up (default 200)
 %%   'RFOptions'        cell of name/values passed to Train_Pool_Random_Forest
+%%   'CellIndex'        reconstruct ONLY this cell (index into 1..N_cells)
+%%                      and return a one-element CellBGStates: the
+%%                      cell-parallel mode a SLURM array uses, one cell
+%%                      per task, with the forest retrained identically
+%%                      (same subsample, same seed) in every task
 %%
 %% OUTPUTS
 %%   CellBGStates  [N_cells x 1] validated bg_state struct array
 %%   report        struct: .rf (the trained model), .method_per_cell
-%%                 ('rf_seed' | 'fallback'), .gate_pass_rate, .cv_rel_error
+%%                 ('full' | 'rf_seed' | 'fallback' | 'failed'),
+%%                 .gate_pass_rate, .cv_rel_error, .cells (the indices
+%%                 reconstructed), .subsample_idx, .nn_of
+%%   Every returned state carries reconstruction_method (string) and
+%%   reconstruction_failed (logical), so the struct array stays uniform
+%%   and an assembly step can report how each cell was obtained.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 spinup_dir = fileparts(mfilename('fullpath'));
@@ -54,8 +64,14 @@ v2 = fileparts(spinup_dir);
 code = fullfile(v2,'T&C_Code');
 addpath(spinup_dir, code, fullfile(code,'Parameters'));
 
-opt = struct('CaseNumber',5,'OutputDirectory',tempname,'RFOptions',{{}});
-for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
+opt = struct('CaseNumber',5,'OutputDirectory',tempname,'RFOptions',{{}}, ...
+    'CellIndex',[]);
+for k = 1:2:numel(varargin)
+    if ~isfield(opt,char(varargin{k}))
+        error('Reconstruct_Cell_Pools_RF:UnknownOption','Unknown option %s.',char(varargin{k}));
+    end
+    opt.(char(varargin{k})) = varargin{k+1};
+end
 if ~exist(opt.OutputDirectory,'dir'); mkdir(opt.OutputDirectory); end
 
 N = topo.N_cells;
@@ -81,7 +97,16 @@ rf = Train_Pool_Random_Forest(X_sub, Y_sub, feature_names, target_names, ...
 Y_all = rf.predict(X_all);
 
 %% --- reconstruct + close every cell -----------------------------
-CellBGStates = repmat(subsample_states(1), N, 1);
+cells_to_do = 1:N;
+if ~isempty(opt.CellIndex)
+    if ~(isnumeric(opt.CellIndex) && isscalar(opt.CellIndex) && ...
+            opt.CellIndex == fix(opt.CellIndex) && opt.CellIndex >= 1 && opt.CellIndex <= N)
+        error('Reconstruct_Cell_Pools_RF:BadCellIndex', ...
+            'CellIndex must be an integer in 1..%d.', N);
+    end
+    cells_to_do = opt.CellIndex;
+end
+CellBGStates = repmat(stamp(subsample_states(1),"full",false), N, 1);
 method_per_cell = strings(N,1);
 gate_pass = false(N,1);
 %% Nearest subsample neighbour in STANDARDISED feature space: the raw
@@ -99,10 +124,10 @@ Xs = (X_sub-mu_f)./sd_f; Xa = (X_all-mu_f)./sd_f;
 Xs(:,flat) = 0; Xa(:,flat) = 0;
 [~,nn_of] = pdist2(Xs, Xa, 'euclidean', 'Smallest', 1);
 
-for c = 1:N
+for c = cells_to_do
     is_sub = find(subsample_idx == c, 1);
     if ~isempty(is_sub)
-        CellBGStates(c) = subsample_states(is_sub);
+        CellBGStates(c) = stamp(subsample_states(is_sub),"full",false);
         method_per_cell(c) = "full";
         gate_pass(c) = handoff_ready(subsample_states(is_sub));
         continue
@@ -119,24 +144,29 @@ for c = 1:N
     %% switching the guard off in exactly the case that needs it.  With
     %% the template's own totals this mapping is an identity.
     Bt = template.B_out(end,:);
-    p_opts = struct();
-    if Bt(38) > 0 && sum(Bt(9:11)) > 0
-        p_opts.organic_P_C_to_P = sum(Bt(9:11))/Bt(38);
-    end
-    if sum(Bt(43:46)) > 0
-        p_opts.inorganic_P_fractions = Bt(43:46)/sum(Bt(43:46));
-    end
-    B_seed = Initialize_BG_State_From_Observations(Bt, targets, p_opts);
-
-    seed_state = template;
-    seed_state.B_out = B_seed;
-    seed_file = fullfile(opt.OutputDirectory, sprintf('rf_seed_%04d.mat', ...
-        resolved.cell_id(c)));
-    save_seed(seed_file, seed_state);
-
     cell_file = fullfile(opt.OutputDirectory, sprintf('cell_%04d_BG.mat', ...
         resolved.cell_id(c)));
+    seed_file = fullfile(opt.OutputDirectory, sprintf('rf_seed_%04d.mat', ...
+        resolved.cell_id(c)));
     try
+        %% The mapping can refuse a prediction (inconsistent nitrogen
+        %% stocks, implausible stoichiometry); that is a reason for the
+        %% cold-start fallback below, not for abandoning the field.
+        p_opts = struct();
+        if Bt(38) > 0 && sum(Bt(9:11)) > 0
+            p_opts.organic_P_C_to_P = sum(Bt(9:11))/Bt(38);
+        end
+        if sum(Bt(43:46)) > 0
+            p_opts.inorganic_P_fractions = Bt(43:46)/sum(Bt(43:46));
+        end
+        B_seed = Initialize_BG_State_From_Observations(Bt, targets, p_opts);
+        seed_state = template;
+        seed_state.B_out = B_seed;
+        save_seed(seed_file, seed_state);
+        %% Phase checkpoints left by an earlier attempt for this cell would
+        %% be resumed regardless of the seed, so a re-run would carry a cold
+        %% start's state under the rf_seed label; start the seeded run clean.
+        clear_spinup_checkpoints(cell_file);
         settings = struct('NN_case_study_ERW_MOD',opt.CaseNumber, ...
             'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
             'SAVE_RESULTS',0,'MOD_PARAM_override',CellInputs(c).MOD_PARAM, ...
@@ -147,7 +177,7 @@ for c = 1:N
         Run_Automatic_Site_Spinup(settings);
         st = load_bg_state(cell_file);
         Validate_BG_State_For_Transient(st, cell_file);
-        CellBGStates(c) = st;
+        CellBGStates(c) = stamp(st,"rf_seed",false);
         method_per_cell(c) = "rf_seed";
         gate_pass(c) = handoff_ready(st);
     catch ME
@@ -165,7 +195,7 @@ for c = 1:N
             Run_Automatic_Site_Spinup(settings);
             st = load_bg_state(cell_file);
             Validate_BG_State_For_Transient(st, cell_file);
-            CellBGStates(c) = st;
+            CellBGStates(c) = stamp(st,"fallback",false);
             method_per_cell(c) = "fallback";
             gate_pass(c) = handoff_ready(st);
         catch ME2
@@ -190,16 +220,23 @@ for c = 1:N
             if isfield(failed_state,'spinup_erw_handoff_ready')
                 failed_state.spinup_erw_handoff_ready = false;
             end
-            failed_state.reconstruction_failed = true;
-            CellBGStates(c) = failed_state;
+            CellBGStates(c) = stamp(failed_state,"failed",true);
             method_per_cell(c) = "failed";
             gate_pass(c) = false;
         end
     end
 end
 
+if ~isempty(opt.CellIndex)
+    CellBGStates = CellBGStates(cells_to_do);
+    method_per_cell = method_per_cell(cells_to_do);
+    gate_pass = gate_pass(cells_to_do);
+end
 report = struct();
 report.rf = rf;
+report.cells = cells_to_do(:);
+report.subsample_idx = subsample_idx;
+report.nn_of = nn_of(:);
 report.method_per_cell = method_per_cell;
 report.gate_pass_rate = mean(gate_pass);
 report.cv_rel_error = rf.cv_rel_error;
@@ -238,42 +275,23 @@ end
 
 %% =======================================================================
 function [X, names] = cell_features(topo, resolved)
-X = [topo.cell_z_m(:), topo.cell_slope(:), cosd(topo.cell_aspect_deg(:)), ...
-    sind(topo.cell_aspect_deg(:)), topo.cell_curv_prof(:), ...
-    topo.cell_curv_plan(:), topo.cell_twi(:)];
-names = {'elevation_m','slope','aspect_cos','aspect_sin', ...
-    'curv_profile','curv_plan','twi'};
-if ~isempty(resolved) && istable(resolved)
-    for col = {'sand_fraction','clay_fraction','OM_fraction','bulk_pH', ...
-            'CEC_cmolc_kg'}
-        hit = find(strcmpi(resolved.Properties.VariableNames,col{1}),1);
-        if ~isempty(hit)
-            X = [X, double(resolved.(resolved.Properties.VariableNames{hit}))]; %#ok<AGROW>
-            names{end+1} = col{1}; %#ok<AGROW>
-        end
-    end
-end
+%% One feature definition shared with the validation experiment.
+[X, names] = Cell_Topographic_Features(topo, resolved);
 end
 
 %% =======================================================================
 function t = pool_totals(B, names)
-%% Conserved element totals from a 79-pool state, in the same units
-%% BG_Observation_Targets produces (g element m-2).
-B = B(:).';
-t = zeros(1, numel(names));
-for k = 1:numel(names)
-    switch names{k}
-        case 'POC_gCm2',      t(k) = sum(B(9:10));
-        case 'MAOC_gCm2',     t(k) = B(11);
-        case 'DOC_gCm2',      t(k) = sum(B(12:13));
-        case 'MBC_gCm2',      t(k) = sum(B(18:19));
-        case 'total_N_gNm2',  t(k) = sum(B(23:34));
-        case 'NH4_gNm2',      t(k) = B(31);
-        case 'NO3_gNm2',      t(k) = B(32);
-        case 'total_P_gPm2',  t(k) = sum(B(35:47));
-        otherwise, t(k) = NaN;
-    end
+%% Conserved element totals from a 79-pool state (g element m-2); the
+%% one definition shared with the validation experiment.
+t = Conserved_Pool_Totals(B, names);
 end
+
+%% =======================================================================
+function st = stamp(st, method, failed)
+%% Every state carries how it was obtained, so struct arrays stay
+%% uniform whichever path produced each element.
+st.reconstruction_method = string(method);
+st.reconstruction_failed = logical(failed);
 end
 
 %% =======================================================================

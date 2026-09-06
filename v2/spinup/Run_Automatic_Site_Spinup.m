@@ -635,7 +635,7 @@ function override = validate_parameter_override(override,base,label)
 %% The override must carry every workbook column; it may carry more --
 %% the optional columns table_value reads with a default (meteo_file,
 %% meteo_start, meteo_end, transient_start, transient_end, forcing_file,
-%% id_location, the InitExch* observation targets) are exactly what a
+%% id_location) are exactly what a
 %% caller supplies this way when the workbook row does not.
 if ~istable(override) || height(override) ~= 1 || ...
         ~all(ismember(base.Properties.VariableNames,override.Properties.VariableNames))

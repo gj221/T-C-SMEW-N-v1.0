@@ -94,6 +94,11 @@ for i = 1:numel(widths)
     g = Field_Topographic_Attributes(dem);
     [X,Y] = meshgrid(g.x,g.y);
     in = inpolygon(X,Y,poly_x,poly_y) & isfinite(g.Z);
+    if nnz(in) == 0
+        rows(i,1) = h; rows(i,8) = 0; rows(i,14) = toc(t0);
+        fprintf('  h = %5.2f m: no DEM pixel centre inside the polygon; row left NaN\n',h);
+        continue
+    end
     slope = g.slope(in); twi = g.twi(in); curv = abs(g.curv_plan(in)); z = g.Z(in);
     twi = twi(isfinite(twi));
     rows(i,1) = h;
@@ -118,7 +123,7 @@ for i = 1:numel(widths)
         grid_note = sprintf('%d cells, %d outlet(s), %.0f%% drains', ...
             rows(i,9),rows(i,10),100*rows(i,11));
     catch ME
-        if contains(ME.message,'more than 95%')
+        if strcmp(ME.identifier,'Build_Projected_Field_Topology:CoverageBelowTarget')
             grid_note = 'no grid (coverage rule)';
         else
             rethrow(ME);
@@ -248,7 +253,10 @@ result_file = Run_One_Subfield(opt.RunId,'FieldShapefile',shape_file, ...
     'GridCellSizeM',h,'FieldDEM',dem_source,'DEMResolutionM',h, ...
     'NDays',opt.RedistributionDays,'SaveResults',true);
 S = load(result_file,'Domain','V');
-lat = sum(abs(S.Domain.lateral.water_buf_to_main),'omitnan');   % m3 moved
+%% total subsurface lateral throughput: the sum over faces and hours of
+%% |Q_edge| (the buffer/main ledger is zero on a polygon grid, which has
+%% no buffer)
+lat = sum(S.Domain.lateral.water_edge_abs_m3,'omitnan');          % m3 moved
 lat_per_area_day = lat/max(S.Domain.area_m2,eps)/opt.RedistributionDays;
 Vend = squeeze(sum(S.V(end,:,:),2));                          % mm per cell
 [~,~,ff] = Field_Aggregation_Areas(topo);

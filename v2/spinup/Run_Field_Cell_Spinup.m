@@ -1,12 +1,27 @@
 function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_file,varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Run one independent automatic spin-up for every cell in one polygon.
+%%
+%% Cluster modes (one SLURM array task per cell, see v2/cluster):
+%%   'PlanOnly',true      write spinup_plan.csv and the array-index lists
+%%                        (all cells; the RF subsample; the RF remainder)
+%%   'CellIndex',k        spin up ONLY cell k (index into the polygon's
+%%                        cells): a full spin-up for Method per_cell or an
+%%                        RF-subsample cell, the RF-seeded short spin-up
+%%                        otherwise (which needs every subsample cell's
+%%                        full state on disk already); writes
+%%                        cellstate_<id>.mat and returns its path
+%%   'AssembleOnly',true  gather every cellstate_<id>.mat into the
+%%                        validated CellBGStates.mat the transient run reads
+%% A finished cell_<id>_BG.mat in the output directory is reused rather
+%% than recomputed, so an interrupted run or a cluster array resumes.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'GridCellSizeM',[],'CaseNumber',5,'OutputFile','','DryRun',false, ...
     'Method','per_cell','FieldDEM','','SubsampleFraction',0.12, ...
-    'MinCoverage',[],'MODParamColumns',[]);
+    'MinCoverage',[],'MODParamColumns',[],'CellIndex',[],'PlanOnly',false, ...
+    'AssembleOnly',false,'RFOptions',{{}});
 if mod(numel(varargin),2) ~= 0
     error('Run_Field_Cell_Spinup:BadOptions','Options must be name/value pairs.');
 end
@@ -73,6 +88,18 @@ if ~isempty(opt.MODParamColumns)
             'MODParamColumns must be a scalar struct of column values.');
     end
     names = fieldnames(opt.MODParamColumns);
+    %% A column the spin-up never reads (a misspelling) would otherwise be
+    %% accepted silently and the row would run without it.
+    known = [MOD.Properties.VariableNames, {'id_location','forcing_file', ...
+        'transient_start','transient_end','scenario_transient','source_data_file', ...
+        'meteo_file','rain_chem_file','meteo_start','meteo_end','rain_chem_start', ...
+        'rain_chem_end'}];
+    unknown = names(~ismember(names,known));
+    if ~isempty(unknown)
+        error('Run_Field_Cell_Spinup:UnknownMODParamColumn', ...
+            'MODParamColumns %s: not a workbook column nor a spin-up column the spin-up reads.', ...
+            strjoin(unknown,', '));
+    end
     for c = 1:numel(CellInputs)
         for k = 1:numel(names)
             v = opt.MODParamColumns.(names{k});
@@ -98,9 +125,6 @@ end
 if opt.DryRun
     return
 end
-if ~exist(output_directory,'dir')
-    mkdir(output_directory);
-end
 
 if ~any(strcmpi(opt.Method,{'per_cell','rf'}))
     error('Run_Field_Cell_Spinup:BadMethod', ...
@@ -123,38 +147,271 @@ if strcmpi(opt.Method,'rf')
     end
 end
 
+%% The RF subsample is decided once and deterministically (same seed,
+%% same grid), so the plan, every array task and the assembly agree on
+%% which cells are spun up in full.
+sub_idx = [];
 if strcmpi(opt.Method,'rf')
     dem = Load_Field_DEM(char(opt.FieldDEM),topo, ...
         'OutResolutionM',dem_resolution(opt.GridCellSizeM,topo));
     topo = Attach_Topography_To_Topology(topo,dem);
     [sub_idx,~] = Select_Topographic_Subsample(topo,resolved,opt.SubsampleFraction);
-    sub_states = repmat(run_cell_spinup(sub_idx(1)), numel(sub_idx), 1);
-    for s = 2:numel(sub_idx); sub_states(s) = run_cell_spinup(sub_idx(s)); end
+    sub_idx = sub_idx(:);
+    %% The forest's k-fold estimate needs at least 2 x KFold training
+    %% cells; find that out now, before any full spin-up is spent.
+    kfold = 5;
+    for i = 1:2:numel(opt.RFOptions)
+        if strcmpi(char(opt.RFOptions{i}),'KFold'); kfold = opt.RFOptions{i+1}; end
+    end
+    if numel(sub_idx) < 2*kfold
+        error('Run_Field_Cell_Spinup:SubsampleTooSmall', ...
+            ['SubsampleFraction %.2f gives %d subsample cells on %d; the forest ' ...
+             'needs at least 2 x KFold = %d. Raise SubsampleFraction or pass ' ...
+             'RFOptions {KFold,k}.'],opt.SubsampleFraction,numel(sub_idx), ...
+            topo.N_cells,2*kfold);
+    end
+end
+
+if opt.PlanOnly
+    state_file = write_plan(output_directory,topo,resolved,opt.Method,sub_idx);
+    return
+end
+
+if opt.AssembleOnly
+    [CellBGStates,rf_report] = assemble_cell_states(output_directory,topo, ...
+        resolved,MOD,ERW,opt.Method);
+    resolved.spinup_method = repmat(string(opt.Method),topo.N_cells,1);
+    save_state_file(state_file,CellBGStates,resolved,rf_report);
+    stop_on_failed_cells(rf_report,resolved,state_file);
+    fprintf('Saved %d assembled cell spin-up states (%s): %s\n', ...
+        topo.N_cells,opt.Method,state_file);
+    return
+end
+
+if ~isempty(opt.CellIndex)
+    k = opt.CellIndex;
+    if ~(isnumeric(k) && isscalar(k) && isfinite(k) && k == fix(k) && ...
+            k >= 1 && k <= topo.N_cells)
+        error('Run_Field_Cell_Spinup:BadCellIndex', ...
+            'CellIndex must be an integer in 1..%d.',topo.N_cells);
+    end
+    if strcmpi(opt.Method,'rf') && ~ismember(k,sub_idx)
+        %% A worker never runs a full spin-up it was not assigned: every
+        %% subsample cell's full state must already be on disk (the
+        %% subsample array tasks), and is reused from there.
+        ready = arrayfun(@(c) isfile(spinup_state_path(output_directory, ...
+            resolved.cell_id(c))),sub_idx);
+        if ~all(ready)
+            error('Run_Field_Cell_Spinup:SubsampleNotReady', ...
+                ['RF cell %d needs the full spin-up state of every subsample ' ...
+                 'cell; missing cell id(s) %s. Run the subsample array first.'], ...
+                k,mat2str(resolved.cell_id(sub_idx(~ready)).'));
+        end
+        sub_states = repmat(run_cell_spinup(sub_idx(1)),numel(sub_idx),1);
+        for si = 2:numel(sub_idx); sub_states(si) = run_cell_spinup(sub_idx(si)); end
+        [st,rep] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs, ...
+            sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
+            'OutputDirectory',output_directory,'CellIndex',k, ...
+            'RFOptions',opt.RFOptions);
+        method = rep.method_per_cell(1);
+    else
+        st = stamp(run_cell_spinup(k),"full",false);
+        method = "full";
+    end
+    state_file = write_cell_state(output_directory,k,resolved.cell_id(k),st,method);
+    fprintf('Saved cell %d (id %d, %s): %s\n',k,resolved.cell_id(k),method,state_file);
+    return
+end
+
+if strcmpi(opt.Method,'rf')
+    sub_states = repmat(run_cell_spinup(sub_idx(1)),numel(sub_idx),1);
+    for si = 2:numel(sub_idx); sub_states(si) = run_cell_spinup(sub_idx(si)); end
     [CellBGStates,rf_report] = Reconstruct_Cell_Pools_RF(topo,resolved, ...
         CellInputs,sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
-        'OutputDirectory',output_directory);
+        'OutputDirectory',output_directory,'RFOptions',opt.RFOptions);
     resolved.spinup_method = repmat("rf",topo.N_cells,1);
 else
     state_cells = cell(topo.N_cells,1);
     for c = 1:topo.N_cells
-        state_cells{c} = run_cell_spinup(c);
+        state_cells{c} = stamp(run_cell_spinup(c),"full",false);
     end
     CellBGStates = vertcat(state_cells{:});
-    rf_report = struct('method','per_cell'); %#ok<NASGU>
+    rf_report = struct('method','per_cell');
 end
-
-temporary_file = [tempname(output_directory) '.mat'];
-cleanup = onCleanup(@() delete_if_present(temporary_file));
-save(temporary_file,'CellBGStates','resolved','rf_report','-v7.3');
-movefile(temporary_file,state_file,'f');
-clear cleanup
+save_state_file(state_file,CellBGStates,resolved,rf_report);
+stop_on_failed_cells(rf_report,resolved,state_file);
 fprintf('Saved %d validated cell spin-up states (%s): %s\n', ...
     topo.N_cells,opt.Method,state_file);
 end
 
 %% =======================================================================
+function stop_on_failed_cells(rf_report,resolved,state_file)
+%% A cell that could not be spun up holds a neighbour's state flagged
+%% unconverged; the transient loader rejects such a file, so the launcher
+%% must not announce it as validated.  The file is kept for inspection.
+if isfield(rf_report,'n_failed') && rf_report.n_failed > 0
+    failed_ids = resolved.cell_id(rf_report.method_per_cell == "failed");
+    error('Run_Field_Cell_Spinup:CellsFailed', ...
+        ['%d cell(s) could not be spun up (cell id(s) %s); %s holds their ' ...
+         'flagged neighbour states and cannot be used by the transient run.'], ...
+        rf_report.n_failed,mat2str(failed_ids(:).'),state_file);
+end
+end
+
+%% =======================================================================
+function save_state_file(state_file,CellBGStates,resolved,rf_report) %#ok<INUSD>
+output_directory = fileparts(state_file);
+temporary_file = [tempname(output_directory) '.mat'];
+cleanup = onCleanup(@() delete_if_present(temporary_file));
+save(temporary_file,'CellBGStates','resolved','rf_report','-v7.3');
+movefile(temporary_file,state_file,'f');
+clear cleanup
+end
+
+%% =======================================================================
+function plan_file = write_plan(output_directory,topo,resolved,method,sub_idx)
+%% spinup_plan.csv (one row per cell) and the SLURM --array index lists:
+%% all cells, the RF subsample (full spin-ups), the RF remainder
+%% (seeded short spin-ups, run after the subsample array has finished).
+N = topo.N_cells;
+is_sub = false(N,1); is_sub(sub_idx) = true;
+plan = table((1:N).',resolved.cell_id(:),is_sub, ...
+    'VariableNames',{'cell_index','cell_id','is_subsample'});
+plan.method = repmat("full",N,1);
+if strcmpi(method,'rf'); plan.method(~is_sub) = "rf_seed"; end
+plan_file = fullfile(output_directory,'spinup_plan.csv');
+writetable(plan,plan_file);
+write_index_list(fullfile(output_directory,'array_indices_all.txt'),1:N);
+write_index_list(fullfile(output_directory,'array_indices_subsample.txt'),find(is_sub));
+write_index_list(fullfile(output_directory,'array_indices_rf.txt'),find(~is_sub));
+fprintf(['Run_Field_Cell_Spinup: plan for %d cells (%s; %d full-spin-up ' ...
+    'subsample cells) written to %s\n'],N,method,nnz(is_sub),plan_file);
+end
+
+function write_index_list(file_name,idx)
+idx = idx(:).';
+if isempty(idx)
+    txt = '';
+elseif isequal(idx,idx(1):idx(end))
+    txt = sprintf('%d-%d',idx(1),idx(end));
+else
+    txt = strjoin(arrayfun(@(i) sprintf('%d',i),idx,'UniformOutput',false),',');
+end
+fid = fopen(file_name,'w'); fprintf(fid,'%s\n',txt); fclose(fid);
+end
+
+%% =======================================================================
+function file_name = cell_state_path(output_directory,cell_id)
+file_name = fullfile(output_directory,sprintf('cellstate_%04d.mat',cell_id));
+end
+
+function file_name = spinup_state_path(output_directory,cell_id)
+%% The spin-up's own output file for a cell (BG_OUTPUT_FILE).
+file_name = fullfile(output_directory,sprintf('cell_%04d_BG.mat',cell_id));
+end
+
+function file_name = write_cell_state(output_directory,cell_index,cell_id,st,method) %#ok<INUSD>
+file_name = cell_state_path(output_directory,cell_id);
+temporary_file = [tempname(output_directory) '.mat'];
+cleanup = onCleanup(@() delete_if_present(temporary_file));
+method = string(method); %#ok<NASGU>
+save(temporary_file,'st','method','cell_id','cell_index','-v7.3');
+movefile(temporary_file,file_name,'f');
+clear cleanup
+end
+
+%% =======================================================================
+function [CellBGStates,rf_report] = assemble_cell_states(output_directory, ...
+    topo,resolved,MOD,ERW,method)
+%% Every cell's cellstate_<id>.mat, validated, identity-checked against
+%% the resolved inputs, and made a uniform struct array.
+N = topo.N_cells;
+states = cell(N,1); methods = strings(N,1);
+%% completeness first: an incomplete array is the common case and the
+%% message should say which cells are missing, not fail on a state
+present = arrayfun(@(c) isfile(cell_state_path(output_directory,resolved.cell_id(c))),1:N);
+missing = resolved.cell_id(~present);
+if ~isempty(missing)
+    error('Run_Field_Cell_Spinup:CellStatesMissing', ...
+        '%d of %d cell states are missing (cell id(s) %s); the array is not complete.', ...
+        numel(missing),N,mat2str(missing(:).'));
+end
+for c = 1:N
+    f = cell_state_path(output_directory,resolved.cell_id(c));
+    S = load(f,'st','method','cell_id');
+    if S.cell_id ~= resolved.cell_id(c) || ~isfield(S.st,'cell_id') || ...
+            S.st.cell_id ~= resolved.cell_id(c)
+        error('Run_Field_Cell_Spinup:CellStateIdentity', ...
+            '%s holds cell %d, expected %d.',f,S.st.cell_id,resolved.cell_id(c));
+    end
+    Validate_BG_State_For_Transient(S.st,f);
+    states{c} = S.st; methods(c) = string(S.method);
+end
+CellBGStates = harmonise_states(states);
+%% The identity check the transient run will make, made now.
+Configure_Cell_Agronomic_Inputs(MOD,ERW,resolved,CellBGStates);
+failed = arrayfun(@(st) isfield(st,'reconstruction_failed') && ...
+    ~isempty(st.reconstruction_failed) && logical(st.reconstruction_failed),CellBGStates);
+rf_report = struct('method',method,'assembled',true, ...
+    'method_per_cell',methods,'n_full',nnz(methods == "full"), ...
+    'n_rf_seed',nnz(methods == "rf_seed"),'n_fallback',nnz(methods == "fallback"), ...
+    'n_failed',nnz(failed));
+if any(failed)
+    warning('Run_Field_Cell_Spinup:AssembledFailures', ...
+        '%d assembled cell(s) are flagged reconstruction_failed (ids %s).', ...
+        nnz(failed),mat2str(resolved.cell_id(failed).'));
+end
+fprintf('Run_Field_Cell_Spinup: assembled %d cells (%d full, %d RF-seeded, %d fallback, %d failed)\n', ...
+    N,rf_report.n_full,rf_report.n_rf_seed,rf_report.n_fallback,rf_report.n_failed);
+end
+
+function states = harmonise_states(cells)
+%% States written by different paths may differ in optional fields; give
+%% every one the union so they form one struct array.
+names = {};
+for c = 1:numel(cells); names = union(names,fieldnames(cells{c}),'stable'); end
+for c = 1:numel(cells)
+    for k = 1:numel(names)
+        if ~isfield(cells{c},names{k}); cells{c}.(names{k}) = []; end
+    end
+    cells{c} = orderfields(cells{c},names);
+end
+states = vertcat(cells{:});
+end
+
+%% =======================================================================
+function st = stamp(st,method,failed)
+st.reconstruction_method = string(method);
+st.reconstruction_failed = logical(failed);
+end
+
+%% =======================================================================
 function st = full_cell_spinup(output_directory, cell_id, case_number, cell_inputs)
-cell_file = fullfile(output_directory,sprintf('cell_%03d_BG.mat',cell_id));
+cell_file = spinup_state_path(output_directory,cell_id);
+if isfile(cell_file)
+    %% A finished, validated state of this cell -- an earlier run, or a
+    %% cluster array task -- is reused: the spin-up is deterministic for
+    %% the same inputs, and this is what lets an array feed the RF step.
+    %% A state written for other inputs is discarded together with its
+    %% phase checkpoints, which would otherwise resume the stale run.
+    try
+        st = load_bg_state(cell_file);
+        Validate_BG_State_For_Transient(st,cell_file);
+        if isfield(st,'cell_id') && isfield(st,'cell_agronomic_identity') && ...
+                st.cell_id == cell_id && ...
+                strcmp(char(string(st.cell_agronomic_identity)),cell_inputs.agronomic_identity)
+            fprintf('  cell %d: reusing validated spin-up state %s\n',cell_id,cell_file);
+            return
+        end
+        fprintf('  cell %d: existing state was made for other inputs; spinning up afresh\n',cell_id);
+    catch ME
+        fprintf('  cell %d: existing state unusable (%s); spinning up afresh\n',cell_id,ME.message);
+    end
+    for tag = {'p1_avgs','p2_inprog','p2_standalone','p3_loop'}
+        delete_if_present(spinup_phase_checkpoint_filename(cell_file,tag{1}));
+    end
+    delete_if_present(cell_file);
+end
 settings = struct('NN_case_study_ERW_MOD',case_number, ...
     'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
     'SAVE_RESULTS',0,'MOD_PARAM_override',cell_inputs.MOD_PARAM, ...
