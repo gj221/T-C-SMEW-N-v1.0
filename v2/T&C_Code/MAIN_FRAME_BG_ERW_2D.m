@@ -453,6 +453,17 @@ if any(~isfinite(lateral_fraction(:))) || any(lateral_fraction(:) < 0) || ...
     error('MAIN_FRAME_BG_ERW_2D:BadMobileFraction', ...
         'Biogeo_Leakage mobility fractions must be finite and within [0,1].');
 end
+%% Flux tracking for the field spin-up (Lian et al. 2025, Fig. 3c): the
+%% lateral exchange of the cells named in LATERAL_TRACK.cells is recorded
+%% (Lateral_Track_Record), so the spin-up can replay each of them in a
+%% plot-scale column.  No other run defines LATERAL_TRACK.
+lateral_track_on = N_col > 1 && exist('LATERAL_TRACK','var') && ...
+    isstruct(LATERAL_TRACK) && isfield(LATERAL_TRACK,'cells') && ...
+    ~isempty(LATERAL_TRACK.cells);
+if lateral_track_on
+    lateral_track = Lateral_Track_Record('init',[],LATERAL_TRACK.cells,N_col, ...
+        NN,NNd,ms,lateral_species,lateral_pool_idx,lateral_fraction,Date);
+end
 
 %% ========================================================================
 %% NUMERICAL OPTIONS  (identical to the single-column frame)
@@ -747,6 +758,12 @@ ERW_execution_identity = sprintf( ...
 ERW_ckpt_runtime_identity = strjoin( ...
     [{ERW_forcing_identity,ERW_topology_identity,ERW_execution_identity} ...
      ERW_runtime_parts],'|');
+if lateral_track_on
+    %% A tracking run records its own set of cells, with the ERW chemistry
+    %% off; it may resume no other run's checkpoint, nor another its own.
+    ERW_ckpt_runtime_identity = sprintf('%s|lateral_track=%s;opt_erw=%d', ...
+        ERW_ckpt_runtime_identity,mat2str(LATERAL_TRACK.cells(:).'),OPT_ERW);
+end
 ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     ERW_ckpt_runtime_identity, ...
     fullfile(cd, '*.m'), ...
@@ -904,24 +921,12 @@ for i = i_resume:NN
     SvF_c  = arrayfun(@(c) PAR{c}.SvF, (1:N_col).');
     if topography_attached
         SvF_c = topo.cell_svf(:);
-        [h_S_i,~,zeta_S_i] = SetSunVariables( ...
-            Datam(i,:),DeltaGMT,Lon,Lat,topo_t_bef,topo_t_aft);
-        beta = atan(topo.cell_slope(:));
-        asp  = topo.cell_aspect_deg(:)*pi/180;
-        if isfinite(h_S_i) && sin(h_S_i) > 0.10 && ...
-                (SAB1(i)+SAB2(i)+PARB(i)) > 0
-            cos_fst = cos(beta)*sin(h_S_i) + ...
-                sin(beta).*cos(h_S_i).*cos(zeta_S_i - asp);
-            beam_factor = max(0,cos_fst)./sin(h_S_i);   %% ~1 on flat ground
-        else
-            beam_factor = ones(N_col,1);
-        end
-        diff_gain = (1-SvF_c)*0.15;   %% terrain-reflected fraction of global
-        SAB1_c = SAB1(i)*beam_factor;  SAB2_c = SAB2(i)*beam_factor;
-        PARB_c = PARB(i)*beam_factor;
-        SAD1_c = SAD1(i)*SvF_c + diff_gain*(SAB1(i)+SAD1(i));
-        SAD2_c = SAD2(i)*SvF_c + diff_gain*(SAB2(i)+SAD2(i));
-        PARD_c = PARD(i)*SvF_c + diff_gain*(PARB(i)+PARD(i));
+        %% One definition with the field spin-up's replay of a single cell
+        %% (Lateral_Replay_Prepare), so a replayed cell sees this radiation.
+        [SAB1_c,SAB2_c,SAD1_c,SAD2_c,PARB_c,PARD_c] = Topographic_Radiation_Projection( ...
+            SAB1(i),SAB2(i),SAD1(i),SAD2(i),PARB(i),PARD(i),Datam(i,:), ...
+            DeltaGMT,Lon,Lat,topo_t_bef,topo_t_aft, ...
+            topo.cell_slope,topo.cell_aspect_deg,topo.cell_svf);
     end
 
     %% ------------------------------------------------------------------
@@ -932,6 +937,9 @@ for i = i_resume:NN
         [jDay_i] = JULIAN_DAY(Datam(i,:));
         [~,~,~,~,~,L_day_j] = SetSunVariables(Datam(i,:),DeltaGMT,Lon,Lat,t_bef,t_aft);
         jDay(j) = jDay_i; L_day(j) = L_day_j; %#ok<SAGROW>
+        if lateral_track_on
+            lateral_track = Lateral_Track_Record('day',lateral_track,j,Date(i));
+        end
 
         for c = 1:N_col
             p = PAR{c};
@@ -1307,6 +1315,11 @@ for i = i_resume:NN
         %% and routed after the lateral block (Surface_Runoff_Routing).
     end
 
+    if lateral_track_on
+        lateral_track = Lateral_Track_Record('runon',lateral_track,i, ...
+            reshape(q_runon(i,1,:),N_col,1));
+    end
+
     %% ------------------------------------------------------------------
     %% LATERAL COUPLING  --  operator-split, after every column has
     %% taken its vertical step.
@@ -1341,6 +1354,13 @@ for i = i_resume:NN
         [theta_new, dM_cell, ldiag, T_new, Oice_new] = Lateral_Routing_Step( ...
             topo,theta_cell,C_aq,soilpar_cell,Zlayer_m,dth,thermal, ...
             bio_active_fraction);
+        if lateral_track_on
+            lateral_track = Lateral_Track_Record('subsurface',lateral_track,i,j, ...
+                struct('topo',topo,'P_cells',P_cells,'dtheta_water',ldiag.dtheta_water, ...
+                'dM_edge',ldiag.dM_edge,'Q_solute',ldiag.Q_solute_edge, ...
+                'theta_before',theta_cell,'A_cell',A_cell,'Zlayer_m',Zlayer_m, ...
+                'active_fraction',bio_active_fraction,'dth',dth));
+        end
 
         %% Write the redistributed moisture back, keeping V consistent
         %% with O through the column's own residual water content.
@@ -1443,6 +1463,13 @@ for i = i_resume:NN
             %% Only what infiltrated out of last step's run-on joins the
             %% soil pools; the routed load stays on the surface, with its
             %% provenance.
+            if lateral_track_on
+                lateral_track = Lateral_Track_Record('surface',lateral_track,j, ...
+                    struct('P_cells',P_cells,'pond_in_area',pond_in_area, ...
+                    'soil_removed_area',soil_removed_area,'Rd_mm',Rd_c, ...
+                    'theta',theta_new,'Zlayer_m',Zlayer_m, ...
+                    'active_fraction',bio_active_fraction));
+            end
             P_cells = Biogeo_Lateral_Pools(P_cells, pond_in_area - soil_removed_area);
             P(j,:,:) = reshape(P_cells.',1,79,N_col);
             pond_mass_area       = delivered_area;

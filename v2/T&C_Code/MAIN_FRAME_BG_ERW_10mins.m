@@ -320,6 +320,21 @@ else
     end
     Wlevm1 = Rd(1)+Rh(1);
 end
+%%% T&C-SMEW-N v1.0 field spin-up (Lian et al. 2025 flux tracking): a cell
+%%% may replay the lateral exchange and the terrain radiation recorded for it
+%%% in the 2-D field run (Lateral_Replay_*).  No other run defines
+%%% LATERAL_REPLAY, and then nothing below changes.
+lateral_replay_on = exist('LATERAL_REPLAY','var') && isstruct(LATERAL_REPLAY) && ...
+    ~isempty(fieldnames(LATERAL_REPLAY));
+if lateral_replay_on
+    if OPT_WET == 1
+        error('MAIN_FRAME:LateralReplayWetland', ...
+            'A lateral replay cannot run with the standing-water option.');
+    end
+    [lat_rep,SAB1,SAB2,SAD1,SAD2,PARB,PARD,SvF] = Lateral_Replay_Prepare( ...
+        LATERAL_REPLAY,Date,Datam,NN,NNd,ms,SAB1,SAB2,SAD1,SAD2,PARB,PARD,SvF, ...
+        DeltaGMT,Lon,Lat);
+end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -419,6 +434,9 @@ for i=2:NN
                 B_IO,Datam(i,:),FireA,0,...
                 OPT_ERW,OPT_BfixN,f_anaer_bio,WFPS_bio, ...
                 biogeo_exchange_scheme,[]);
+            if lateral_replay_on
+                [P(j,:),lat_rep] = Lateral_Replay_Solute(lat_rep,j,P(j,:));
+            end
 
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -687,6 +705,9 @@ for i=2:NN
         end
         NetWatWet(i) = q_runon(i) - Wlevm1 ;
     end
+    if lateral_replay_on
+        q_runon(i) = lat_rep.q_runon(i);   %% the field run's routed run-on
+    end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -731,6 +752,10 @@ for i=2:NN
         SPAR,SN,OPT_VegSnow,OPT_SoilTemp,OPT_PlantHydr,Opt_CR,Opt_ST,OPT_SM,OPT_STh,OPT_FR_SOIL,OPT_PH);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%
     %%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    if lateral_replay_on
+        [O(i,:),V(i,:),lat_rep] = Lateral_Replay_Water(lat_rep,i,O(i,:),Oice(i,:),Ohy,Osat,dz);
+    end
 
     %% ERW module
     if OPT_ERW == 1 
@@ -1195,6 +1220,9 @@ for i=2:NN
     %%% v-coordinate
     CK1(i) = f(i)*dth*Asur*Ared + sum(V(i-1,:) - V(i,:))*Asur*Ared + sum(Vice(i-1,:) - Vice(i,:))*Asur*Ared  - EG(i)*dth - Lk(i)*dth ...
         - sum(Qi_out(i,:))*dth -Rd(i) -sum(Jsx_L(i,:)).*dth -sum(Jsx_H(i,:)).*dth  + sum(Qi_in(i,:))*dth  ;
+    if lateral_replay_on
+        CK1(i) = CK1(i) + lat_rep.water_mm(i)*Asur*Ared;
+    end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 end
@@ -1229,6 +1257,9 @@ Ck = sum((Pr_liq(2:end)+Pr_sno(2:end))*dth)+ sum(IrD*dth) + sum(dV)...
     - sum(EICE*dth) + (IP_wc(1) -IP_wc(end)) + (ICE(1) -ICE(end)) + (WAT(1) -WAT(end)) + (FROCK(1) -FROCK(end)) + ...
     Asur*( (Vx_H(1,:)-Vx_H(end,:)) + (Vl_H(1,:)-Vl_H(end,:))  + (Vx_L(1,:)-Vx_L(end,:)) + (Vl_L(1,:)-Vl_L(end,:)) )*Ccrown' ; %%%[mm]
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+if lateral_replay_on
+    Ck = Ck + sum(lat_rep.water_mm)*Asur*Ared;
+end
 disp(Ck);
 disp(mean(DQ));
 % T_H, T_L  EG, EIn_urb, EIn_rock, [mm/h]

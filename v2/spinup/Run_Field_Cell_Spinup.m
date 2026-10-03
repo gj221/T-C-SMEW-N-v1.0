@@ -1,27 +1,60 @@
 function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_file,varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Run one independent automatic spin-up for every cell in one polygon.
+%% Spin up the soil biogeochemistry of every cell in one field polygon.
 %%
-%% Cluster modes (one SLURM array task per cell, see v2/cluster):
-%%   'PlanOnly',true      write spinup_plan.csv and the array-index lists
-%%                        (all cells; the RF subsample; the RF remainder)
-%%   'CellIndex',k        spin up ONLY cell k (index into the polygon's
-%%                        cells): a full spin-up for Method per_cell or an
-%%                        RF-subsample cell, the RF-seeded short spin-up
-%%                        otherwise (which needs every subsample cell's
-%%                        full state on disk already); writes
-%%                        cellstate_<id>.mat and returns its path
-%%   'AssembleOnly',true  gather every cellstate_<id>.mat into the
-%%                        validated CellBGStates.mat the transient run reads
-%% A finished cell_<id>_BG.mat in the output directory is reused rather
-%% than recomputed, so an interrupted run or a cluster array resumes.
+%% Method 'flux_tracking' (default): the T&C-BG-2D spin-up of Lian et al.
+%% (2025, WRR 61, e2025WR040260, section 2.3 and Fig. 3), adapted for ERW.
+%%   1 class seeds    one plot-scale spin-up per land cover x soil class
+%%                    (Run_BG_Spinup: long-term mean forcing to steady
+%%                    state, then the coupled ring to dynamic steady state)
+%%                    on the class's most typical cell, assigned to every
+%%                    cell of the class (Fig. 3a-b);
+%%   2 tracking       the whole field in 2-D from those seeds over the
+%%                    spin-up's meteorological ring and handoff extension,
+%%                    recording the lateral water and solute exchange of a
+%%                    topographically stratified ~10 % subsample
+%%                    (Run_Field_Lateral_Tracking, Fig. 3c);
+%%   3 replays        each subsample cell's own plot-scale spin-up with that
+%%                    exchange replayed in every phase, to its dynamic
+%%                    steady state (Run_BG_Spinup, LATERAL_REPLAY_FILE;
+%%                    Fig. 3d);
+%%   4 reconstruction a random forest trained on the replayed cells predicts
+%%                    every other cell's conserved pool totals from its
+%%                    terrain and soil (Reconstruct_Cell_Pools_RF; Fig. 3e).
+%% Adapted for ERW: the ERW chemistry is off in every stage, as in every
+%% spin-up phase of v0.9.  The exchanger and pore water are never spun up:
+%% every cell, replayed or reconstructed, is seeded at the handoff from its
+%% own soil chemistry (bulk pH, CEC, measured base saturation) through
+%% v0.9's seed path and must pass its own ERW charge-balance handoff gate.
+%% The forest predicts biological and nutrient pools only.
+%%
+%% Method 'per_cell': every cell's own plot-scale spin-up without lateral
+%% exchange (the 1-D reference).
+%%
+%% Stages, one SLURM step or array each (v2/cluster):
+%%   'Stage','plan'        spinup_plan.csv and the array-index lists
+%%   'Stage','class_seed'  'ClassIndex',k: the seed of class k
+%%   'Stage','track'       the 2-D tracking run (every class seed on disk)
+%%   'Stage','replay'      'CellIndex',c: subsample cell c's replay
+%%   'Stage','reconstruct' 'CellIndex',c: cell c from the forest (every
+%%                         replay on disk)
+%%   'Stage','cell'        per_cell: 'CellIndex',c, cell c's spin-up
+%%   'Stage','assemble'    every cellstate_<id>.mat into the validated
+%%                         CellBGStates.mat the transient run reads
+%% Without a Stage every stage runs here in turn.  'PlanOnly',true and
+%% 'AssembleOnly',true are the plan and assemble stages; 'CellIndex' alone
+%% is the per_cell stage, or the replay or reconstruct stage of that cell.
+%% Finished work (a class seed, a tracking segment, a replay, a
+%% reconstruction) is reused under its provenance key, so an interrupted
+%% stage or array resumes.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'GridCellSizeM',[],'CaseNumber',5,'OutputFile','','DryRun',false, ...
-    'Method','per_cell','FieldDEM','','SubsampleFraction',0.12, ...
-    'MinCoverage',[],'MODParamColumns',[],'CellIndex',[],'PlanOnly',false, ...
-    'AssembleOnly',false,'RFOptions',{{}});
+    'Method','flux_tracking','FieldDEM','','SubsampleFraction',0.10, ...
+    'MinCoverage',[],'MODParamColumns',[],'CellIndex',[],'ClassIndex',[], ...
+    'Stage','','PlanOnly',false,'AssembleOnly',false,'RFOptions',{{}}, ...
+    'ClassColumns',{{}});
 if mod(numel(varargin),2) ~= 0
     error('Run_Field_Cell_Spinup:BadOptions','Options must be name/value pairs.');
 end
@@ -43,6 +76,17 @@ if ~(isnumeric(opt.CaseNumber) && isscalar(opt.CaseNumber) && ...
         isfinite(opt.CaseNumber) && opt.CaseNumber == fix(opt.CaseNumber) && ...
         opt.CaseNumber >= 1)
     error('Run_Field_Cell_Spinup:BadOptions','CaseNumber must be a positive integer.');
+end
+opt.Method = lower(char(opt.Method));
+if strcmp(opt.Method,'rf')
+    error('Run_Field_Cell_Spinup:BadMethod', ...
+        ['Method ''rf'' is superseded by ''flux_tracking'' (Lian et al. 2025: ' ...
+         'class seeds, a 2-D tracking run, replays of the tracked cells and the ' ...
+         'random forest for the rest).']);
+end
+if ~any(strcmp(opt.Method,{'flux_tracking','per_cell'}))
+    error('Run_Field_Cell_Spinup:BadMethod', ...
+        'Method must be ''flux_tracking'' or ''per_cell''.');
 end
 
 spinup_directory = fileparts(mfilename('fullpath'));
@@ -125,160 +169,364 @@ end
 if opt.DryRun
     return
 end
+if ~exist(output_directory,'dir'); mkdir(output_directory); end
 
-if ~any(strcmpi(opt.Method,{'per_cell','rf'}))
-    error('Run_Field_Cell_Spinup:BadMethod', ...
-        'Method must be ''per_cell'' or ''rf''.');
-end
+stage = resolve_stage(opt);
+cluster_step = ~isempty(stage);
+N = topo.N_cells;
 
-run_cell_spinup = @(c) full_cell_spinup(output_directory,resolved.cell_id(c), ...
-    opt.CaseNumber,CellInputs(c));
-
-cluster_step = ~isempty(opt.CellIndex) || opt.PlanOnly || opt.AssembleOnly;
-if strcmpi(opt.Method,'rf')
-    if exist('TreeBagger','file') ~= 2 && cluster_step
-        %% An array step cannot switch method on its own: the plan and the
-        %% other tasks would still be running the RF path.
-        error('Run_Field_Cell_Spinup:NoRFToolbox', ...
-            ['Method=''rf'' needs TreeBagger (Statistics and Machine Learning ' ...
-             'Toolbox) on every node that runs a step; use Method=''per_cell'' ' ...
-             'for the whole array instead.']);
-    elseif exist('TreeBagger','file') ~= 2
-        warning('Run_Field_Cell_Spinup:NoRFToolbox', ...
-            ['TreeBagger unavailable; falling back to Method=''per_cell''. ' ...
-             'Install the Statistics and Machine Learning Toolbox for the ' ...
-             'RF reconstruction.']);
-        opt.Method = 'per_cell';
-    elseif isempty(opt.FieldDEM)
-        error('Run_Field_Cell_Spinup:RFNeedsDEM', ...
-            'Method=''rf'' needs a FieldDEM to attach topography for the RF covariates.');
+%% ---- the flux-tracking design: terrain, subsample, classes -----------
+track_idx = []; class_of = ones(N,1); class_rep = zeros(0,1);   % per_cell has no classes
+if strcmp(opt.Method,'flux_tracking')
+    if isempty(opt.FieldDEM)
+        error('Run_Field_Cell_Spinup:FluxTrackingNeedsDEM', ...
+            ['Method ''flux_tracking'' needs a FieldDEM: the lateral exchange it ' ...
+             'tracks and the forest''s covariates come from the terrain. Use ' ...
+             'Method ''per_cell'' for a spin-up without lateral exchange.']);
     end
-end
-
-%% The RF subsample is decided once and deterministically (same seed,
-%% same grid), so the plan, every array task and the assembly agree on
-%% which cells are spun up in full.
-sub_idx = [];
-if strcmpi(opt.Method,'rf')
+    if any(strcmp(stage,{'','reconstruct'})) && exist('TreeBagger','file') ~= 2
+        error('Run_Field_Cell_Spinup:NoRFToolbox', ...
+            ['The flux-tracking reconstruction needs TreeBagger (Statistics and ' ...
+             'Machine Learning Toolbox) on every node that runs it.']);
+    end
     dem = Load_Field_DEM(char(opt.FieldDEM),topo, ...
         'OutResolutionM',dem_resolution(opt.GridCellSizeM,topo));
     topo = Attach_Topography_To_Topology(topo,dem);
-    [sub_idx,~] = Select_Topographic_Subsample(topo,resolved,opt.SubsampleFraction);
-    sub_idx = sub_idx(:);
-    %% The forest's k-fold estimate needs at least 2 x KFold training
-    %% cells; find that out now, before any full spin-up is spent.
+    %% Decided once and deterministically (same seed, same grid), so the
+    %% plan, every array task and the assembly agree on the design.
+    [track_idx,~] = Select_Topographic_Subsample(topo,resolved,opt.SubsampleFraction);
+    track_idx = track_idx(:);
     kfold = 5;
     for i = 1:2:numel(opt.RFOptions)
         if strcmpi(char(opt.RFOptions{i}),'KFold'); kfold = opt.RFOptions{i+1}; end
     end
-    if numel(sub_idx) < 2*kfold
+    if numel(track_idx) < 2*kfold
         error('Run_Field_Cell_Spinup:SubsampleTooSmall', ...
-            ['SubsampleFraction %.2f gives %d subsample cells on %d; the forest ' ...
+            ['SubsampleFraction %.2f gives %d tracked cells on %d; the forest ' ...
              'needs at least 2 x KFold = %d. Raise SubsampleFraction or pass ' ...
-             'RFOptions {KFold,k}.'],opt.SubsampleFraction,numel(sub_idx), ...
-            topo.N_cells,2*kfold);
+             'RFOptions {KFold,k}.'],opt.SubsampleFraction,numel(track_idx),N,2*kfold);
     end
+    [class_of,class_rep,class_names] = field_classes(resolved,opt.ClassColumns);
 end
-
 if cluster_step
     check_plan_method(output_directory,opt.Method);
 end
-if opt.PlanOnly
-    state_file = write_plan(output_directory,topo,resolved,opt.Method,sub_idx);
-    return
-end
-
-if opt.AssembleOnly
-    [CellBGStates,rf_report] = assemble_cell_states(output_directory,topo, ...
-        resolved,MOD,ERW,opt.Method);
-    resolved.spinup_method = repmat(string(opt.Method),topo.N_cells,1);
-    save_state_file(state_file,CellBGStates,resolved,rf_report);
-    stop_on_failed_cells(rf_report,resolved,state_file);
-    fprintf('Saved %d assembled cell spin-up states (%s): %s\n', ...
-        topo.N_cells,opt.Method,state_file);
-    return
-end
-
-if ~isempty(opt.CellIndex)
-    k = opt.CellIndex;
-    if ~(isnumeric(k) && isscalar(k) && isfinite(k) && k == fix(k) && ...
-            k >= 1 && k <= topo.N_cells)
-        error('Run_Field_Cell_Spinup:BadCellIndex', ...
-            'CellIndex must be an integer in 1..%d.',topo.N_cells);
+F = struct('dir',output_directory,'case',opt.CaseNumber,'resolved',resolved, ...
+    'inputs',CellInputs,'track_idx',track_idx,'class_of',class_of, ...
+    'class_rep',class_rep);
+if strcmp(stage,'cell_auto')
+    %% A cell index alone: a tracked cell's replay, any other's reconstruction.
+    c = check_index(opt.CellIndex,N,'CellIndex');
+    if ismember(c,track_idx); stage = 'replay'; else; stage = 'reconstruct'; end
+    if strcmp(stage,'reconstruct') && exist('TreeBagger','file') ~= 2
+        error('Run_Field_Cell_Spinup:NoRFToolbox', ...
+            ['The flux-tracking reconstruction needs TreeBagger (Statistics and ' ...
+             'Machine Learning Toolbox) on every node that runs it.']);
     end
-    if strcmpi(opt.Method,'rf') && ~ismember(k,sub_idx)
-        %% A worker never runs a full spin-up it was not assigned: every
-        %% subsample cell's full state must already be on disk (the
-        %% subsample array tasks), and is reused from there.
-        ready = arrayfun(@(c) isfile(spinup_state_path(output_directory, ...
-            resolved.cell_id(c))),sub_idx);
-        if ~all(ready)
-            error('Run_Field_Cell_Spinup:SubsampleNotReady', ...
-                ['RF cell %d needs the full spin-up state of every subsample ' ...
-                 'cell; missing cell id(s) %s. Run the subsample array first.'], ...
-                k,mat2str(resolved.cell_id(sub_idx(~ready)).'));
+end
+
+switch stage
+    case 'plan'
+        state_file = write_plan(output_directory,topo,resolved,opt.Method,track_idx, ...
+            class_of,class_rep);
+        return
+    case 'assemble'
+        [CellBGStates,report] = assemble_cell_states(output_directory,topo, ...
+            resolved,MOD,ERW,opt.Method);
+        resolved.spinup_method = repmat(string(opt.Method),N,1);
+        save_state_file(state_file,CellBGStates,resolved,report);
+        stop_on_failed_cells(report,resolved,state_file);
+        fprintf('Saved %d assembled cell spin-up states (%s): %s\n',N,opt.Method,state_file);
+        return
+    case 'class_seed'
+        k = check_index(opt.ClassIndex,numel(class_rep),'ClassIndex');
+        state_file = class_seed_path(output_directory,k);
+        class_seed(F,k);
+        fprintf('Class %d seed (cell id %d): %s\n',k,resolved.cell_id(class_rep(k)),state_file);
+        return
+    case 'track'
+        out = track_field(F,topo);
+        state_file = out.handoff_file;
+        return
+    case 'replay'
+        c = check_index(opt.CellIndex,N,'CellIndex');
+        if ~ismember(c,track_idx)
+            error('Run_Field_Cell_Spinup:NotTracked', ...
+                'Cell %d (id %d) is not in the tracked subsample.',c,resolved.cell_id(c));
         end
-        %% Read only: hundreds of RF tasks share these files, and none of
-        %% them may re-spin or delete a subsample cell.
-        sub_states = repmat(load_finished_state(output_directory,resolved, ...
-            CellInputs,sub_idx(1),opt.CaseNumber),numel(sub_idx),1);
-        for si = 2:numel(sub_idx)
-            sub_states(si) = load_finished_state(output_directory,resolved, ...
-                CellInputs,sub_idx(si),opt.CaseNumber);
+        st = replay_cell(F,c);
+        state_file = write_cell_state(output_directory,c,resolved.cell_id(c),st,"replay");
+        fprintf('Saved cell %d (id %d, replay): %s\n',c,resolved.cell_id(c),state_file);
+        return
+    case 'reconstruct'
+        c = check_index(opt.CellIndex,N,'CellIndex');
+        [st,method] = reconstruct_cells(F,topo,opt,c);
+        state_file = write_cell_state(output_directory,c,resolved.cell_id(c),st,method);
+        fprintf('Saved cell %d (id %d, %s): %s\n',c,resolved.cell_id(c),method,state_file);
+        if method == "failed"
+            error('Run_Field_Cell_Spinup:CellFailed', ...
+                ['Cell %d (id %d): the reconstruction and the cold start both ' ...
+                 'failed; see the warnings above.'],c,resolved.cell_id(c));
         end
-        [st,rep] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs, ...
-            sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
-            'OutputDirectory',output_directory,'CellIndex',k, ...
-            'RFOptions',opt.RFOptions);
-        method = rep.method_per_cell(1);
-    else
-        st = stamp(run_cell_spinup(k),"full",false);
-        method = "full";
-    end
-    state_file = write_cell_state(output_directory,k,resolved.cell_id(k),st,method);
-    fprintf('Saved cell %d (id %d, %s): %s\n',k,resolved.cell_id(k),method,state_file);
-    if method == "failed"
-        %% The file holds a flagged neighbour state for the record; the
-        %% task itself must fail so the array shows it.
-        error('Run_Field_Cell_Spinup:CellFailed', ...
-            ['Cell %d (id %d): the RF seed and the cold start both failed; see ' ...
-             'the warnings above.'],k,resolved.cell_id(k));
-    end
-    return
+        return
+    case 'cell'
+        c = check_index(opt.CellIndex,N,'CellIndex');
+        st = stamp(full_cell_spinup(spinup_state_path(output_directory, ...
+            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c)), ...
+            "full",false);
+        state_file = write_cell_state(output_directory,c,resolved.cell_id(c),st,"full");
+        fprintf('Saved cell %d (id %d, full): %s\n',c,resolved.cell_id(c),state_file);
+        return
 end
 
-if strcmpi(opt.Method,'rf')
-    sub_states = repmat(run_cell_spinup(sub_idx(1)),numel(sub_idx),1);
-    for si = 2:numel(sub_idx); sub_states(si) = run_cell_spinup(sub_idx(si)); end
-    [CellBGStates,rf_report] = Reconstruct_Cell_Pools_RF(topo,resolved, ...
-        CellInputs,sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
-        'OutputDirectory',output_directory,'RFOptions',opt.RFOptions);
-    resolved.spinup_method = repmat("rf",topo.N_cells,1);
+%% ---- every stage here, in turn ----------------------------------------
+if strcmp(opt.Method,'flux_tracking')
+    for k = 1:numel(class_rep)
+        class_seed(F,k);
+    end
+    track_field(F,topo);
+    for c = track_idx(:).'
+        replay_cell(F,c);
+    end
+    [CellBGStates,report] = reconstruct_cells(F,topo,opt,[]);
+    report.class_names = class_names;
 else
-    state_cells = cell(topo.N_cells,1);
-    for c = 1:topo.N_cells
-        state_cells{c} = stamp(run_cell_spinup(c),"full",false);
+    state_cells = cell(N,1);
+    for c = 1:N
+        state_cells{c} = stamp(full_cell_spinup(spinup_state_path(output_directory, ...
+            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c)), ...
+            "full",false);
     end
-    CellBGStates = vertcat(state_cells{:});
-    rf_report = struct('method','per_cell');
+    CellBGStates = harmonise_states(state_cells);
+    report = struct('method','per_cell','method_per_cell',repmat("full",N,1), ...
+        'n_full',N,'n_failed',0);
 end
-save_state_file(state_file,CellBGStates,resolved,rf_report);
-stop_on_failed_cells(rf_report,resolved,state_file);
-fprintf('Saved %d validated cell spin-up states (%s): %s\n', ...
-    topo.N_cells,opt.Method,state_file);
+resolved.spinup_method = repmat(string(opt.Method),N,1);
+save_state_file(state_file,CellBGStates,resolved,report);
+stop_on_failed_cells(report,resolved,state_file);
+fprintf('Saved %d validated cell spin-up states (%s): %s\n',N,opt.Method,state_file);
 end
 
 %% =======================================================================
-function stop_on_failed_cells(rf_report,resolved,state_file)
+function stage = resolve_stage(opt)
+stage = lower(char(opt.Stage));
+legacy = {};
+if opt.PlanOnly; legacy{end+1} = 'plan'; end
+if opt.AssembleOnly; legacy{end+1} = 'assemble'; end
+if numel(legacy) > 1 || (~isempty(legacy) && ~isempty(stage) && ~strcmp(stage,legacy{1}))
+    error('Run_Field_Cell_Spinup:BadStage','Give one stage only.');
+end
+if ~isempty(legacy); stage = legacy{1}; end
+if isempty(stage) && ~isempty(opt.CellIndex)
+    %% A cell index alone names that cell's own stage.
+    if strcmp(opt.Method,'per_cell'); stage = 'cell'; else; stage = 'cell_auto'; end
+end
+known = {'','plan','class_seed','track','replay','reconstruct','cell','assemble','cell_auto'};
+if ~any(strcmp(stage,known))
+    error('Run_Field_Cell_Spinup:BadStage', ...
+        'Stage must be plan, class_seed, track, replay, reconstruct, cell or assemble.');
+end
+if strcmp(opt.Method,'per_cell') && any(strcmp(stage,{'class_seed','track','replay','reconstruct'}))
+    error('Run_Field_Cell_Spinup:BadStage','Stage %s belongs to Method flux_tracking.',stage);
+end
+if strcmp(opt.Method,'flux_tracking') && strcmp(stage,'cell')
+    error('Run_Field_Cell_Spinup:BadStage','Stage cell belongs to Method per_cell.');
+end
+end
+
+function k = check_index(k,n,name)
+if ~(isnumeric(k) && isscalar(k) && isfinite(k) && k == fix(k) && k >= 1 && k <= n)
+    error(['Run_Field_Cell_Spinup:Bad' name],'%s must be an integer in 1..%d.',name,n);
+end
+end
+
+%% =======================================================================
+function [class_of,class_rep,class_names] = field_classes(resolved,columns)
+%% Land cover x soil classes (Lian et al. 2025: one 1-D seed per class).
+%% Categorical columns of the agronomic table -- the named ones, or by
+%% default whichever of land_cover, vegetation, pft, soil_class and
+%% texture_class it carries -- define the classes; a field with none is one
+%% class.  Each class is represented by its most typical cell: the one
+%% nearest the class median of the resolved soil properties.
+N = height(resolved);
+if isempty(columns)
+    columns = {'land_cover','vegetation','pft','soil_class','texture_class'};
+    columns = columns(ismember(lower(columns),lower(resolved.Properties.VariableNames)));
+end
+codes = zeros(N,0); parts = cell(N,numel(columns));
+for k = 1:numel(columns)
+    hit = find(strcmpi(resolved.Properties.VariableNames,columns{k}),1);
+    if isempty(hit)
+        error('Run_Field_Cell_Spinup:UnknownClassColumn', ...
+            'The agronomic table has no column %s.',columns{k});
+    end
+    v = string(resolved.(resolved.Properties.VariableNames{hit}));
+    [~,~,cc] = unique(v); codes = [codes cc(:)]; %#ok<AGROW>
+    parts(:,k) = cellstr(v);
+end
+if isempty(codes)
+    class_of = ones(N,1); class_names = {'field'};
+else
+    [u,~,class_of] = unique(codes,'rows');
+    class_names = cell(size(u,1),1);
+    for q = 1:size(u,1)
+        first = find(class_of == q,1);
+        class_names{q} = strjoin(parts(first,:),' / ');
+    end
+end
+soil = {'sand_fraction','clay_fraction','OM_fraction','bulk_pH','CEC_cmolc_kg'};
+X = zeros(N,0);
+for k = 1:numel(soil)
+    hit = find(strcmpi(resolved.Properties.VariableNames,soil{k}),1);
+    if ~isempty(hit); X = [X double(resolved.(resolved.Properties.VariableNames{hit}))]; end %#ok<AGROW>
+end
+n_class = max(class_of);
+class_rep = zeros(n_class,1);
+for q = 1:n_class
+    members = find(class_of == q);
+    if isempty(X)
+        class_rep(q) = members(1);
+        continue
+    end
+    Xq = X(members,:);
+    sd = std(X,0,1); sd(~(sd > 0)) = 1;
+    d = sum(((Xq - median(Xq,1))./sd).^2,2);
+    [~,best] = min(d);
+    class_rep(q) = members(best);
+end
+end
+
+%% =======================================================================
+function st = class_seed(F,k)
+%% The class's 1-D spin-up (Lian et al. Fig. 3a): its representative cell's
+%% own full spin-up, written to the class seed file.
+c = F.class_rep(k);
+st = full_cell_spinup(class_seed_path(F.dir,k),F.resolved.cell_id(c),F.case,F.inputs(c));
+end
+
+function f = class_seed_path(output_directory,k)
+f = fullfile(output_directory,sprintf('classseed_%02d.mat',k));
+end
+
+function out = track_field(F,topo)
+%% Lian et al. Fig. 3c: the field in 2-D from its class seeds.
+n_class = numel(F.class_rep);
+seeds_by_class = cell(n_class,1);
+for k = 1:n_class
+    f = class_seed_path(F.dir,k);
+    c = F.class_rep(k);
+    if ~isfile(f)
+        error('Run_Field_Cell_Spinup:ClassSeedNotReady', ...
+            'Class %d seed %s is missing; run the class_seed stage first.',k,f);
+    end
+    st = load_bg_state(f);
+    Validate_BG_State_For_Transient(st,f);
+    want = Spinup_Provenance(F.resolved.cell_id(c),F.inputs(c).agronomic_identity, ...
+        F.case,F.inputs(c).MOD_PARAM,F.inputs(c).ERW_PARAM,'cold');
+    if ~(isfield(st,'spinup_provenance') && strcmp(char(string(st.spinup_provenance)),want))
+        error('Run_Field_Cell_Spinup:ClassSeedStale', ...
+            '%s was spun up for another run; rerun the class_seed stage.',f);
+    end
+    seeds_by_class{k} = struct('B_out',st.B_out(end,:),'O_out',st.O_out(end,:), ...
+        'RexmyI_out',st.RexmyI_out(end,:),'NavlI_out',st.NavlI_out(end,:), ...
+        'NupI_L_out',st.NupI_L_out);
+end
+seeds = vertcat(seeds_by_class{F.class_of});
+out = Run_Field_Lateral_Tracking(topo,F.inputs,F.resolved.cell_id,seeds, ...
+    F.track_idx,F.dir,F.case);
+end
+
+function st = replay_cell(F,c)
+%% Lian et al. Fig. 3d: the tracked cell's plot-scale spin-up with its
+%% recorded lateral exchange replayed, seeded from its own state at the end
+%% of the tracking ring.
+cell_id = F.resolved.cell_id(c);
+track_dir = fullfile(F.dir,'track');
+record_file = fullfile(track_dir,sprintf('record_%04d.mat',cell_id));
+seed_file = fullfile(track_dir,sprintf('ringend_%04d.mat',cell_id));
+if ~isfile(record_file) || ~isfile(seed_file)
+    error('Run_Field_Cell_Spinup:TrackingNotReady', ...
+        'Cell %d has no tracking record yet (%s); run the track stage first.', ...
+        cell_id,record_file);
+end
+R = load(record_file,'record');
+seed = load(seed_file,'tracking_key');
+if ~strcmp(R.record.tracking_key,seed.tracking_key)
+    error('Run_Field_Cell_Spinup:TrackingMismatch', ...
+        'The record and the replay seed of cell %d come from different tracking runs.',cell_id);
+end
+label = sprintf('replay:%s;tracking:%s',R.record.identity,seed.tracking_key);
+st = full_cell_spinup(replay_state_path(F.dir,cell_id),cell_id,F.case,F.inputs(c), ...
+    label,struct('LATERAL_REPLAY_FILE',record_file,'SPINUP_SEED_FILE',seed_file));
+st = stamp(st,"replay",false);
+end
+
+function f = replay_state_path(output_directory,cell_id)
+f = fullfile(output_directory,sprintf('replay_%04d_BG.mat',cell_id));
+end
+
+function [out,method] = reconstruct_cells(F,topo,opt,c)
+%% Lian et al. Fig. 3e-f: the forest over the replayed cells.  With a cell
+%% index, that cell alone (a replayed cell is its own replay).
+replayed = cell(numel(F.track_idx),1);
+for s = 1:numel(F.track_idx)
+    replayed{s} = load_replayed_state(F,F.track_idx(s));
+end
+replayed = harmonise_states(replayed);
+handoff_file = fullfile(F.dir,'track','handoff_states.mat');
+if ~isfile(handoff_file)
+    error('Run_Field_Cell_Spinup:TrackingNotReady', ...
+        '%s is missing; run the track stage first.',handoff_file);
+end
+H = load(handoff_file,'handoff_states','cell_ids');
+if ~isequal(H.cell_ids(:),F.resolved.cell_id(:))
+    error('Run_Field_Cell_Spinup:TrackingMismatch', ...
+        'The tracking run''s handoff states belong to another grid.');
+end
+args = {'CaseNumber',F.case,'OutputDirectory',F.dir,'RFOptions',opt.RFOptions};
+if ~isempty(c); args = [args {'CellIndex',c}]; end
+[out,report] = Reconstruct_Cell_Pools_RF(topo,F.resolved,F.inputs,replayed, ...
+    F.track_idx,H.handoff_states,args{:});
+if isempty(c)
+    method = report;
+else
+    method = report.method_per_cell(1);
+end
+end
+
+function st = load_replayed_state(F,c)
+%% A finished replay of tracked cell c, read and checked, never written.
+cell_id = F.resolved.cell_id(c);
+f = replay_state_path(F.dir,cell_id);
+if ~isfile(f)
+    error('Run_Field_Cell_Spinup:ReplayNotReady', ...
+        'Tracked cell %d has no replayed state (%s); run the replay array first.',cell_id,f);
+end
+st = load_bg_state(f);
+Validate_BG_State_For_Transient(st,f);
+R = load(fullfile(F.dir,'track',sprintf('record_%04d.mat',cell_id)),'record');
+seed = load(fullfile(F.dir,'track',sprintf('ringend_%04d.mat',cell_id)),'tracking_key');
+want = Spinup_Provenance(cell_id,F.inputs(c).agronomic_identity,F.case, ...
+    F.inputs(c).MOD_PARAM,F.inputs(c).ERW_PARAM, ...
+    sprintf('replay:%s;tracking:%s',R.record.identity,seed.tracking_key));
+if ~(isfield(st,'spinup_provenance') && strcmp(char(string(st.spinup_provenance)),want))
+    error('Run_Field_Cell_Spinup:ReplayStale', ...
+        '%s was replayed for another run; rerun the replay array.',f);
+end
+st = stamp(st,"replay",false);
+end
+
+%% =======================================================================
+function stop_on_failed_cells(report,resolved,state_file)
 %% A cell that could not be spun up holds a neighbour's state flagged
 %% unconverged; the transient loader rejects such a file, so the launcher
 %% must not announce it as validated.  The file is kept for inspection.
-if isfield(rf_report,'n_failed') && rf_report.n_failed > 0
-    failed_ids = resolved.cell_id(rf_report.method_per_cell == "failed");
+if isfield(report,'n_failed') && report.n_failed > 0
+    failed_ids = resolved.cell_id(report.method_per_cell == "failed");
     error('Run_Field_Cell_Spinup:CellsFailed', ...
         ['%d cell(s) could not be spun up (cell id(s) %s); %s holds their ' ...
          'flagged neighbour states and cannot be used by the transient run.'], ...
-        rf_report.n_failed,mat2str(failed_ids(:).'),state_file);
+        report.n_failed,mat2str(failed_ids(:).'),state_file);
 end
 end
 
@@ -293,24 +541,33 @@ clear cleanup
 end
 
 %% =======================================================================
-function plan_file = write_plan(output_directory,topo,resolved,method,sub_idx)
-%% spinup_plan.csv (one row per cell) and the SLURM --array index lists:
-%% all cells, the RF subsample (full spin-ups), the RF remainder
-%% (seeded short spin-ups, run after the subsample array has finished).
+function plan_file = write_plan(output_directory,topo,resolved,method,track_idx,class_of,class_rep)
+%% spinup_plan.csv (one row per cell) and the SLURM --array index lists.
 N = topo.N_cells;
-is_sub = false(N,1); is_sub(sub_idx) = true;
-plan = table((1:N).',resolved.cell_id(:),is_sub, ...
-    'VariableNames',{'cell_index','cell_id','is_subsample'});
+is_tracked = false(N,1); is_tracked(track_idx) = true;
+is_rep = false(N,1); is_rep(class_rep) = true;
+plan = table((1:N).',resolved.cell_id(:),is_tracked,class_of(:),is_rep, ...
+    'VariableNames',{'cell_index','cell_id','is_tracked','class_index','is_class_seed'});
 plan.method = repmat("full",N,1);
-if strcmpi(method,'rf'); plan.method(~is_sub) = "rf_seed"; end
-plan.spinup_method = repmat(string(lower(method)),N,1);
+if strcmp(method,'flux_tracking')
+    plan.method(is_tracked) = "replay";
+    plan.method(~is_tracked) = "rf";
+end
+plan.spinup_method = repmat(string(method),N,1);
 plan_file = fullfile(output_directory,'spinup_plan.csv');
 writetable(plan,plan_file);
 write_index_list(fullfile(output_directory,'array_indices_all.txt'),1:N);
-write_index_list(fullfile(output_directory,'array_indices_subsample.txt'),find(is_sub));
-write_index_list(fullfile(output_directory,'array_indices_rf.txt'),find(~is_sub));
-fprintf(['Run_Field_Cell_Spinup: plan for %d cells (%s; %d full-spin-up ' ...
-    'subsample cells) written to %s\n'],N,method,nnz(is_sub),plan_file);
+if strcmp(method,'flux_tracking')
+    write_index_list(fullfile(output_directory,'array_indices_classes.txt'),1:numel(class_rep));
+    write_index_list(fullfile(output_directory,'array_indices_tracked.txt'),find(is_tracked));
+    write_index_list(fullfile(output_directory,'array_indices_rf.txt'),find(~is_tracked));
+    fprintf(['Run_Field_Cell_Spinup: plan for %d cells (flux_tracking: %d class ' ...
+        'seed(s), %d tracked and replayed, %d from the forest) written to %s\n'], ...
+        N,numel(class_rep),nnz(is_tracked),nnz(~is_tracked),plan_file);
+else
+    fprintf('Run_Field_Cell_Spinup: plan for %d cells (per_cell) written to %s\n', ...
+        N,plan_file);
+end
 end
 
 function write_index_list(file_name,idx)
@@ -331,7 +588,7 @@ file_name = fullfile(output_directory,sprintf('cellstate_%04d.mat',cell_id));
 end
 
 function file_name = spinup_state_path(output_directory,cell_id)
-%% The spin-up's own output file for a cell (BG_OUTPUT_FILE).
+%% A per_cell spin-up's own output file for a cell (BG_OUTPUT_FILE).
 file_name = fullfile(output_directory,sprintf('cell_%04d_BG.mat',cell_id));
 end
 
@@ -346,7 +603,7 @@ clear cleanup
 end
 
 %% =======================================================================
-function [CellBGStates,rf_report] = assemble_cell_states(output_directory, ...
+function [CellBGStates,report] = assemble_cell_states(output_directory, ...
     topo,resolved,MOD,ERW,method)
 %% Every cell's cellstate_<id>.mat, validated, identity-checked against
 %% the resolved inputs, and made a uniform struct array.
@@ -372,7 +629,7 @@ for c = 1:N
 end
 if ~isempty(failed_ids)
     error('Run_Field_Cell_Spinup:CellsFailed', ...
-        ['%d cell(s) could not be spun up (ids %s): their RF seed and cold ' ...
+        ['%d cell(s) could not be spun up (ids %s): their reconstruction and cold ' ...
          'start both failed. Rerun those array tasks after fixing the cause.'], ...
         numel(failed_ids),mat2str(failed_ids));
 end
@@ -392,17 +649,18 @@ CellBGStates = harmonise_states(states);
 Configure_Cell_Agronomic_Inputs(MOD,ERW,resolved,CellBGStates);
 failed = arrayfun(@(st) isfield(st,'reconstruction_failed') && ...
     ~isempty(st.reconstruction_failed) && logical(st.reconstruction_failed),CellBGStates);
-rf_report = struct('method',method,'assembled',true, ...
+report = struct('method',method,'assembled',true, ...
     'method_per_cell',methods,'n_full',nnz(methods == "full"), ...
-    'n_rf_seed',nnz(methods == "rf_seed"),'n_fallback',nnz(methods == "fallback"), ...
-    'n_failed',nnz(failed));
+    'n_replay',nnz(methods == "replay"),'n_rf',nnz(methods == "rf"), ...
+    'n_fallback',nnz(methods == "fallback"),'n_failed',nnz(failed));
 if any(failed)
     warning('Run_Field_Cell_Spinup:AssembledFailures', ...
         '%d assembled cell(s) are flagged reconstruction_failed (ids %s).', ...
         nnz(failed),mat2str(resolved.cell_id(failed).'));
 end
-fprintf('Run_Field_Cell_Spinup: assembled %d cells (%d full, %d RF-seeded, %d fallback, %d failed)\n', ...
-    N,rf_report.n_full,rf_report.n_rf_seed,rf_report.n_fallback,rf_report.n_failed);
+fprintf(['Run_Field_Cell_Spinup: assembled %d cells (%d full, %d replayed, %d from ' ...
+    'the forest, %d fallback, %d failed)\n'],N,report.n_full,report.n_replay, ...
+    report.n_rf,report.n_fallback,report.n_failed);
 end
 
 function states = harmonise_states(cells)
@@ -426,14 +684,17 @@ st.reconstruction_failed = logical(failed);
 end
 
 %% =======================================================================
-function st = full_cell_spinup(output_directory, cell_id, case_number, cell_inputs)
-cell_file = spinup_state_path(output_directory,cell_id);
-%% What this run is: the cell, its inputs, the case and its rows (with the
-%% forcing, meteo and transient windows), from a cold start.  A finished
-%% state is reused, and a phase checkpoint resumed, only under the same key,
-%% so an interrupted array task resumes and any change starts afresh.
+function st = full_cell_spinup(cell_file,cell_id,case_number,cell_inputs,seed_label,extra)
+%% One cell's plot-scale spin-up into cell_file.  What the run is -- the
+%% cell, its inputs, the case and its rows (with the forcing, meteo and
+%% transient windows), and what it starts from ('cold', or the lateral
+%% record and seed it replays) -- is its provenance key: a finished state is
+%% reused, and a phase checkpoint resumed, only under the same key, so an
+%% interrupted array task resumes and any change starts afresh.
+if nargin < 5 || isempty(seed_label); seed_label = 'cold'; end
+if nargin < 6; extra = struct(); end
 provenance = Spinup_Provenance(cell_id,cell_inputs.agronomic_identity, ...
-    case_number,cell_inputs.MOD_PARAM,cell_inputs.ERW_PARAM,'cold');
+    case_number,cell_inputs.MOD_PARAM,cell_inputs.ERW_PARAM,seed_label);
 if isfile(cell_file)
     try
         st = load_bg_state(cell_file);
@@ -457,31 +718,18 @@ settings = struct('NN_case_study_ERW_MOD',case_number, ...
     'BG_OUTPUT_FILE',cell_file,'CELL_ID',cell_id, ...
     'CELL_AGRONOMIC_IDENTITY',cell_inputs.agronomic_identity, ...
     'SPINUP_PROVENANCE',provenance);
+for name = fieldnames(extra).'
+    settings.(name{1}) = extra.(name{1});
+end
 Run_Automatic_Site_Spinup(settings);
 st = load_bg_state(cell_file);
 Validate_BG_State_For_Transient(st,cell_file);
 end
 
-function st = load_finished_state(output_directory,resolved,CellInputs,c,case_number)
-%% A finished full spin-up of subsample cell c, read and checked, never
-%% written: it must be the cold-start run of this cell's current inputs.
-cell_id = resolved.cell_id(c);
-cell_file = spinup_state_path(output_directory,cell_id);
-provenance = Spinup_Provenance(cell_id,CellInputs(c).agronomic_identity, ...
-    case_number,CellInputs(c).MOD_PARAM,CellInputs(c).ERW_PARAM,'cold');
-st = load_bg_state(cell_file);
-Validate_BG_State_For_Transient(st,cell_file);
-if ~(isfield(st,'spinup_provenance') && ...
-        strcmp(char(string(st.spinup_provenance)),provenance))
-    error('Run_Field_Cell_Spinup:SubsampleStale', ...
-        ['%s was spun up for another run (inputs, case or windows); rerun the ' ...
-         'subsample array before the RF array.'],cell_file);
-end
-end
-
 function check_plan_method(output_directory,method)
-%% One method per output directory: per_cell and rf runs would otherwise
-%% overwrite each other's cellstate files and the assembly would mix them.
+%% One method per output directory: per_cell and flux_tracking runs would
+%% otherwise overwrite each other's cellstate files and the assembly would
+%% mix them.
 plan_file = fullfile(output_directory,'spinup_plan.csv');
 if ~isfile(plan_file)
     return
