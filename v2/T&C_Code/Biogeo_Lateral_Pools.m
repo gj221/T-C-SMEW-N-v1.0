@@ -39,6 +39,10 @@ for c = 1:size(P_in,1)
     for s = 1:numel(pool_idx)
         idx = pool_idx{s};
         new_total = mobile(c,s) + dM(c,s);
+        %% A column drained to within rounding holds nothing.
+        if new_total < 0 && new_total >= -16*eps(max([1 mobile(c,s) abs(dM(c,s))]))
+            new_total = 0;
+        end
         if new_total < 0
             error('Biogeo_Lateral_Pools:NegativePool', ...
                 'Lateral transfer overdraws %s in cell %d.',names{s},c);

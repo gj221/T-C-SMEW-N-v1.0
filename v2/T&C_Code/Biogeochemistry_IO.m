@@ -88,7 +88,7 @@ function[DepN,DepP,DepK,...
     Lig_fr_Man]=Biogeochemistry_IP(Lat,Lon,HIST)
 %%%%%%%%%%%%%%
 %%%% External Inputs [gX/m2 day]
-load("Inputs\All_deposition_data.mat")
+load(fullfile(fileparts(mfilename('fullpath')),'Inputs','All_deposition_data.mat'))
 if HIST == 1 %%%% historical pre-industrial depositions
     DepN = griddata(LonN_Gl,LatN_Gl,Ndep1860',Lon,Lat,'nearest'); DepN=DepN/1000/365;
     DepP = interp2((LonP),(LatP),(DepP_hist'),Lon,Lat,'nearest'); DepP=DepP/1000/365;
@@ -98,8 +98,8 @@ else
 end
 DepK =  griddata(LonCC{3},LatCC{3},CC{3},Lon,Lat,'nearest'); DepK=DepK/10/365;
 
-DepCa = DepK;
-DepMg = DepK;
+DepCa = griddata(LonCC{1},LatCC{1},CC{1},Lon,Lat,'nearest'); DepCa=DepCa/10/365;
+DepMg = griddata(LonCC{4},LatCC{4},CC{4},Lon,Lat,'nearest'); DepMg=DepMg/10/365;
 DepSi = 0;
 
 %%%%%

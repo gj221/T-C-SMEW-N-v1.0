@@ -135,6 +135,7 @@ NavlI=zeros(NNd,6);
 %%%% averages them into the mean forcing of the stand-alone Phase 2).
 WFPS_bio_out = nan(NNd,1); Se_bio_out = nan(NNd,1); Psi_bio_out = nan(NNd,1);
 VSUM_out = nan(NNd,1); VTSUM_out = nan(NNd,1); Tdp_bio_out = nan(NNd,1);
+f_anaer_bio_out = nan(NNd,1);
 %%%%
 RB_L=zeros(NNd,cc,7);
 RB_H=zeros(NNd,cc,7);
@@ -254,6 +255,11 @@ OPT_EnvLimitGrowth = 1; % limit plant growth based on available nutrient concnet
 %%%%%%%%% CALL PARAMETERS AND INITIAL CONDITION
 run(PARAM_IC);
 Restating_parameters;
+biogeo_exchange_scheme = 'TC_GT';
+if exist('bulk_pH_params','var') && isstruct(bulk_pH_params) && ...
+        isfield(bulk_pH_params,'scheme')
+    biogeo_exchange_scheme = bulk_pH_params.scheme;
+end
 PH_d(1) = PH(1);
 PH_pore_d(1) = PH(1); PH_bulk = PH(1);
 if exist('ERW_biogeochem','var') && isfield(ERW_biogeochem,'pH_bulk') && ...
@@ -355,22 +361,27 @@ for i=2:NN
         
         h_S = NaN;
 
-        % for rotation: N Fert only applied before maize sowing
-        if ismember(Datam(i,1),[2009 2011 2012 2014 2015 2017 2018 2020])
-            B_IO.FertN(81:100) = 0.84;
-        else
-            B_IO.FertN = zeros(1,366);
+        % for rotation: N Fert only applied before maize sowing.  B_IO is the
+        % biogeochemistry's input set, which the parameter file builds only
+        % with the biogeochemistry on (off in the spin-up's T&C-only Phase 1).
+        if OPT_SoilBiogeochemistry == 1
+            if ismember(Datam(i,1),B_IO.FertN_years)
+                B_IO.FertN(81:100) = 1.01; %% 202 kgN/ha Kantola 2022
+            else
+                B_IO.FertN = zeros(1,366);
+            end
         end
 
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         %%% Biogeochemistry Unit
-        [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,L_bio,WFPS_bio]=Biogeo_environment(Tdp(pdind,:),O(pdind,:),V(pdind,:),Soil_Param,Phy,SPAR,Bio_Zs,Zbio);
-        WFPS_bio_out(j) = mean(WFPS_bio(:),'omitnan');
-        Se_bio_out(j)   = mean(Se_bio(:),  'omitnan');
-        Psi_bio_out(j)  = mean(Psi_bio(:), 'omitnan');
-        VSUM_out(j)     = VSUM;
-        VTSUM_out(j)    = VTSUM;
-        Tdp_bio_out(j)  = mean(Tdp_bio(:), 'omitnan');
+        [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,f_anaer_bio,WFPS_bio]=Biogeo_environment(Tdp(pdind,:),O(pdind,:),V(pdind,:),Soil_Param,Phy,SPAR,Bio_Zs,Zbio);
+        WFPS_bio_out(j)    = mean(WFPS_bio(:),   'omitnan');
+        Se_bio_out(j)      = mean(Se_bio(:),     'omitnan');
+        Psi_bio_out(j)     = mean(Psi_bio(:),    'omitnan');
+        VSUM_out(j)        = VSUM;
+        VTSUM_out(j)       = VTSUM;
+        Tdp_bio_out(j)     = mean(Tdp_bio(:),    'omitnan');
+        f_anaer_bio_out(j) = mean(f_anaer_bio(:),'omitnan');
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         if OPT_SoilBiogeochemistry == 1
             IS= Ccrown*squeeze(ISOIL_L(j-1,:,:)) + Ccrown*squeeze(ISOIL_H(j-1,:,:));
@@ -406,7 +417,8 @@ for i=2:NN
                 SupCa_H(j-1,:),SupMg_H(j-1,:),SupSi_H(j-1,:),SupCa_L(j-1,:),SupMg_L(j-1,:),SupSi_L(j-1,:),...
                 REXMY,RexmyI(j-1,:),ExEM,NavlI(j-1,:),Pcla,Psan,...
                 B_IO,Datam(i,:),FireA,0,...
-                OPT_ERW,OPT_BfixN,L_bio,WFPS_bio);
+                OPT_ERW,OPT_BfixN,f_anaer_bio,WFPS_bio, ...
+                biogeo_exchange_scheme,[]);
 
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -761,20 +773,7 @@ for i=2:NN
                     ERW_TC_const.bulk_pH_params = bulk_pH_params;
                 end
 
-                % Appelo + Al-solubility-pin runs disable the self-inflating
-                % background cation pump (keyword_add): I_Na = (f_Lw+f_T)*Na_tot
-                % grows the heritage Na pool geometrically and would re-fill the
-                % re-seeded Na_w within days, restoring the state the corrected
-                % Appelo selectivity cannot host at the pinned root.  Pinned
-                % runs therefore close background Na by leaching/uptake caps on
-                % the dissolved concentration instead (ERW_function
-                % keyword_add == 0 branch).
-                if isfield(bulk_pH_params, 'Al_solubility_pin') && ...
-                        isequal(bulk_pH_params.Al_solubility_pin, true)
-                    ERW_PARAM_input.keyword_add = 0;
-                end
 
-                
             end
 
             % transpiration within ZBIO: [mm/h] -> [m/h]
@@ -888,15 +887,13 @@ for i=2:NN
                 %% num_rock_app nonzero for rock that is never applied. The
                 %% 2-D driver already filters this way; on a full-length run
                 %% every date is in range and the two agree.
-                idx_app = time_application/dtw;
-                if any(abs(idx_app-round(idx_app)) > 1e-10)
-                    error('ERW:applicationGrid', ...
-                        'Rock-application times must lie on the ERW timestep grid.');
-                end
-                idx_app = round(idx_app);
-                idx_app = idx_app(idx_app >= 1 & idx_app <= length(t));
-                ERW_TC_const.M_rock_add(idx_app) = 5000*kinetic_mass_fraction;
-                ERW_TC_const.M_rock_add_CaCO3(idx_app) = 5000*direct_carbonate_mass_fraction/100.087*1e6;
+                idx_app = ERW_Application_Indices(time_application,dtw,length(t));
+                ERW_TC_const.M_rock_add(idx_app) = ...
+                    ERW_TC_const.M_rock_add(idx_app) + ...
+                    ERW_PARAM_input.M_rock_event*kinetic_mass_fraction;
+                ERW_TC_const.M_rock_add_CaCO3(idx_app) = ...
+                    ERW_TC_const.M_rock_add_CaCO3(idx_app) + ...
+                    ERW_PARAM_input.M_rock_event*direct_carbonate_mass_fraction/100.087*1e6;
                 ERW_PARAM_input.num_rock_app = sum(ERW_TC_const.M_rock_add>0 | ERW_TC_const.M_rock_add_CaCO3>0);
             else
                 [kinetic_mass_fraction, direct_carbonate_mass_fraction, rock_f_in_erw] = ...
@@ -940,11 +937,27 @@ for i=2:NN
                 P(j-1,:) = ERW_Initialize_TC_Cation_Pools( ...
                     P(j-1,:), ERW_biogeochem, ERW_const, TT_m.s(1,:));
                 ERW_initialized = true;
+                %% Cold-start backfill of the pH records. Rows 1:j were
+                %% written from the bulk observation (PH from the parameter
+                %% file) before this first ERW call; ERW_biogeochem row 1 is
+                %% the t = 0 ERW initial condition (pH(1) the pore-water pH
+                %% Invert_Bulk_pH recovered from that observation, pH_bulk(1)
+                %% the bulk pH Porewater_to_Bulk_pH returns for that state)
+                %% and the daily loop below starts at row 2, so it is never
+                %% overwritten. Records only; PH and PH_bulk are updated
+                %% after the daily step as before. Mirrors MAIN_FRAME_BG_ERW_2D.
+                if isfield(ERW_biogeochem,'pH') && isfield(ERW_biogeochem,'pH_bulk') && ...
+                        isfinite(ERW_biogeochem.pH(1,1)) && isfinite(ERW_biogeochem.pH_bulk(1,1))
+                    PH_pore_d(1:j) = ERW_biogeochem.pH(1,1);
+                    PH_bulk_d(1:j) = ERW_biogeochem.pH_bulk(1,1);
+                    PH_d(1:j)      = ERW_biogeochem.pH_bulk(1,1);
+                end
             end
 
             % changes in Xtot calculated from TC-BG (further distributed at dtw inside ERW_function)
             % [g X/m2 d-1]->[umol/d]
-if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
+            apply_tc_daily_delta = ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam);
+            if apply_tc_daily_delta
                 ERW_biogeochem.dCa_tot(j,:) = ((P(j,60) + P(j,61)) - (P_prev_for_erw_delta(60) + P_prev_for_erw_delta(61)))/40*1e6;
                 ERW_biogeochem.dMg_tot(j,:) = ((P(j,68) + P(j,69)) - (P_prev_for_erw_delta(68) + P_prev_for_erw_delta(69)))/24.3*1e6;
                 ERW_biogeochem.dK_tot(j,:) = ((P(j,52) + P(j,53)) - (P_prev_for_erw_delta(52) + P_prev_for_erw_delta(53)))/39.1*1e6;
@@ -969,12 +982,17 @@ if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
             % background input
             if ERW_PARAM_input.keyword_add == 1
                 if first_erw_step
-                    ERW_const.I_Na = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.Na_tot(1);
-                    ERW_const.I_An = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.An_tot(1);
+                    bg_row = 1;
                 else
-                    ERW_const.I_Na = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.Na_tot(dm_end);
-                    ERW_const.I_An = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.An_tot(dm_end);
+                    bg_row = dm_end;
                 end
+                ERW_const.I_Na = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.Na_tot(bg_row);
+                ERW_const.I_An = mean(ERW_TC.f_Lw_bio(j)+ERW_TC.f_T_bio(j))* ERW_biogeochem.An_tot(bg_row);
+                % The leached part of that closure returns as the salt it left as, so
+                % the bare anion does not acidify the box (ERW_Leached_Salt_Resupply).
+                [ERW_const.I_Ca,ERW_const.I_Mg] = ERW_Leached_Salt_Resupply(ERW_TC.f_Lw_bio(j), ...
+                    ERW_biogeochem.An_tot(bg_row),ERW_biogeochem.Na_tot(bg_row), ...
+                    ERW_biogeochem.Ca(bg_row),ERW_biogeochem.Mg(bg_row));
             end
 
             %%%%%%%%%%%%%%%%%%%%%% ERW simulation %%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1001,6 +1019,21 @@ if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
             ERW_biogeochem.dPO4_tot(j,:)=d_erw(5,:);
             ERW_biogeochem.dNO3_tot(j,:)=d_erw(6,:);
             ERW_biogeochem.dNH4_tot(j,:)=d_erw(7,:);
+
+            %% NH4, NO3 and dissolved PO4 are biogeochemical boundary
+            %% conditions. The PO4 partition follows the same daily
+            %% equilibrium fraction used by T&C uptake and leakage. The
+            %% final flush reuses P(j) without its delta again.
+            if j >= 2
+                anchor_row = max(dm_start,2) - 1;
+                anchor_state_row = j - double(apply_tc_daily_delta);
+                ERW_biogeochem.PO4_tot(anchor_row,:) = ...
+                    ERW_biogeo_PO4_fraction * P(anchor_state_row,43)/31 * 1e6;
+                ERW_biogeochem.NH4_tot(anchor_row,:) = ...
+                    ERW_biogeo_NH4_fraction * P(anchor_state_row,31)/14 * 1e6;
+                ERW_biogeochem.NO3_tot(anchor_row,:) = ...
+                    ERW_biogeo_NO3_fraction * P(anchor_state_row,32)/14 * 1e6;
+            end
             
             for dt_m = max(dm_start,2):dm_end
 
@@ -1064,7 +1097,7 @@ if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
               ERW_const.M_iner = ERW_const_ittn.M_iner;
 
             end
-            
+
             %%%%%%%%%%%%%%%%%% ERW -> update TC %%%%%%%%%%%%%%%%%%%%%%%%%%%      
             % update pH
             PH_pore_now = ERW_biogeochem.pH(dm_end,:);
@@ -1089,7 +1122,24 @@ if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
                     n_col * s_col * ERW_const.Zrw * 1000;
                 bulk_pH_params_now.DIC_field_umol_L = ...
                     ERW_biogeochem.DIC(dm_end,col);
-                bulk_pH_params_now.solid_CaCO3_umol_m2 = 0;
+                %% The paste is made from the plot's soil, so it carries the
+                %% plot's solid calcite: applied grains not yet dissolved plus
+                %% the pedogenic pool. M_min is g m-2 and MM_min g per umol,
+                %% so the sum is umol m-2.
+                solid_calcite_now = max(ERW_biogeochem.CaCO3(dm_end,col),0);
+                calcite_names = strtrim(string(ERW_var.mineral));
+                is_calcite = strcmpi(calcite_names(:).',"calcite");
+                if any(is_calcite)
+                    M_min_now = reshape(ERW_biogeochem.M_min(dm_end,:),1,[]);
+                    MM_min_now = reshape(ERW_const.MM_min,1,[]);
+                    solid_calcite_now = solid_calcite_now + ...
+                        sum(M_min_now(is_calcite)./MM_min_now(is_calcite));
+                end
+                bulk_pH_params_now.solid_CaCO3_umol_m2 = solid_calcite_now;
+                %% It carries the plot's solid Mg carbonate, the nesquehonite
+                %% pool (umol m-2), on the same terms.
+                bulk_pH_params_now.solid_MgCO3_umol_m2 = ...
+                    max(ERW_biogeochem.MgCO3(dm_end,col),0);
                 [pH_bulk_now(col),bulk_pH_diag_now] = Porewater_to_Bulk_pH(...
                     ERW_biogeochem.H(dm_end, col), ...
                     ERW_biogeochem.Ca(dm_end, col), ERW_biogeochem.Mg(dm_end, col), ...
@@ -1122,13 +1172,10 @@ if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
             P(j, 52)= ERW_biogeochem.K(dm_end,:)* 39.1 * cov_moll_end / 1e6; %  K [g /m^2 d]
             P(j, 53)= ERW_biogeochem.f_K(dm_end,:).*ERW_biogeochem.CEC_tot(dm_end,:)*39.1/1e6;
             P(j, 76)= ERW_biogeochem.Si(dm_end,:)* 28.1 * cov_moll_end / 1e6; % Si [g /m^2 d]
-            % Only write the phosphate pool back when ERW was handed all of it.
-            % With a solution fraction < 1 the solver carries the dissolved
-            % subset, and overwriting the whole labile pool with it would
-            % destroy the sorbed remainder (a ~200x pool loss at aP = 0.005).
-            if ERW_biogeo_PO4_fraction >= 1
-                P(j, 43)= ERW_biogeochem.PO4(dm_end,:)* 31 * cov_moll_end / 1e6; % PO4 [g /m^2 d]
-            end
+            P(j, 43) = ERW_Return_Weathered_Phosphorus( ...
+                P(j,43),ERW_biogeochem.PO4_tot(dm_end,:), ...
+                ERW_biogeo_PO4_fraction, ...
+                ERW_weathering.P_weathering_release(max(dm_start,2):dm_end,:));
 
             
         end

@@ -1,7 +1,6 @@
 # simulation outputs and run logs
 v2/SIM/
 v2/logs/
-runtime/
 tmp/
 .matlab*_pref*/
 *.log

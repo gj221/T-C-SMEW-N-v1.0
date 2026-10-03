@@ -22,7 +22,7 @@ function RM = Run_Matrix_12()
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 CASE_CONTROL = 5;
-CASE_BASALT  = 3;
+CASE_BASALT  = 4;
 CASE_CALCITE = 7;
 
 treatments = { ...

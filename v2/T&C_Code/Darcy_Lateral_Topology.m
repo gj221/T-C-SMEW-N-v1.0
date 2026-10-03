@@ -44,42 +44,40 @@ function [Q_edge, dtheta_lat, sub_steps] = Darcy_Lateral_Topology( ...
 %   dtheta_lat    [N_cells x ms] change in theta over dt_h [m3/m3]
 %   sub_steps     number of adaptive sub-steps actually taken
 %
-% Total hydraulic head
-%   The flux law is written on TOTAL head H = psi + z (matric head plus
-%   elevation), the exact driving potential for variably-saturated flow
-%   (Buckingham 1907; Richards 1931).  The elevation term is the
-%   FACE-NORMAL drop topo.edge_dz_m (attach it with
-%   Attach_Topography_To_Topology) -- Darcy's law drives a face with the
-%   normal head gradient, and on a graph whose cell centres are laterally
-%   offset from the face normal the raw centre-to-centre drop would add a
-%   face-parallel component that drives no flux.  A topology carrying only
-%   cell_z_m falls back to z_a - z_b, identical whenever the centres are
-%   aligned.  With neither field every cell sits at z = 0, gravity cancels
-%   horizontally, and the result is bit-identical to the matric-head-only
-%   formulation used before topography was added.  Because soil layer k
-%   sits at the same depth below the surface in both cells of a face, the
-%   elevation-head difference is the same for every layer.  Face distances
-%   use the slope (down-dip) length topo.edge_face_distance_surface_*_m
-%   when present, and the flux then crosses the slope-normal layer
-%   thickness Zlayer*cos(beta).
+% Flux law: the v0.9 finite-volume Darcy exchange plus gravity
+%   This is the v0.9 lateral solver -- a two-point finite-volume
+%   Buckingham-Darcy flux on every shared face, horizontal conductivity
+%   K*aR and ice impedance 10^(-5*F_ice) as in the vertical T&C solver
+%   (HYDROLOGIC_UNIT), so lateral and vertical flow see the same soil --
+%   with one addition: the driving potential is the TOTAL head
+%   H = psi + z (matric head plus elevation; Buckingham 1907, Richards
+%   1931) instead of psi alone.  The elevation term is the nodal drop
+%   z_a - z_b between the two cell centres (topo.edge_dz_m from
+%   Attach_Topography_To_Topology, or cell_z_m): a two-point flux on
+%   cell-centre heads must take both head components at the same nodes,
+%   so that a hydrostatic profile (psi + z uniform) drives no flux.
+%   Because soil layer k sits at the same depth below the surface in both
+%   cells of a face, the elevation difference is the same for every
+%   layer.  On a sloping face the resistance path is the face separation
+%   scaled by 1/cos(beta) and the flux crosses the slope-normal layer
+%   thickness Zlayer*cos(beta).  With no elevation every cell sits at
+%   z = 0, gravity cancels, and the result is bit-identical to v0.9.
+%   This replaces, not supplements, a kinematic (slope-only) lateral
+%   flow: the column's own kinematic Qi_out is switched off in 2-D.
 %   Mass conservation is exact at the finite-volume level (every face is
 %   shared by exactly two cells); the sub-step is adaptively rescaled to
-%   keep theta within [Ohy, Osat-Oice] without ever clipping a volume. Ice
-%   impedance uses the empirical Swenson et al. (2012) form with their
-%   published Omega = 6.
+%   keep theta within [Ohy, Osat-Oice] without ever clipping a volume.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 N_cells = topo.N_cells;
 N_edges = topo.N_edges;
 ms      = numel(Zlayer_m);
 
-%% Per-edge elevation-head drop [mm], from cell a to cell b.  Absent
-%% -> flat domain -> gravity cancels and the result is bit-identical to
-%% the matric-head-only formulation.  Attach_Topography_To_Topology
-%% supplies the FACE-NORMAL drop (the component Darcy's law acts on);
-%% a topology carrying only cell_z_m falls back to the centre-to-centre
-%% difference, which is the same thing whenever the centres are aligned
-%% with the face normal.
+%% Per-edge elevation-head drop [mm], from cell a to cell b: the nodal
+%% drop z_a - z_b (Attach_Topography_To_Topology stores it as edge_dz_m;
+%% a topology carrying only cell_z_m gives the same thing).  Absent ->
+%% flat domain -> gravity cancels and the result is bit-identical to the
+%% matric-head-only v0.9 formulation.
 has_z = isfield(topo,'cell_z_m') && ~isempty(topo.cell_z_m);
 if has_z
     z_m = topo.cell_z_m(:);
@@ -198,7 +196,7 @@ function [K_cell, h_cell, Osat_cell, Ohy_cell] = eval_soil_curves( ...
     topo,theta,soilpar_cell,ms,Oice_cell)
 % K [mm/h] and matric HEAD h [mm, negative when unsaturated] per cell-layer.
 N_cells = topo.N_cells;
-ice_impedance = 6;
+ice_impedance = 5;
 K_cell    = zeros(N_cells, ms);
 h_cell    = zeros(N_cells, ms);
 Osat_cell = zeros(N_cells, ms);
@@ -231,7 +229,7 @@ for c = 1:N_cells
         else
             ice_fraction = 0;
         end
-        K_cell(c,k) = Ko*10^(-ice_impedance*ice_fraction);
+        K_cell(c,k) = sp.aR*Ko*10^(-ice_impedance*ice_fraction);
         if sp.SPAR == 2
             h_cell(c,k) = -Po;    % Saxton-Rawls returns suction -> head
         else

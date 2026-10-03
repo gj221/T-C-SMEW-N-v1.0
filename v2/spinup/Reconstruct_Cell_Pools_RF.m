@@ -148,33 +148,46 @@ for c = cells_to_do
         resolved.cell_id(c)));
     seed_file = fullfile(opt.OutputDirectory, sprintf('rf_seed_%04d.mat', ...
         resolved.cell_id(c)));
+    %% Built before the attempt, so the cold-start fallback always has it.
+    %% The provenance tells the seeded and the cold run apart: each resumes
+    %% only its own phase checkpoints, and nothing has to be deleted.
+    settings = struct('NN_case_study_ERW_MOD',opt.CaseNumber, ...
+        'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
+        'SAVE_RESULTS',0,'MOD_PARAM_override',CellInputs(c).MOD_PARAM, ...
+        'ERW_PARAM_override',CellInputs(c).ERW_PARAM, ...
+        'BG_OUTPUT_FILE',cell_file,'CELL_ID',resolved.cell_id(c), ...
+        'CELL_AGRONOMIC_IDENTITY',CellInputs(c).agronomic_identity, ...
+        'SPINUP_PROVENANCE',Spinup_Provenance(resolved.cell_id(c), ...
+        CellInputs(c).agronomic_identity,opt.CaseNumber, ...
+        CellInputs(c).MOD_PARAM,CellInputs(c).ERW_PARAM,'cold'));
     try
         %% The mapping can refuse a prediction (inconsistent nitrogen
         %% stocks, implausible stoichiometry); that is a reason for the
         %% cold-start fallback below, not for abandoning the field.
+        %% The template is a converged state, so the seed inherits its own
+        %% P partition: the plausibility windows of the mapping are for
+        %% priors, and a converged primary-P fraction of order 1e-14 or a
+        %% SOM C:P below 103 is the model's state, not an implausible prior.
         p_opts = struct();
         if Bt(38) > 0 && sum(Bt(9:11)) > 0
             p_opts.organic_P_C_to_P = sum(Bt(9:11))/Bt(38);
+            p_opts.som_C_to_P_bounds = p_opts.organic_P_C_to_P*[1-1e-6 1+1e-6];
         end
         if sum(Bt(43:46)) > 0
             p_opts.inorganic_P_fractions = Bt(43:46)/sum(Bt(43:46));
+            p_opts.inorganic_P_fraction_bounds = [0 1; 0 1];
         end
         B_seed = Initialize_BG_State_From_Observations(Bt, targets, p_opts);
         seed_state = template;
         seed_state.B_out = B_seed;
         save_seed(seed_file, seed_state);
-        %% Phase checkpoints left by an earlier attempt for this cell would
-        %% be resumed regardless of the seed, so a re-run would carry a cold
-        %% start's state under the rf_seed label; start the seeded run clean.
-        clear_spinup_checkpoints(cell_file);
-        settings = struct('NN_case_study_ERW_MOD',opt.CaseNumber, ...
-            'RUN_MODE','spinup','RUN_CHEMISTRY','erw','RUN_DOMAIN','single', ...
-            'SAVE_RESULTS',0,'MOD_PARAM_override',CellInputs(c).MOD_PARAM, ...
-            'ERW_PARAM_override',CellInputs(c).ERW_PARAM, ...
-            'BG_OUTPUT_FILE',cell_file,'CELL_ID',resolved.cell_id(c), ...
-            'CELL_AGRONOMIC_IDENTITY',CellInputs(c).agronomic_identity, ...
-            'SPINUP_SEED_FILE',seed_file);
-        Run_Automatic_Site_Spinup(settings);
+        seeded = settings;
+        seeded.SPINUP_SEED_FILE = seed_file;
+        seeded.SPINUP_PROVENANCE = Spinup_Provenance(resolved.cell_id(c), ...
+            CellInputs(c).agronomic_identity,opt.CaseNumber, ...
+            CellInputs(c).MOD_PARAM,CellInputs(c).ERW_PARAM, ...
+            ['rf_seed:' mat2str(B_seed,17)]);
+        Run_Automatic_Site_Spinup(seeded);
         st = load_bg_state(cell_file);
         Validate_BG_State_For_Transient(st, cell_file);
         CellBGStates(c) = stamp(st,"rf_seed",false);
@@ -184,13 +197,8 @@ for c = cells_to_do
         warning('Reconstruct_Cell_Pools_RF:CellFallback', ...
             'Cell %d RF seed failed (%s); cold-start spin-up fallback.', ...
             resolved.cell_id(c), ME.message);
-        %% A real cold start.  Run_BG_Spinup derives its phase
-        %% checkpoints from BG_OUTPUT_FILE and resumes them on whatever
-        %% state they hold, with no record of whether it came from a
-        %% seed -- so simply dropping SPINUP_SEED_FILE would resume the
-        %% failed seeded state and fail again identically.
-        clear_spinup_checkpoints(cell_file);
-        settings = rmfield(settings, 'SPINUP_SEED_FILE');
+        %% A real cold start: its provenance differs from the seeded run's,
+        %% so Run_BG_Spinup resumes none of the seeded run's checkpoints.
         try
             Run_Automatic_Site_Spinup(settings);
             st = load_bg_state(cell_file);
@@ -255,23 +263,6 @@ if report.n_failed > 0
 end
 end
 
-%% =======================================================================
-function clear_spinup_checkpoints(cell_file)
-%% Remove the phase checkpoints Run_BG_Spinup derives from this output
-%% path, so the fallback genuinely cold-starts.
-[d,n] = fileparts(cell_file);
-pattern = fullfile(d,[n '_checkpoint_*.mat']);
-listing = dir(pattern);
-for k = 1:numel(listing)
-    f = fullfile(listing(k).folder,listing(k).name);
-    try
-        delete(f);
-    catch
-        warning('Reconstruct_Cell_Pools_RF:CheckpointNotCleared', ...
-            'Could not delete %s; the fallback may resume a seeded state.',f);
-    end
-end
-end
 
 %% =======================================================================
 function [X, names] = cell_features(topo, resolved)

@@ -1,5 +1,6 @@
 function state = ERW_Appelo_Mass_Conserving_State(Alk_tot,IC_tot,cation_tot, ...
-    soil_water_l,bulk_volume_l,s,carbonate,CEC_tot,appelo,gas,al3_fn,~,finite_al)
+    soil_water_l,bulk_volume_l,s,carbonate,CEC_tot,appelo,gas,al3_fn,~,finite_al, ...
+    cec_fn)
 %%% Solve Appelo exchange and carbonate charge from conserved pools.
 
 state = struct('is_valid',false,'H',NaN,'CO2_w',NaN,'Alk',NaN, ...
@@ -9,6 +10,17 @@ state = struct('is_valid',false,'H',NaN,'CO2_w',NaN,'Alk',NaN, ...
 
 if nargin < 13
     finite_al = [];
+end
+%%% Optional pH-dependent site density.  Omitted or empty keeps the constant
+%%% CEC_tot, so the legacy call signature is unchanged.  This routine locates
+%%% the charge-balance root by scanning H, so it has to see the same site
+%%% density at each trial H as the residual system it seeds, otherwise the
+%%% seed it returns violates cation mass balance by the CEC difference.
+if nargin < 14 || isempty(cec_fn)
+    cec_fn = @(H) CEC_tot;
+end
+if ~isa(cec_fn,'function_handle')
+    error('ERW:invalidParam','cec_fn must be a function handle of H.');
 end
 
 if numel(cation_tot) ~= 4 || numel(carbonate) ~= 5 || numel(appelo) ~= 6 || numel(gas) ~= 3 || ...
@@ -74,11 +86,17 @@ state.is_valid = all(isfinite([state.H,state.CO2_w,state.R_alk,state.Al3, ...
         CO2_w = (IC_tot+gas(3)*gas(1)*gas(2))/(dic_factor+gas(3)*gas(1)/k_H);
         Fs = gas(1)*(CO2_w/k_H-gas(2));
         Al3 = al3_fn(H);
+        cec_H = cec_fn(H);
         [f_vec,conc_vec,Al3,AlOH3_solid,Al_residual] = ...
-            ERW_Appelo_State_At_H(H,cation_tot,Al3,CEC_tot,soil_water_l, ...
+            ERW_Appelo_State_At_H(H,cation_tot,Al3,cec_H,soil_water_l, ...
             alpha,K_Na_H,K_K_H,K_Ca_H2,K_Mg_H2,K_Al_H3,finite_al);
-        R_alk = sum(f_vec(1:4))*CEC_tot;
-        Alk = (Alk_tot-R_alk)/soil_water_l;
+        R_alk = sum(f_vec(1:4))*cec_H;
+        Al_charge = 3*Al3;
+        if ~isempty(finite_al)
+            Al_charge = Al3*(3+2*finite_al.K1/H+finite_al.K1*finite_al.K2/H^2- ...
+                finite_al.K1*finite_al.K2*finite_al.K3*finite_al.K4/H^4);
+        end
+        Alk = (Alk_tot-R_alk)/soil_water_l+Al_charge;
         r = k1*CO2_w/H+2*k1*k2*CO2_w/H^2-H+k_w/H-Alk;
         out.H = H;
         out.CO2_w = CO2_w;

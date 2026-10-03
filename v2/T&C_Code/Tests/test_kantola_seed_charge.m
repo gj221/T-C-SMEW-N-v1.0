@@ -23,8 +23,8 @@ function test_kantola_seed_charge
 %% This runs the REAL excel seed path in the production Kantola
 %% configuration and asserts what the daily solver needs on day 1: a
 %% nonnegative counter-anion that closes WITHOUT its max(An,0) floor, a
-%% positive alkalinity pool, and the ledger identity
-%%   Alk_tot(1) = Alk(1)*Vw + R_alk(1)
+%% positive alkalinity pool, and the full-charge ledger identity
+%%   Alk_tot(1) = (Alk(1)-Al_charge(1))*Vw + R_alk(1)
 %% telescoping exactly.  A floored An breaks that identity and the solver
 %% then inherits an Alk_tot it can only host as a hyper-acid f_Al = 1
 %% state.
@@ -37,10 +37,10 @@ here = fileparts(mfilename('fullpath'));
 v2 = fileparts(fileparts(here));
 addpath(fullfile(v2, 'T&C_Code'), fullfile(v2, 'T&C_Code', 'Parameters'));
 
-[cec_probe,cec_diag] = ERW_Resolve_CEC(8.6);
-check(cec_probe == 8.6 && ~cec_diag.measured && ~cec_diag.estimated && ...
+[cec_probe,cec_diag] = ERW_Resolve_CEC(13);
+check(cec_probe == 13 && ~cec_diag.measured && ~cec_diag.estimated && ...
     strcmp(cec_diag.source,"explicit_prescribed_CEC"), ...
-    'Kantola CEC is retained as a prescribed, not measured, boundary');
+    'direct Energy Farm CEC passes unchanged as the explicit boundary');
 
 simfile = fullfile(v2, 'SIM', 'EQUIV_1D_TMP', ...
     'TC_ERW_results_Kantola_crop_control.mat');
@@ -123,20 +123,20 @@ check(isfinite(Vw) && Vw > 0, 'field-water volume is positive');
 check(B.Na(1) >= 0, 'porewater Na is non-negative');
 check(B.An(1) >= 0, 'counter-anion is non-negative');
 
-% Kantola recompute must close WITHOUT engaging its max(An,0) floor:
-% the raw carbonate-frame value equals the stored An.
+% The stored strong-anion residual must balance all aqueous Al species.
+Al_charge = (3*B.Al(1)+2*B.AlOH(1)+B.AlOH2(1)-B.AlOH4(1))/EC.Al_CEC_scale;
 An_raw = 2*B.Mg(1) + 2*B.Ca(1) + B.Na(1) + B.K(1) + B.NH4(1) ...
-    - B.Alk(1) - B.PO4(1) - B.NO3(1);
+    + Al_charge - B.Alk(1) - B.PO4(1) - B.NO3(1);
 check(An_raw > -1e-6*max(1, abs(B.An(1))), ...
-    'carbonate-frame counter-anion closes without the zero floor');
+    'full-charge counter-anion closes without the zero floor');
 check(abs(An_raw - B.An(1)) <= 1e-6*max(1, abs(B.An(1))), ...
-    'stored An equals the carbonate-frame closure');
+    'stored An equals the aqueous-charge closure');
 
-%% ---- the alkalinity ledger telescopes to the hostable identity
-ledger = B.Alk(1)*Vw + B.R_alk(1);
+%% ---- the alkalinity ledger telescopes to the full-charge identity
+ledger = (B.Alk(1)-Al_charge)*Vw + B.R_alk(1);
 check(abs(B.Alk_tot(1) - ledger) <= 1e-6*max(1, abs(B.Alk_tot(1))), ...
-    'Alk_tot(1) = Alk(1)*Vw + R_alk(1) (ledger telescopes)');
-check(B.Alk_tot(1) > 0, 'Alk_tot(1) is positive (hostable by the CEC)');
+    'Alk_tot(1) = (Alk(1)-Al_charge)*Vw + R_alk(1)');
+check(B.Alk_tot(1) > 0, 'Alk_tot(1) is positive');
 
 %% ---- exchange fractions stay a partition of unity
 f_sum = B.f_Ca(1) + B.f_Mg(1) + B.f_K(1) + B.f_Na(1) + B.f_Al(1) + B.f_H(1);
@@ -186,10 +186,14 @@ Al_residual_expected = Al_exchange+Al_dissolved+B.AlOH3_solid(1)-B.Al_tot(1);
 check(abs(B.Al_inventory_residual(1)-Al_residual_expected) <= ...
     1e-12*max(1,abs(B.Al_tot(1))), ...
     'retained Al residual closes aqueous, exchangeable and solid inventory');
-charge_residual_expected = B.HCO3(1)+2*B.CO3(1)-B.H(1)+B.k_w(1)/B.H(1)-B.Alk(1);
+charge_residual_expected = B.H(1)+2*B.Ca(1)+2*B.Mg(1)+B.Na(1)+ ...
+    B.K(1)+B.NH4(1)+Al_charge-(B.k_w(1)/B.H(1)+B.HCO3(1)+ ...
+    2*B.CO3(1)+B.NO3(1)+B.PO4(1)+B.An(1));
 check(abs(B.charge_residual(1)-charge_residual_expected) <= ...
     1e-12*max(1,abs(B.Alk(1))), ...
-    'retained signed charge residual uses the carbonate charge basis');
+    'retained signed charge residual uses all aqueous ions');
+check(abs(B.charge_residual(1)) <= 1e-8*max(1,abs(B.An(1))), ...
+    'initial aqueous charge balance closes');
 appelo_test = [];
 if isfield(EC.bulk_pH_params,'appelo')
     appelo_test = EC.bulk_pH_params.appelo;
@@ -214,6 +218,18 @@ check(strcmp(EC.bulk_pH_params.initial_pH_mode,'bulk_observed'), ...
     'Kantola seed declares the measured bulk-observation boundary');
 check(abs(f_base-0.80) <= 1e-2, ...
     'equilibrium base saturation remains within one percentage point of the prescribed target');
+%% The campaign runs another alpha with logKH moved by its rule, so the
+%% measured pretreatment base saturation must survive that move too.
+addpath(fullfile(fileparts(v2),'runtime', ...
+    'Base_1D'));
+Pc = Campaign_Parameters;
+TC_campaign = ERW_TC_const;
+TC_campaign.bulk_pH_params.appelo = struct('logKH',Pc.AppeloLogKH,'alpha',Pc.AppeloAlpha);
+Bc = ERW_MOD_PARAM_excel(t, TT, TC_campaign, ERW_biogeochem, ERW_PARAM_input, 1);
+f_base_campaign = Bc.f_Ca(1)+Bc.f_Mg(1)+Bc.f_K(1)+Bc.f_Na(1);
+fprintf('  campaign alpha %.4g: f_base_equilibrium=%.12g\n',Pc.AppeloAlpha,f_base_campaign);
+check(abs(f_base_campaign-0.80) <= 1e-2, ...
+    'campaign alpha keeps the equilibrium base saturation at the prescribed target');
 check(~isfield(EC.bulk_pH_params.appelo,'initial_affinity_shift'), ...
     'initialization creates no runtime affinity-calibration state');
 check(max(abs(EC.bulk_pH_params.appelo.logKH-fixed_logKH)) <= 1e-12, ...

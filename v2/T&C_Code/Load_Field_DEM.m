@@ -134,7 +134,11 @@ for k = 1:numel(files)
     end
     ix = xs >= crop_win(1) & xs <= crop_win(2);
     iy = ys >= crop_win(3) & ys <= crop_win(4);
-    if ~any(ix) || ~any(iy)
+    %% A tile that keeps fewer than two samples in either direction cannot
+    %% be interpolated, and cannot bracket any query point either: the
+    %% queries reach at most out_res/2 + native_res beyond the field
+    %% window, well inside the crop margin.
+    if nnz(ix) < 2 || nnz(iy) < 2
         tiles{k} = [];                        % this tile lies outside the window
         clear Z
         continue

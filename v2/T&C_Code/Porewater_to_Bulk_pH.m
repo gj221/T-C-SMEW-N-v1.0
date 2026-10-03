@@ -2,7 +2,56 @@
 %   Subfunction POREWATER_TO_BULK_pH                                    #
 %#########################################################################
 %%% References  Kanzaki et al. 2024;  ISO 10390
-function [pH_bulk, diag] = Porewater_to_Bulk_pH(...
+function [pH_bulk, diag] = Porewater_to_Bulk_pH(varargin)
+%%% Ionic-strength closure of the 1:n extract.  Porewater_to_Bulk_pH_at_I
+%%% solves the slurry, open to the laboratory air, with its constants
+%%% conditioned at a given ionic strength; this repeats it from the same
+%%% inputs until the extract's own ionic strength is stationary, then
+%%% reports the ACTIVITY pH, -log10(g1*[H+]).  That is what the electrode
+%%% measured, and what the observed bulk pH and the T&C pH response
+%%% functions refer to.  diag.H stays the extract's H+ concentration (the
+%%% next day's root anchor); diag.pH_conc is -log10([H+]).
+if nargin < 2
+    error('ERW:invalidParam','Porewater_to_Bulk_pH requires the full argument list.');
+end
+bulk_pH_params = varargin{end-1};
+if ~isstruct(bulk_pH_params)
+    error('ERW:invalidParam','bulk_pH_params must be a struct.');
+end
+I_extract = 0;
+extract_closed = false;
+for extract_pass = 1:60
+    bulk_pH_params.extract_ionic_strength = I_extract;
+    varargin{end-1} = bulk_pH_params;
+    [pH_conc, diag] = Porewater_to_Bulk_pH_at_I(varargin{:});
+    I_next = diag.ionic_str_extract;
+    %%% 1e-6 of I sits above the Newton solve's own noise, which can hold
+    %%% the iteration in a two-point cycle about 1e-9 of I apart, and moves
+    %%% the reported pH by under 1e-7.
+    if abs(I_next-I_extract) <= 1e-14+1e-6*I_next
+        extract_closed = true;
+        break
+    end
+    I_extract = I_next;
+end
+if ~extract_closed
+    error('ERW:extractActivityClosure', ...
+        'Extract ionic strength did not close in %d passes (%.6g -> %.6g mol/L).', ...
+        extract_pass,I_extract,I_next);
+end
+gamma_mono_extract = ERW_Activity_Coefficient(1,I_extract);
+pH_bulk = pH_conc-log10(gamma_mono_extract);
+diag.pH_conc = pH_conc;
+diag.pH = pH_bulk;
+diag.pH_bulk_raw = pH_bulk;
+diag.pH_bulk = pH_bulk;
+diag.extract_activity_I = I_extract;
+diag.gamma_mono_extract = gamma_mono_extract;
+diag.extract_activity_passes = extract_pass;
+end
+
+%%% Open-slurry solve at one extract ionic strength.
+function [pH_bulk, diag] = Porewater_to_Bulk_pH_at_I(...
     H_pw, Ca_pw, Mg_pw, Kion_pw, Na_pw, Al_pw, Al3_pw, ...
     An_pw, NO3_pw, PO4_pw, NH4_pw, CO2_air_extract, ...
     k1, k2, k_w, k_nh3, k_H, K1_Al, K2_Al, K3_Al, K4_Al, ...
@@ -13,10 +62,9 @@ function [pH_bulk, diag] = Porewater_to_Bulk_pH(...
 %%% Al_pw, Al3_pw                        total dissolved Al, free Al3+
 %%% An_pw                                residual bulk anion pool as aqueous concentration [umolc/L]
 %%% NO3_pw, PO4_pw, NH4_pw               ERW explicit N/P ions
-%%% CO2_air_extract                      atmospheric CO2 [umol/L, T&C units] for the extract
-%%%                                       boundary.  Lab pH measurements (1:1, 1:2, 1:2.5, 1:5
-%%%                                       water:soil) equilibrate at atmospheric pCO2, not
-%%%                                       soil-air CO2.  Always pass CO2_atm here.
+%%% CO2_air_extract                      atmospheric CO2 [umol per litre of air, T&C units:
+%%%                                       ppm/22.41].  The paste stands open to this air, so
+%%%                                       its dissolved CO2 is k_H(25 C)*CO2_air_extract.
 %%% k1, k2, k_w, k_H                     carbonate/water constants
 %%% K1_Al..K4_Al                         Al hydrolysis constants [umol/L]
 %%% f_Ca_0..f_H_0                        exchange fractions from pore-water solver
@@ -31,7 +79,12 @@ function [pH_bulk, diag] = Porewater_to_Bulk_pH(...
 %%%                     Gaines-Thomas constants; units are [-], [umol/L],
 %%%                     [umol/L], [L/umol], [umol/L], respectively
 %%%   .field_water_L_m2 field dissolved-inventory water volume [L/m2]
-%%%   .DIC_field_umol_L field dissolved inorganic carbon [umol/L]
+%%%   .DIC_field_umol_L field dissolved inorganic carbon [umol/L]; it does
+%%%                     not set the reading (the paste is open to the air)
+%%%                     and enters only diag.CO2_air_exchange_umol_L
+%%%   .CEC_cmolc_kg     prescribed reference CEC [cmolc/kg]
+%%%   .dCEC_dpH         local CEC slope [cmolc/kg per pH unit]
+%%%   .CEC_ref_pH       pore-water pH where CEC_tot applies [-]
 %%%   .H_extract_anchor_umolL optional extract-root anchor [umol/L]
 %%%   .H_init           optional previous-step H seed [umol/L]
 %%%   .pH_init          optional previous-step pH seed [-]
@@ -68,8 +121,8 @@ if any(~isfinite(f_CEC_0)) || any(f_CEC_0 < 0) || ...
 end
 
 %%% CO2 input check
-if any(~isfinite(CO2_air_extract(:))) || any(CO2_air_extract(:) <= 0)
-    error('ERW:invalidParam', 'CO2_air_extract must be finite and positive.');
+if ~isscalar(CO2_air_extract) || ~isfinite(CO2_air_extract) || CO2_air_extract <= 0
+    error('ERW:invalidParam', 'CO2_air_extract must be a finite positive scalar.');
 end
 if any(CO2_air_extract(:) > 5e4)
     error('ERW:unitCheck', ...
@@ -135,9 +188,34 @@ NH4_d = NH4_pw  * dil;
 An_d  = An_pw   * dil;
 DIC_d = bulk_pH_params.DIC_field_umol_L * dil;
 
-%%% SCEPTER closes the laboratory vessel and re-equilibrates transferred DIC
-%%% at 25 C. Field solids remain inert during the short extraction.
+%%% SCEPTER 1.0.2 obtains bulk pH from a separate 25 C laboratory-extraction
+%%% simulation with transferred solid and exchanger inputs and the configured
+%%% aqueous activity model.  This TC operator is a reduced equilibrium
+%%% approximation of the same measurement, and it departs from SCEPTER's
+%%% released default in two ways.
+%%%
+%%% The paste stands open to the laboratory air.  The sample is air-dried
+%%% and the suspension is stirred in an open vessel (ISO 10390), so its
+%%% dissolved CO2 sits at equilibrium with that air: the CO2 the field pore
+%%% water carried has left, and a carbonate-bearing paste takes from the
+%%% air what its bicarbonate needs.  SCEPTER closes its laboratory run to
+%%% gas and carries the field DIC into it.
+%%%
+%%% The plot's solid carbonates dissolve.  Calcite and the hydrated Mg
+%%% carbonate (nesquehonite) enter the paste with the soil they sit in and
+%%% dissolve until the slurry is saturated or the solid is spent; SCEPTER
+%%% freezes every solid.  Silicate solids stay inert in the paste, as in
+%%% SCEPTER (the measurement is short).
+%%%
+%%% A soil holding free carbonate therefore reads the carbonate-air
+%%% equilibrium of its paste, not the pore water it was sampled with.
 T_lab = 298.15;
+%%% Henry's constant of ERW_function (dimensionless, water over air) at its
+%%% 25 C reference, on the air concentration the callers pass (ppm/22.41):
+%%% the dissolved CO2 the model gives any water at equilibrium with that
+%%% air at 25 C.
+k_H_lab = 0.83;
+CO2_lab = k_H_lab*CO2_air_extract;                          %% [umol/L]
 pk1_lab = -(-356.309-0.0609*T_lab+21834.37/T_lab+ ...
     126.8339*log10(T_lab)-1684915/T_lab^2);
 pk2_lab = -(-107.887-0.032528*T_lab+5151.79/T_lab+ ...
@@ -148,9 +226,45 @@ k1 = 10^(-pk1_lab)*conv_mol;
 k2 = 10^(-pk2_lab)*conv_mol;
 k_w = 10^(-pk_w_lab)*conv_mol^2;
 k_nh3 = 10^(-(0.09018+2729.92/T_lab))*conv_mol;
+%%% The slurry's own ionic strength conditions its constants
+%%% (ERW_Conditional_Constants); the Porewater_to_Bulk_pH wrapper closes it.
+%%% Exchange stays on the concentration basis, as in ERW_function.
+I_extract = 0;
+if isfield(bulk_pH_params,'extract_ionic_strength') && ...
+        ~isempty(bulk_pH_params.extract_ionic_strength)
+    I_extract = bulk_pH_params.extract_ionic_strength;
+end
+k_extract = ERW_Conditional_Constants( ...
+    [k1,k2,k_w,K1_Al,K2_Al,K3_Al,K4_Al],[],I_extract);
+k1 = k_extract(1); k2 = k_extract(2); k_w = k_extract(3);
+K1_Al = k_extract(4); K2_Al = k_extract(5); K3_Al = k_extract(6); K4_Al = k_extract(7);
 
-%%% CEC per litre of extract [umol_c/L]
-cec_factor = CEC_tot / extract_water_L_m2;
+%%% The incoming field exchanger fixes each conserved cation inventory.  The
+%%% final extract exchanger is evaluated at the trial extract pH, so changing
+%%% site density repartitions that fixed inventory rather than changing it.
+[dCEC_dpH,CEC_ref_pH] = ...
+    ERW_Resolve_CEC_pH_Sensitivity(bulk_pH_params,exchange_scheme);
+dCEC_areal = 0;
+if dCEC_dpH > 0
+    if ~isfield(bulk_pH_params,'CEC_cmolc_kg') || ...
+            ~(isscalar(bulk_pH_params.CEC_cmolc_kg) && ...
+            isfinite(bulk_pH_params.CEC_cmolc_kg) && ...
+            bulk_pH_params.CEC_cmolc_kg > 0)
+        error('ERW:invalidParam', ...
+            'dCEC_dpH requires a positive finite CEC_cmolc_kg.');
+    end
+    dCEC_areal = dCEC_dpH*(CEC_tot/bulk_pH_params.CEC_cmolc_kg);
+    CEC_at_H = @(Hx) ERW_CEC_At_H(Hx,conv_mol,CEC_tot,dCEC_areal,CEC_ref_pH);
+else
+    CEC_at_H = @(Hx) CEC_tot + zeros(size(Hx));
+end
+CEC_field = CEC_at_H(H_pw);
+if ~(isfinite(CEC_field) && CEC_field > 0)
+    error('ERW:nonpositiveCEC', ...
+        'Variable CEC is nonpositive at the incoming pore-water pH.');
+end
+cec_inventory_factor = CEC_field / extract_water_L_m2;
+cec_extract_factor = @(Hx) CEC_at_H(Hx) / extract_water_L_m2;
 
 field_solid_CaCO3_umol_m2 = 0;
 if isfield(bulk_pH_params,'solid_CaCO3_umol_m2')
@@ -159,17 +273,71 @@ end
 if ~(isfinite(field_solid_CaCO3_umol_m2) && field_solid_CaCO3_umol_m2 >= 0)
     error('ERW:invalidParam', 'solid_CaCO3_umol_m2 must be finite and nonnegative.');
 end
-solid_CaCO3_umol_m2 = 0;
-has_solid_calcite = false;
+solid_CaCO3_umol_m2 = field_solid_CaCO3_umol_m2;
+has_solid_calcite = solid_CaCO3_umol_m2 > 0;
 solid_CaCO3_umol_L = solid_CaCO3_umol_m2 / extract_water_L_m2;
+%%% Calcite solubility at the 25 C of the paste (Plummer and Busenberg 1982)
+%%% as the concentration product the slurry's ionic strength allows:
+%%% Ca*CO3 = K/gamma_div^2 at saturation, the activity basis of ERW_function.
+K_CaCO3_lab = 10^(-171.9065-0.077993*T_lab+2839.319/T_lab+ ...
+    71.595*log10(T_lab))*conv_mol^2;
+K_CaCO3_extract = K_CaCO3_lab/ERW_Activity_Coefficient(2,I_extract)^2;
+%%% The plot's solid Mg carbonate is the nesquehonite pool of ERW_function
+%%% (MgCO3.3H2O).  It is far more soluble than calcite and equilibrates
+%%% with water within hours (Harrison et al. 2013, 2019), so it enters the
+%%% paste on the same terms: log K = -5.27 at the 25 C of the paste
+%%% (Harrison et al. 2019), on the same activity basis.
+field_solid_MgCO3_umol_m2 = 0;
+if isfield(bulk_pH_params,'solid_MgCO3_umol_m2')
+    field_solid_MgCO3_umol_m2 = bulk_pH_params.solid_MgCO3_umol_m2;
+end
+if ~(isfinite(field_solid_MgCO3_umol_m2) && field_solid_MgCO3_umol_m2 >= 0)
+    error('ERW:invalidParam', 'solid_MgCO3_umol_m2 must be finite and nonnegative.');
+end
+solid_MgCO3_umol_m2 = field_solid_MgCO3_umol_m2;
+has_solid_nesquehonite = solid_MgCO3_umol_m2 > 0;
+solid_MgCO3_umol_L = solid_MgCO3_umol_m2 / extract_water_L_m2;
+K_MgCO3_lab = 10^(-5.27)*conv_mol^2;
+K_MgCO3_extract = K_MgCO3_lab/ERW_Activity_Coefficient(2,I_extract)^2;
 
 %%% Charge-balance residual as function of final extract H [umol/L]
 R_fn = @(H) charge_residual(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
-    NO3_d, PO4_d, NH4_d, An_d, DIC_d, k1, k2, k_w, k_nh3, ...
+    NO3_d, PO4_d, NH4_d, An_d, CO2_lab, k1, k2, k_w, k_nh3, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, conv_mol, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_extract_factor(H), conv_mol, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
+if has_solid_calcite
+    %%% The same slurry with xi umol/L of calcite dissolved into it: the Ca
+    %%% inventory grows by xi, and the carbonate it brings joins a solution
+    %%% whose CO2 the air holds.  The residual then lets xi settle at
+    %%% saturation or at the whole solid for every trial H.
+    R_at_xi = @(H,xi) charge_residual(H, Ca_d + xi, Mg_d, K_d, Na_d, Al_d, ...
+        NO3_d, PO4_d, NH4_d, An_d, CO2_lab, k1, k2, k_w, k_nh3, ...
+        K1_Al, K2_Al, K3_Al, K4_Al, ...
+        K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
+        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+        cec_inventory_factor, cec_extract_factor(H), conv_mol, ...
+        scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
+    R_fn = @(H) charge_residual_solid_calcite(H, R_at_xi, ...
+        solid_CaCO3_umol_L, K_CaCO3_extract);
+end
+if has_solid_nesquehonite
+    %%% With nesquehonite in the sample the slurry takes x_Ca of calcite and
+    %%% x_Mg of nesquehonite: Ca grows by x_Ca and Mg by x_Mg.  The residual
+    %%% settles the pair for every trial H.
+    R_at_x = @(H,x_Ca,x_Mg) charge_residual(H, Ca_d + x_Ca, Mg_d + x_Mg, K_d, Na_d, Al_d, ...
+        NO3_d, PO4_d, NH4_d, An_d, CO2_lab, k1, k2, k_w, k_nh3, ...
+        K1_Al, K2_Al, K3_Al, K4_Al, ...
+        K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
+        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+        cec_inventory_factor, cec_extract_factor(H), conv_mol, ...
+        scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
+    R_fn = @(H) charge_residual_solid_carbonates(H, R_at_x, ...
+        solid_CaCO3_umol_L, solid_MgCO3_umol_L, ...
+        K_CaCO3_extract, K_MgCO3_extract);
+end
 
 %%% A previous converged extract root is the only continuity anchor.  A
 %%% prescribed pore-water pH or observed bulk pH is not a previous extract
@@ -211,8 +379,16 @@ if has_previous_root || has_inverse_anchor
     narrow_pH_lo = max(full_pH_lo, pH_anchor_scan - 2);
     narrow_pH_hi = min(full_pH_hi, pH_anchor_scan + 2);
     narrow_n_points = round((narrow_pH_hi - narrow_pH_lo) / narrow_step_pH) + 1;
-    [pH_scan, H_scan, R_scan] = bulk_pH_residual_scan(R_fn, conv_mol, ...
-        narrow_pH_lo, narrow_pH_hi, narrow_n_points);
+    if has_solid_nesquehonite
+        %%% Each residual of a paste holding Mg carbonate settles two
+        %%% dissolution extents, so the same grid is visited outward from
+        %%% the anchor and only as far as the first sign change.
+        [pH_scan, H_scan, R_scan] = bulk_pH_residual_scan_outward(R_fn, conv_mol, ...
+            narrow_pH_lo, narrow_pH_hi, narrow_n_points, pH_anchor_scan);
+    else
+        [pH_scan, H_scan, R_scan] = bulk_pH_residual_scan(R_fn, conv_mol, ...
+            narrow_pH_lo, narrow_pH_hi, narrow_n_points);
+    end
     [H_a, H_b, found, all_bracket_pH] = ...
         bulk_pH_select_bracket(pH_scan, H_scan, R_scan, pH_anchor_scan);
     if found
@@ -233,18 +409,12 @@ if ~(has_previous_root || has_inverse_anchor) && numel(all_bracket_pH) ~= 1
         'Cold bulk extraction requires one physical root; found %d.', ...
         numel(all_bracket_pH));
 end
-if has_solid_calcite
-    [pH_scan, H_scan, R_scan] = bulk_pH_residual_scan(R_fn, conv_mol, ...
-        full_pH_lo, full_pH_hi, full_n_points);
-    [H_a, H_b, found, all_bracket_pH] = ...
-        bulk_pH_select_bracket(pH_scan, H_scan, R_scan, pH_anchor_scan);
-    scan_used = 'full';
-    if numel(all_bracket_pH) ~= 1
-        error('ERW:nonUniqueBulkRoot', ...
-            'Solid-bearing bulk extraction requires one physical root; found %d.', ...
-            numel(all_bracket_pH));
-    end
-end
+%%% A solid-bearing paste takes the same scan as a solid-free one.  Its
+%%% residual rises monotonically with H like the solid-free residual (the
+%%% carbonate dissolved at a trial H, calcite or nesquehonite, adds its
+%%% cation's charge, and more of it dissolves at low pH, where the
+%%% carbonate ion the air allows is scarce), so the bracket the scan
+%%% selects is the root.
 if found
     H0 = bulk_pH_initial_guess(bulk_pH_params, H_pw, conv_mol, H_a, H_b);
     [H, solver_diag] = newton_raphson_H(R_fn, H0, H_a, H_b);
@@ -257,6 +427,10 @@ if ~isfinite(H) || H <= 0
 end
 [R_final, diag] = R_fn(H);
 pH_bulk_raw = diag.pH;
+diag.ionic_str_extract = ERW_Ionic_Strength(max(diag.Ca,0),max(diag.Mg,0), ...
+    max(diag.Na,0),max(diag.K,0),max(diag.Al3,0),H,max(diag.NH4,0),NO3_d, ...
+    diag.HCO3,diag.CO3,An_d,conv_mol,PO4_d,max(diag.AlOH,0), ...
+    max(diag.AlOH2,0),max(diag.AlOH4,0),diag.OH);
 pH_offset = 0;
 if isfield(bulk_pH_params,'pH_offset')
     pH_offset = bulk_pH_params.pH_offset;
@@ -281,8 +455,26 @@ end
 diag.calcite_input_umol_m2 = solid_CaCO3_umol_m2;
 diag.calcite_remaining_umol_m2 = diag.calcite_remaining_umol_L * extract_water_L_m2;
 diag.calcite_Ca_residual_umol_m2 = diag.calcite_Ca_residual_umol_L * extract_water_L_m2;
+if ~isfield(diag,'calcite_dissolved_umol_L')
+    diag.calcite_dissolved_umol_L = 0;
+end
+diag.calcite_dissolved_umol_m2 = diag.calcite_dissolved_umol_L * extract_water_L_m2;
+if ~isfield(diag,'nesquehonite_equilibrium_active')
+    diag.nesquehonite_equilibrium_active = false;
+    diag.Omega_MgCO3 = NaN;
+    diag.nesquehonite_remaining_umol_L = 0;
+    diag.nesquehonite_dissolved_umol_L = 0;
+end
+diag.nesquehonite_input_umol_m2 = solid_MgCO3_umol_m2;
+diag.nesquehonite_remaining_umol_m2 = diag.nesquehonite_remaining_umol_L * extract_water_L_m2;
+diag.nesquehonite_dissolved_umol_m2 = diag.nesquehonite_dissolved_umol_L * extract_water_L_m2;
 full_bracket_pH = [];
-large_offset = abs(pH_bulk_raw - pH_pw) > 2.5;
+%%% A paste that dissolved carbonate, calcite or Mg carbonate, stands far
+%%% above an acid pore water by chemistry, and its residual has one root,
+%%% so there is no pore-proximal root to look for.
+large_offset = abs(pH_bulk_raw - pH_pw) > 2.5 && ...
+    ~(has_solid_nesquehonite && diag.nesquehonite_dissolved_umol_L > 0) && ...
+    ~(has_solid_calcite && diag.calcite_dissolved_umol_L > 0);
 if large_offset
     %%% Check whether the narrow scan missed a pore-proximal root.
     [pH_scan_full, H_scan_full, R_scan_full] = bulk_pH_residual_scan(R_fn, conv_mol, ...
@@ -329,6 +521,12 @@ if nargout > 1
     diag.CO2_air_extract = CO2_air_extract;
     diag.CO2_ext = diag.CO2;
     diag.DIC_ext = diag.DIC;
+    %%% Carbon the paste took from the air [umol per litre of extract
+    %%% water]: its DIC less the field DIC carried in and the carbonate its
+    %%% solids dissolved.  Negative when the pore water's CO2 degasses.
+    diag.DIC_transferred_umol_L = DIC_d;
+    diag.CO2_air_exchange_umol_L = diag.DIC - DIC_d - ...
+        diag.calcite_dissolved_umol_L - diag.nesquehonite_dissolved_umol_L;
     diag.pH_bulk_raw = pH_bulk_raw;
     diag.pH_offset = pH_offset;
     diag.pH_bulk = pH_bulk;
@@ -337,7 +535,10 @@ if nargout > 1
     diag.K_CEC = bulk_pH_params.K_CEC;
     diag.f_CEC_initial = [f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, f_H_0];
     diag.dilution_factor = dil;
-    diag.cec_factor = cec_factor;
+    diag.cec_factor = cec_extract_factor(H);
+    diag.cec_inventory_factor = cec_inventory_factor;
+    diag.CEC_field = CEC_field;
+    diag.CEC_extract = cec_extract_factor(H)*extract_water_L_m2;
     diag.field_water_L_m2 = bulk_pH_params.field_water_L_m2;
     diag.extract_water_L_m2 = extract_water_L_m2;
     diag.n_extract = bulk_pH_params.n_extract;
@@ -403,6 +604,45 @@ for ii = 1:numel(H_scan)
             R_scan(ii) = NaN;
         else
             rethrow(ME)
+        end
+    end
+end
+end
+
+%% =======================================================================
+function [pH_scan, H_scan, R_scan] = bulk_pH_residual_scan_outward(R_fn, conv_mol, pH_lo, pH_hi, n_points, pH_anchor)
+%%% The grid of bulk_pH_residual_scan, evaluated outward from the anchor and
+%%% stopped at the first sign change between neighbouring points.  The
+%%% residual of a solid-bearing paste rises with H, so that sign change is
+%%% the only one and the bracket is the one the whole scan would select.
+%%% Points never reached stay NaN, which bulk_pH_select_bracket skips.
+pH_scan = linspace(pH_lo, pH_hi, n_points);
+H_scan = 10.^(-pH_scan) * conv_mol;
+R_scan = nan(size(H_scan));
+[~, i_anchor] = min(abs(pH_scan - pH_anchor));
+for step = 0:n_points-1
+    if step == 0
+        visit = i_anchor;
+    else
+        visit = [i_anchor + step, i_anchor - step];
+    end
+    for ii = visit(visit >= 1 & visit <= n_points)
+        try
+            R_scan(ii) = R_fn(H_scan(ii));
+        catch ME
+            if startsWith(ME.identifier, 'ERW:')
+                R_scan(ii) = NaN;
+            else
+                rethrow(ME)
+            end
+        end
+        for jj = [ii-1, ii+1]
+            if jj >= 1 && jj <= n_points && ...
+                    isfinite(R_scan(ii)) && isfinite(R_scan(jj)) && ...
+                    (R_scan(ii) == 0 || R_scan(jj) == 0 || ...
+                    sign(R_scan(ii)) ~= sign(R_scan(jj)))
+                return
+            end
         end
     end
 end
@@ -604,15 +844,15 @@ end
 
 %% =======================================================================
 function [R, state] = charge_residual(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
-    NO3_d, PO4_d, NH4_d, An_d, DIC_d, k1, k2, k_w, ~, ...
+    NO3_d, PO4_d, NH4_d, An_d, CO2_ext, k1, k2, k_w, ~, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, conv_mol, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, conv_mol, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3)
 
-%%% Closed-extract carbonate speciation conserves transferred field DIC.
-carbonate_den = 1+k1/H+k1*k2/H^2;
-CO2_ext = DIC_d/carbonate_den;
+%%% Open-extract speciation: the laboratory air holds the dissolved CO2 at
+%%% CO2_ext, and bicarbonate and carbonate follow it at the trial H.
 HCO3 = k1 * CO2_ext / H;
 CO3  = k2 * HCO3 / H;
 OH   = k_w / H;
@@ -621,7 +861,8 @@ OH   = k_w / H;
 state = exchange_state(H, Ca_d, Mg_d, K_d, Na_d, NH4_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
 
 %%% Al speciation
@@ -650,18 +891,251 @@ state.pH = -log10(H / conv_mol);
 end
 
 %% =======================================================================
+function [R, state] = charge_residual_solid_calcite(H, R_at_xi, S, K_sat)
+%%% Charge residual of the open slurry at extract H when the soil sample
+%%% carries S umol of solid calcite per litre of extract water.  Calcite
+%%% dissolves until the slurry is saturated (Ca*CO3 = K_sat, the
+%%% concentration product at the slurry's ionic strength) or the solid is
+%%% spent.  A slurry already supersaturated before anything dissolves is
+%%% left as it is: nothing precipitates within a pH measurement.  At a
+%%% given H the air fixes the carbonate ion and the saturation ratio rises
+%%% monotonically with the amount dissolved, because the Ca inventory
+%%% grows, so the extent is bracketed on [0,S] and bisected.  The extent
+%%% returned is the
+%%% undersaturated end of the last bracket, so the remaining solid is never
+%%% negative.
+[R, state] = R_at_xi(H, S);
+xi = S;
+active = false;
+if state.Ca*state.CO3/K_sat > 1
+    active = true;
+    %%% At a trial H well above the pore water's, the Gaines-Thomas exchanger
+    %%% may have no partition until some calcite has dissolved: the cations
+    %%% the slurry holds cannot fill its sites.  Such a slurry is short of
+    %%% Ca, so it counts as undersaturated and the bracket moves up.  The
+    %%% Appelo exchanger has a partition for any inventory and never takes
+    %%% this path.
+    [R, state, hosted] = paste_state_if_hosted(R_at_xi, H, 0);
+    xi = 0;
+    if ~hosted || state.Ca*state.CO3/K_sat < 1
+        lo = 0;
+        hi = S;
+        lo_hosted = hosted;
+        for it = 1:200
+            mid = 0.5*(lo+hi);
+            [~, state_mid, mid_hosted] = paste_state_if_hosted(R_at_xi, H, mid);
+            if mid_hosted && state_mid.Ca*state_mid.CO3/K_sat > 1
+                hi = mid;
+            else
+                lo = mid;
+                lo_hosted = mid_hosted;
+            end
+            if hi-lo <= 1e-13*S
+                break
+            end
+        end
+        xi = lo;
+        if ~lo_hosted
+            xi = hi;
+        end
+        [R, state] = R_at_xi(H, xi);
+    end
+end
+state.calcite_equilibrium_active = active;
+state.calcite_dissolved_umol_L = xi;
+state.calcite_remaining_umol_L = S - xi;
+state.Omega_CaCO3 = state.Ca*state.CO3/K_sat;
+state.calcite_Ca_residual_umol_L = 0;
+end
+
+%% =======================================================================
+function [R, state, hosted] = paste_state_if_hosted(R_at_xi, H, xi)
+%%% The slurry at extract H with xi of calcite dissolved, or hosted = false
+%%% when its exchanger has no partition there (ERW:partitionExchange).
+hosted = true;
+try
+    [R, state] = R_at_xi(H, xi);
+catch ME
+    if ~strcmp(ME.identifier, 'ERW:partitionExchange')
+        rethrow(ME)
+    end
+    hosted = false;
+    R = NaN;
+    state = struct('Ca', NaN, 'CO3', NaN);
+end
+end
+
+%% =======================================================================
+function [R, state] = charge_residual_solid_carbonates(H, R_at_x, S_Ca, S_Mg, K_Ca, K_Mg)
+%%% Charge residual of the open slurry at extract H when the soil sample
+%%% carries S_Ca umol of solid calcite and S_Mg umol of solid nesquehonite
+%%% per litre of extract water.  Each solid dissolves until the slurry is
+%%% saturated with it or the solid is spent, and nothing precipitates
+%%% within a pH measurement.  The two meet on the exchanger, so the
+%%% extents are settled together: for each solid
+%%%     x = S and Omega <= 1,   0 < x < S and Omega = 1,   or   x = 0 and Omega >= 1.
+%%% At a given H the air fixes the carbonate ion, and either saturation
+%%% ratio rises with either extent (the cation inventory grows, and the
+%%% added cation displaces the other from the exchanger).  The calcite
+%%% extent that meets its own condition therefore falls as more
+%%% nesquehonite dissolves, and the nesquehonite ratio taken along that
+%%% calcite extent still rises, so the pair is one bracketed solve for the
+%%% nesquehonite extent with the calcite extent resolved inside it.
+[x_Ca, R, state] = paste_calcite_extent(H, R_at_x, S_Ca, S_Mg, K_Ca);
+x_Mg = S_Mg;
+log_hi = log(state.Mg*state.CO3/K_Mg);
+if log_hi > 0
+    [x_Ca, R, state] = paste_calcite_extent(H, R_at_x, S_Ca, 0, K_Ca);
+    x_Mg = 0;
+    log_lo = log(state.Mg*state.CO3/K_Mg);
+    if log_lo < 0
+        log_sat = @(x) paste_nesquehonite_log_saturation(H, R_at_x, S_Ca, x, K_Ca, K_Mg);
+        x_Mg = paste_extent_root(log_sat, S_Mg, log_lo, log_hi);
+        [x_Ca, R, state] = paste_calcite_extent(H, R_at_x, S_Ca, x_Mg, K_Ca);
+    end
+end
+state.calcite_equilibrium_active = x_Ca < S_Ca;
+state.calcite_dissolved_umol_L = x_Ca;
+state.calcite_remaining_umol_L = S_Ca - x_Ca;
+state.Omega_CaCO3 = state.Ca*state.CO3/K_Ca;
+state.calcite_Ca_residual_umol_L = 0;
+state.nesquehonite_equilibrium_active = x_Mg < S_Mg;
+state.nesquehonite_dissolved_umol_L = x_Mg;
+state.nesquehonite_remaining_umol_L = S_Mg - x_Mg;
+state.Omega_MgCO3 = state.Mg*state.CO3/K_Mg;
+end
+
+%% =======================================================================
+function [x_Ca, R, state] = paste_calcite_extent(H, R_at_x, S_Ca, x_Mg, K_Ca)
+%%% Calcite dissolved in the slurry at extract H once x_Mg of nesquehonite
+%%% is in it: the whole solid, none of it, or the amount that saturates.
+[R, state] = R_at_x(H, S_Ca, x_Mg);
+x_Ca = S_Ca;
+if S_Ca > 0
+    log_hi = log(state.Ca*state.CO3/K_Ca);
+    if log_hi > 0
+        [R, state] = R_at_x(H, 0, x_Mg);
+        x_Ca = 0;
+        log_lo = log(state.Ca*state.CO3/K_Ca);
+        if log_lo < 0
+            log_sat = @(x) paste_calcite_log_saturation(H, R_at_x, x, x_Mg, K_Ca);
+            x_Ca = paste_extent_root(log_sat, S_Ca, log_lo, log_hi);
+            [R, state] = R_at_x(H, x_Ca, x_Mg);
+        end
+    end
+end
+end
+
+%% =======================================================================
+function v = paste_calcite_log_saturation(H, R_at_x, x_Ca, x_Mg, K_Ca)
+[~, state] = R_at_x(H, x_Ca, x_Mg);
+v = log(state.Ca*state.CO3/K_Ca);
+end
+
+%% =======================================================================
+function v = paste_nesquehonite_log_saturation(H, R_at_x, S_Ca, x_Mg, K_Ca, K_Mg)
+[~, ~, state] = paste_calcite_extent(H, R_at_x, S_Ca, x_Mg, K_Ca);
+v = log(state.Mg*state.CO3/K_Mg);
+end
+
+%% =======================================================================
+function x = paste_extent_root(log_sat, S, f_lo, f_hi)
+%%% Extent on (0,S) at which a rising log saturation ratio crosses zero,
+%%% from its values f_lo < 0 at 0 and f_hi > 0 at S.  Brent's method: the
+%%% root stays bracketed throughout, inverse quadratic or secant steps are
+%%% taken while they shrink the bracket fast enough and bisection steps
+%%% otherwise, and the bracket closes to 1e-13 of S.  The undersaturated
+%%% end of the final bracket is returned, so the solid remaining is never
+%%% negative and dissolution never leaves the slurry supersaturated.
+tol = 1e-13*S;
+a = 0;
+f_a = f_lo;
+b = S;
+f_b = f_hi;
+c = b;
+f_c = f_b;
+d = b - a;
+e = d;
+for it = 1:200
+    if (f_b > 0) == (f_c > 0)
+        c = a;
+        f_c = f_a;
+        d = b - a;
+        e = d;
+    end
+    if abs(f_c) < abs(f_b)
+        a = b;
+        b = c;
+        c = a;
+        f_a = f_b;
+        f_b = f_c;
+        f_c = f_a;
+    end
+    half = 0.5*(c - b);
+    if abs(half) <= tol || f_b == 0
+        break
+    end
+    if abs(e) >= tol && abs(f_a) > abs(f_b)
+        s = f_b/f_a;
+        if a == c
+            p = 2*half*s;
+            q = 1 - s;
+        else
+            q = f_a/f_c;
+            r = f_b/f_c;
+            p = s*(2*half*q*(q - r) - (b - a)*(r - 1));
+            q = (q - 1)*(r - 1)*(s - 1);
+        end
+        if p > 0
+            q = -q;
+        end
+        p = abs(p);
+        if 2*p < min(3*half*q - abs(tol*q), abs(e*q))
+            e = d;
+            d = p/q;
+        else
+            d = half;
+            e = d;
+        end
+    else
+        d = half;
+        e = d;
+    end
+    a = b;
+    f_a = f_b;
+    if abs(d) > tol
+        b = b + d;
+    else
+        b = b + sign(half)*tol;
+    end
+    f_b = log_sat(b);
+end
+if (f_b > 0) == (f_c > 0)
+    c = a;
+    f_c = f_a;
+end
+if f_b <= 0
+    x = b;
+else
+    x = c;
+end
+end
+
+
+%% =======================================================================
 function [R, state] = charge_residual_calcite(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
     NO3_d, PO4_d, NH4_d, An_d, CO2_ext, k1, k2, k_w, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, conv_mol, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, conv_mol, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, ...
     solid_CaCO3_umol_L, K_CaCO3)
 
 HCO3 = k1 * CO2_ext / H;
 CO3  = k2 * HCO3 / H;
 OH   = k_w / H;
-Ca_total_all = Ca_d + cec_factor*f_Ca_0/2 + solid_CaCO3_umol_L;
+Ca_total_all = Ca_d + cec_inventory_factor*f_Ca_0/2 + solid_CaCO3_umol_L;
 Ca_sat = K_CaCO3 / CO3;
 
 calcite_equilibrium_active = false;
@@ -670,7 +1144,8 @@ if isfinite(Ca_sat) && Ca_sat > 0 && Ca_sat < Ca_total_all
     state_sat = exchange_state_fixed_ca(H, Ca_sat, Mg_d, K_d, Na_d, NH4_d, Al_d, ...
         K1_Al, K2_Al, K3_Al, K4_Al, ...
         K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-        f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+        f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+        cec_inventory_factor, cec_factor, ...
         scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
     Ca_used = state_sat.Ca + cec_factor*state_sat.f_Ca/2;
     Ca_tol = 1e-10*max(Ca_total_all,1);
@@ -684,7 +1159,8 @@ if ~calcite_equilibrium_active
     state = exchange_state(H, Ca_d + solid_CaCO3_umol_L, Mg_d, K_d, Na_d, NH4_d, Al_d, ...
         K1_Al, K2_Al, K3_Al, K4_Al, ...
         K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+        cec_inventory_factor, cec_factor, ...
         scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
 end
 
@@ -710,13 +1186,13 @@ end
 function state = exchange_state_fixed_ca(H, Ca, Mg_d, K_d, Na_d, NH4_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_inventory_factor, cec_factor, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3)
 
-Mg_total = Mg_d + cec_factor*f_Mg_0/2;
-K_total  = K_d  + cec_factor*f_K_0;
-Na_total = Na_d + cec_factor*f_Na_0;
-Al_total = Al_d + cec_factor*f_Al_0/3;
+Mg_total = Mg_d + cec_inventory_factor*f_Mg_0/2;
+K_total  = K_d  + cec_inventory_factor*f_K_0;
+Na_total = Na_d + cec_inventory_factor*f_Na_0;
+Al_total = Al_d + cec_inventory_factor*f_Al_0/3;
 Al3_frac = al3_fraction(H,K1_Al,K2_Al,K3_Al,K4_Al);
 
 if scheme_is_appelo
@@ -859,14 +1335,16 @@ end
 function state = exchange_state(H, Ca_d, Mg_d, K_d, Na_d, NH4_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3)
 
 [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, Ca_eq, Mg_eq, K_eq, Na_eq, Al_eq, mass_residuals] = ...
     partition_exchange_inventory(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
 
 [Al3_eq,AlOH_eq,AlOH2_eq,AlOH3_eq,AlOH4_eq] = al_hydrolysis_species(...
@@ -913,13 +1391,15 @@ function [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, Ca, Mg, K, Na, Al, mass_residuals] =
     partition_exchange_inventory(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
     K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3)
 if scheme_is_appelo
     [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, Ca, Mg, K, Na, Al, mass_residuals] = ...
         partition_exchange_inventory_appelo(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
         K1_Al, K2_Al, K3_Al, K4_Al, ...
-        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+        f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+        cec_inventory_factor, cec_factor, ...
         appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3);
     return
 end
@@ -928,8 +1408,9 @@ end
 %%% The initial dissolved concentration and the exchangeable pool of each
 %%% cation are one conserved inventory.  Exchange fractions are charge
 %%% fractions, so divalent Ca/Mg are divided by 2 and trivalent Al by 3
-%%% before adding the exchangeable charge cec_factor*f_X_0:
-%%%     X_total = X_d + cec_factor * f_X_0 / z_X   [umol/L]
+%%% before adding the incoming exchangeable charge
+%%% cec_inventory_factor*f_X_0:
+%%%     X_total = X_d + cec_inventory_factor * f_X_0 / z_X   [umol/L]
 %%% At each trial pore-water H a single free variable f_Ca fixes dissolved
 %%% Ca, and the Gaines-Thomas relations plus each cation's own mass balance
 %%% give the other fractions; the Ca-H Gaines-Thomas relation
@@ -960,11 +1441,11 @@ if any(~isfinite(f_initial)) || any(f_initial < 0)
 end
 
 Al3_frac = al3_fraction(H, K1_Al, K2_Al, K3_Al, K4_Al);
-Ca_total = Ca_d + cec_factor*f_Ca_0/2;
-Mg_total = Mg_d + cec_factor*f_Mg_0/2;
-K_total  = K_d  + cec_factor*f_K_0;
-Na_total = Na_d + cec_factor*f_Na_0;
-Al_total = Al_d + cec_factor*f_Al_0/3;
+Ca_total = Ca_d + cec_inventory_factor*f_Ca_0/2;
+Mg_total = Mg_d + cec_inventory_factor*f_Mg_0/2;
+K_total  = K_d  + cec_inventory_factor*f_K_0;
+Na_total = Na_d + cec_inventory_factor*f_Na_0;
+Al_total = Al_d + cec_inventory_factor*f_Al_0/3;
 if ~(isfinite(Ca_total) && Ca_total > 0)
     error('ERW:partitionExchange', 'The conserved Ca inventory must be positive.');
 end
@@ -1070,7 +1551,8 @@ end
 function [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, Ca, Mg, K, Na, Al, mass_residuals] = ...
     partition_exchange_inventory_appelo(H, Ca_d, Mg_d, K_d, Na_d, Al_d, ...
     K1_Al, K2_Al, K3_Al, K4_Al, ...
-    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, cec_factor, ...
+    f_Ca_0, f_Mg_0, f_K_0, f_Na_0, f_Al_0, ...
+    cec_inventory_factor, cec_factor, ...
     appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3)
 %%% SCEPTER/Appelo (1994) partition of the air-dry extract.
 %%% gamma = 10^(alpha*f_H):
@@ -1105,11 +1587,11 @@ if any(~isfinite(f_initial)) || any(f_initial < 0)
 end
 
 Al3_frac = al3_fraction(H, K1_Al, K2_Al, K3_Al, K4_Al);
-Ca_total = Ca_d + cec_factor*f_Ca_0/2;
-Mg_total = Mg_d + cec_factor*f_Mg_0/2;
-K_total  = K_d  + cec_factor*f_K_0;
-Na_total = Na_d + cec_factor*f_Na_0;
-Al_total = Al_d + cec_factor*f_Al_0/3;
+Ca_total = Ca_d + cec_inventory_factor*f_Ca_0/2;
+Mg_total = Mg_d + cec_inventory_factor*f_Mg_0/2;
+K_total  = K_d  + cec_inventory_factor*f_K_0;
+Na_total = Na_d + cec_inventory_factor*f_Na_0;
+Al_total = Al_d + cec_inventory_factor*f_Al_0/3;
 if ~(isfinite(Ca_total) && Ca_total > 0)
     error('ERW:partitionExchange', 'The conserved Ca inventory must be positive.');
 end

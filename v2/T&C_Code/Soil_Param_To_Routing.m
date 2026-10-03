@@ -1,4 +1,4 @@
-function sp = Soil_Param_To_Routing(Soil_Param, SPAR)
+function sp = Soil_Param_To_Routing(Soil_Param, SPAR, aR)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Soil_Param_To_Routing
 %%
@@ -9,12 +9,13 @@ function sp = Soil_Param_To_Routing(Soil_Param, SPAR)
 %% this adapter exists:
 %%     Soil_Param.Ks_Zs -> sp.Ks     (saturated conductivity per layer)
 %%     Soil_Param.Phy   -> sp.Phy1   (air-dry matric potential, VG only)
-%% SPAR is a free-standing workspace variable in the parameter files, so
-%% it is passed in rather than read off the struct.
+%% SPAR and the anisotropy ratio aR are free-standing workspace variables in
+%% the parameter files, so they are passed in rather than read off the struct.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 sp        = Soil_Param;
 sp.SPAR   = SPAR;
+sp.aR     = aR;
 sp.Ks     = Soil_Param.Ks_Zs;
 sp.Phy1   = Soil_Param.Phy;
 

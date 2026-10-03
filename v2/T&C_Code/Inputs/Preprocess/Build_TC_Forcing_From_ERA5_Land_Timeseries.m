@@ -97,6 +97,22 @@ Ws(Ws==0) = 0.01;
 Pr = 1000*max(tp,0);
 Rsw = max(ssrd,0)/3600;
 
+% Vapour pressure is derived from this file's own dewpoint, using the same
+% Magnus form as the saturation pressure, so ea, esat, Tdew and Ta stay mutually
+% consistent. That is deliberate and differs from the legacy forcing: in
+% Data_Kantola.mat, ea disagrees with Magnus(its own Tdew) by up to 381 Pa
+% (mean +42 Pa over the 2016-2021 overlap), while its esat does match
+% Magnus(Ta) to 1.4 Pa. Tdew feeds the radiation partition and ea feeds the
+% vapour pressure deficit, so the legacy file has two mutually contradictory
+% humidity variables in independent use. Do not "restore" that behaviour.
+%
+% The Magnus coefficients are the over-water form, applied at all temperatures
+% including the sub-freezing hours this site sees (t2m reaches 244 K), where
+% saturation over ice is lower. Retained deliberately: it is applied
+% consistently here and in Apply_CMIP6_Deltas_To_ERA5_Land, the RH round trip
+% is therefore exact, and it matches legacy. The 2016-2021 comparison showed
+% the ea offset concentrated in WARM hours (+51.5 Pa) not cold (-10.2 Pa), so
+% the ice phase is demonstrably not the source of that discrepancy.
 esat = 610.8*exp(17.27*Ta./(237.3+Ta));
 ea = 610.8*exp(17.27*Tdew./(237.3+Tdew));
 ea = min(ea,esat);
@@ -275,6 +291,6 @@ switch lower(parts{1})
 end
 local_time = utc_time + hours(DeltaGMT);
 local_time.TimeZone = '';
-Date = datenum(local_time); %#ok<DATNM>
+Date = datenum(local_time);
 Date = Date(:);
 end

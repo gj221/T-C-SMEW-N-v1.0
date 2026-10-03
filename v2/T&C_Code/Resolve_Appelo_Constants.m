@@ -14,9 +14,11 @@
 %%% 10^(-logkhaq); get_maqads_all_v3 site-sum solve)
 %%%     f[X-ς] = 10^(-logKH) * [ς] * (f_H/[H+])^Z * 10^(alpha*Z*f_H)
 %%% where the Appelo (1994) proton-loading term ("log KHX =
-%%% 5.9 - 3.4 f(H)") enters ONLY through the gamma factor
-%%% 10^(alpha*Z*f_H) applied at use -- nothing of alpha is folded into
-%%% the constant, and the sign of logKH is NEGATIVE (H is preferred:
+%%% 5.9 - 3.4 f(H)") enters through the gamma factor
+%%% 10^(alpha*Z*f_H).  SCEPTER accepts logKH and alpha as independent inputs.
+%%% The coupled sweep below shifts logKH with alpha so that selectivity is
+%%% held at the seed's f_H, keeping the measured base saturation.  The sign
+%%% of logKH is NEGATIVE (H is preferred:
 %%% at pH 4 an Appelo organic exchanger is H-loaded, and at Kantola
 %%% porewater conditions, pH ~6, the equilibrium is base-saturated
 %%% with f_Al ~ 1e-5).  The previous form 10^(+Z*(logKH - alpha))
@@ -30,7 +32,9 @@
 %%%   K_Mg_H2 = 10^(-logKH(4)) * 1e6        [umol/L]
 %%%   K_Al_H3 = 10^(-logKH(5)) * 1e12       [(umol/L)^2]
 %%%   appelo_alpha                          [-]
-function [K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, appelo_alpha] = ...
+%%%   appelo_logKH                          [-]
+function [K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, appelo_alpha, ...
+    appelo_logKH] = ...
     Resolve_Appelo_Constants(appelo_params)
 
 appelo_logKH_default = [5.9 4.8 10.47 10.786 16.47];   %% Na K Ca Mg Al
@@ -38,9 +42,12 @@ appelo_logKH_default = [5.9 4.8 10.47 10.786 16.47];   %% Na K Ca Mg Al
 %%% term gamma = 10^(alpha*Z*f_H), so it sets how hard the exchanger
 %%% competes for base cations as protons accumulate on the sites.
 %%%
-%%% SCEPTER v1.0 uses 3.4 for the default exchanger.  The manuscript's
-%%% optimized mesocosm fit uses 1.3 together with a different logKH set;
-%%% non-default values must therefore be supplied explicitly.
+%%% The bundled SCEPTER 1.0.2 source uses 3.4 for the default exchanger.  The
+%%% manuscript's optimized mesocosm fit uses 1.3.  SCEPTER permits alpha and
+%%% logKH to vary independently.  This sweep moves each full-reaction logKH
+%%% by Z*f_H_seed times the change in alpha (f_H_seed = 0.20), which holds
+%%% 10^(-logKH + alpha*Z*f_H) fixed at the seed and so keeps its 80% base
+%%% saturation at every alpha.
 appelo_alpha_default = 3.4;
 if nargin < 1 || isempty(appelo_params)
     appelo_logKH = appelo_logKH_default;

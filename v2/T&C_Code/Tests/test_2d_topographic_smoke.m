@@ -183,9 +183,12 @@ if isfield(R1,'IrD');       IrD = cm(R1.IrD);         end     %#ok<NASGU>
 
 Parameter_Directory = fullfile(code,'Parameters');            %#ok<NASGU>
 apply_rock = logical(R1.OPT_ERW && ERW_PARAM_input.diss_f > 0);
+%% The column settings v0.9's equivalence test gives the frame: the field
+%% record's last application, no replaced literals, native saturation.
 ColCfg = repmat(struct( ...
     'PARAM_IC', fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM) '.m']), ...
-    'PFT_OVERRIDE','', 'apply_rock',apply_rock), topo.N_cells, 1); %#ok<NASGU>
+    'PFT_OVERRIDE','', 'last_application_year',2019, 'biogeo_overrides',[], ...
+    'saturation_exponent',1, 'apply_rock',apply_rock), topo.N_cells, 1); %#ok<NASGU>
 
 old = cd(code); cleanup = onCleanup(@() cd(old));
 MAIN_FRAME_BG_ERW_2D;

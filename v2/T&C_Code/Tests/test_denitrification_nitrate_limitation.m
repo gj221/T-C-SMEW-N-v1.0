@@ -1,8 +1,8 @@
 function test_denitrification_nitrate_limitation
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Denitrification must retain the nitrate half-saturation in the active
-%% rate law. Otherwise the per-unit-NO3 loss is independent of inventory
-%% and wet maize events overdraw the event-scale N2O flux.
+%% The TC-SMEW denitrification sink must retain its legacy first-order
+%% nitrate dependence. A Monod fraction cannot be added without the
+%% denitrifier biomass and maximum-capacity terms used by DNDC.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 here = fileparts(mfilename('fullpath'));
@@ -26,26 +26,50 @@ args{10} = 1;
 args{11} = 0.5;
 args{55} = 1;
 
-soil_mass = args{3}*args{4}*1000;
-Kn = args{50}.Kn;
-NO3_lo = 0.1*Kn;
-NO3_hi = Kn;
-DOC = 10*args{50}.Kc;
+NO3_lo = 1;
+NO3_hi = 10;
+DOC_concentration = 10*args{50}.Kc;
+DOC = DOC_concentration*args{3};
 
 rate_lo = denitrification_rate(args,DOC,NO3_lo);
 rate_hi = denitrification_rate(args,DOC,NO3_hi);
-observed_ratio = (rate_lo/NO3_lo)/(rate_hi/NO3_hi);
-expected_ratio = (NO3_lo/(NO3_lo+Kn))/(NO3_hi/(NO3_hi+Kn));
-fprintf('soil_mass %.6g, Kn %.6g, rates %.6g %.6g, ratio %.6g\n', ...
-    soil_mass,Kn,rate_lo,rate_hi,observed_ratio);
+observed_ratio = rate_hi/rate_lo;
+expected_ratio = NO3_hi/NO3_lo;
+fprintf('rates %.6g %.6g, ratio %.6g\n', ...
+    rate_lo,rate_hi,observed_ratio);
 
 assert(rate_lo > 0 && rate_hi > 0, ...
-    'The nitrate-limitation fixture must produce finite positive denitrification.');
+    'The nitrate-response fixture must produce finite positive denitrification.');
 assert(abs(observed_ratio-expected_ratio) < 1e-8, ...
-    ['Denitrification does not follow NO3/(NO3+Kn): observed normalized ' ...
-    'rate ratio %.6g, expected %.6g.'],observed_ratio,expected_ratio);
-fprintf('PASS: nitrate-normalized rate ratio %.6g matches %.6g\n', ...
+    ['Denitrification does not retain the legacy first-order nitrate ' ...
+    'response: observed ratio %.6g, expected %.6g.'], ...
     observed_ratio,expected_ratio);
+fprintf('PASS: first-order nitrate rate ratio %.6g matches %.6g\n', ...
+    observed_ratio,expected_ratio);
+
+depths = [0.15 0.30];
+fractional_rate = zeros(size(depths));
+NO3_concentration = 30;
+for k = 1:numel(depths)
+    depth_args = args;
+    depth_args{3} = depths(k);
+    DOC_areal = DOC_concentration*depths(k);
+    NO3_areal = NO3_concentration*depths(k);
+    fractional_rate(k) = ...
+        denitrification_rate(depth_args,DOC_areal,NO3_areal)/NO3_areal;
+end
+assert(abs(diff(fractional_rate)) < 1e-12, ...
+    ['The DOC half-saturation changes with layer depth. Kc must retain ' ...
+    'its source volumetric basis.']);
+fprintf('PASS: volumetric DOC limitation is independent of layer depth\n');
+
+cap_args = args;
+cap_args{50}.KNmaxd = 100;
+NO3_available = 1;
+cap_rate = denitrification_rate(cap_args,DOC,NO3_available);
+assert(abs(cap_rate-NO3_available) < 1e-10, ...
+    'The availability cap must prevent denitrification from overdrawing NO3.');
+fprintf('PASS: the denitrification availability cap preserves NO3 mass\n');
 
 bio_source = fileread(fullfile(code,'BIOGEOCHEMISTRY_DYNAMIC3.m'));
 assert(contains(bio_source,'B(31)= B(31)- NH4_Uptake') && ...
@@ -67,7 +91,7 @@ args{2}(31:32) = 0;
 args{2}(12) = DOC;
 args{2}(13) = 0;
 args{2}(32) = NO3;
-[~,~,~,~,~,~,N2flx,~,~,~,~,~,~,~,N2Oflx] = ...
-    BIOGEOCHEMISTRY_DYNAMIC3(args{:});
-rate = N2flx+N2Oflx;
+out = cell(1,18);
+[out{:}] = BIOGEOCHEMISTRY_DYNAMIC3(args{:});
+rate = out{17};
 end

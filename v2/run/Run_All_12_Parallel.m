@@ -15,7 +15,13 @@ function plan = Run_All_12_Parallel(varargin)
 %%   CellSpinupStateFiles one state MAT per disconnected polygon    {}
 %%   AppeloAlpha     optional run-local Appelo alpha              []
 %%   AppeloLogKH     optional [Na K Ca Mg Al] logKH vector        []
+%%   KNmaxd          optional denitrification rate [d^-1]         []
+%%   Kbot            optional bottom boundary [mm h^-1]           []
+%%   ParallelWorkers daily ERW workers inside each run             []
 %%   ResultDirectory optional result and checkpoint directory      ''
+%%   Scenario        forcing suffix, Data_<Location>_<Scenario>    ''
+%%   CalciteCase     ERW workbook row for the calcite runs only    []
+%%   LastApplicationYear  last 10 November rock application     [] (2019)
 %%   PreferenceDirectoryRoot optional root for isolated MATLAB prefs ''
 %%   PollSeconds     status polling interval                      [20]
 %%   MaxRuntimeHours stop waiting after this time per child      [168]
@@ -28,9 +34,11 @@ opt = struct('MaxConcurrent',2,'Runs',[10:12 1:9],'NDays',[],'StartDate',[], ...
     'FieldFeatureIndices',[], ...
     'CellAgronomicFiles',{{}},'CellSpinupStateFiles',{{}}, ...
     'AppeloAlpha',[],'AppeloLogKH',[], ...
-    'PollSeconds',20, ...
+    'KNmaxd',[],'Kbot',[], ...
+    'ParallelWorkers',[],'PollSeconds',20, ...
     'MaxRuntimeHours',168,'DryRun',false,'Overwrite',false, ...
-    'ResultDirectory','','LogDirectory','','PreferenceDirectoryRoot','');
+    'ResultDirectory','','LogDirectory','','PreferenceDirectoryRoot','', ...
+    'Scenario','','CalciteCase',[],'LastApplicationYear',[]);
 if mod(numel(varargin),2) ~= 0
     error('Run_All_12_Parallel:BadOptions','Options must be name/value pairs.');
 end
@@ -65,6 +73,9 @@ validate_optional_integer(opt.GridNy,'GridNy');
 validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
 validate_optional_index_vector(opt.FieldFeatureIndices,'FieldFeatureIndices');
 validate_optional_nonnegative_scalar(opt.AppeloAlpha,'AppeloAlpha');
+validate_optional_nonnegative_scalar(opt.KNmaxd,'KNmaxd');
+validate_optional_kbot(opt.Kbot);
+validate_optional_nonnegative_integer(opt.ParallelWorkers,'ParallelWorkers');
 if ~isempty(opt.AppeloLogKH) && ~(isnumeric(opt.AppeloLogKH) && ...
         isvector(opt.AppeloLogKH) && numel(opt.AppeloLogKH) == 5 && ...
         all(isfinite(opt.AppeloLogKH)))
@@ -170,6 +181,24 @@ if ~isempty(opt.AppeloAlpha)
 end
 if ~isempty(opt.AppeloLogKH)
     extra = [extra {'AppeloLogKH',opt.AppeloLogKH}];
+end
+if ~isempty(opt.KNmaxd)
+    extra = [extra {'KNmaxd',opt.KNmaxd}];
+end
+if ~isempty(opt.Kbot)
+    extra = [extra {'Kbot',opt.Kbot}];
+end
+if ~isempty(opt.ParallelWorkers)
+    extra = [extra {'ParallelWorkers',opt.ParallelWorkers}];
+end
+if ~isempty(opt.Scenario)
+    extra = [extra {'Scenario',opt.Scenario}];
+end
+if ~isempty(opt.CalciteCase)
+    extra = [extra {'CalciteCase',opt.CalciteCase}];
+end
+if ~isempty(opt.LastApplicationYear)
+    extra = [extra {'LastApplicationYear',opt.LastApplicationYear}];
 end
 if ~isempty(opt.ResultDirectory)
     extra = [extra {'ResultDirectory',out_dir}];
@@ -366,6 +395,12 @@ end
 
 function tag = result_tag(R,opt,polygon_index)
 tag = R.name;
+if ~isempty(opt.Scenario)
+    tag = sprintf('%s__%s',tag,char(opt.Scenario));
+end
+if ~isempty(opt.CalciteCase)
+    tag = sprintf('%s__case%d',tag,opt.CalciteCase);
+end
 if ~isempty(opt.FieldShapefile)
     [~,shape_name] = fileparts(opt.FieldShapefile);
     shape_name = regexprep(shape_name,'[^A-Za-z0-9]+','_');
@@ -400,6 +435,12 @@ end
 if ~isempty(opt.AppeloLogKH)
     logkh_tag = arrayfun(@number_tag,opt.AppeloLogKH,'UniformOutput',false);
     tag = sprintf('%s__logkh%s',tag,strjoin(logkh_tag,'_'));
+end
+if ~isempty(opt.KNmaxd)
+    tag = sprintf('%s__knmaxd%s',tag,number_tag(opt.KNmaxd));
+end
+if ~isempty(opt.Kbot)
+    tag = sprintf('%s__kbot%s',tag,kbot_tag(opt.Kbot));
 end
 if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
 if ~isempty(opt.StartDate)
@@ -471,9 +512,21 @@ end
 end
 
 function tag = number_tag(value)
-tag = strrep(sprintf('%.17g',value),'.','p');
+text = sprintf('%.12g',value);
+if str2double(text) ~= value
+    text = sprintf('%s_h%s',text,num2hex(value));
+end
+tag = strrep(text,'.','p');
 tag = strrep(tag,'-','m');
 tag = strrep(tag,'+','');
+end
+
+function tag = kbot_tag(value)
+if isnan(value)
+    tag = 'free';
+else
+    tag = number_tag(value);
+end
 end
 
 function state = read_state(status_file)
@@ -570,6 +623,24 @@ if isempty(value); return; end
 if ~(isnumeric(value) && isscalar(value) && isfinite(value) && value >= 0)
     error('Run_All_12_Parallel:BadOptions', ...
         '%s must be a finite nonnegative scalar.',name);
+end
+end
+
+function validate_optional_kbot(value)
+if isempty(value); return; end
+if ~(isnumeric(value) && isreal(value) && isscalar(value) && ...
+        (isnan(value) || (isfinite(value) && value >= 0)))
+    error('Run_All_12_Parallel:BadOptions', ...
+        'Kbot must be NaN for free drainage or a finite nonnegative scalar.');
+end
+end
+
+function validate_optional_nonnegative_integer(value,name)
+if isempty(value); return; end
+if ~(isnumeric(value) && isscalar(value) && isfinite(value) && ...
+        value == fix(value) && value >= 0)
+    error('Run_All_12_Parallel:BadOptions', ...
+        '%s must be a nonnegative integer.',name);
 end
 end
 

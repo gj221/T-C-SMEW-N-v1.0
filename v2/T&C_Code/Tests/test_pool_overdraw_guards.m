@@ -21,7 +21,7 @@ active = ones(N,ms);
 E = erw_columns(N);
 
 Q_zero = zeros(topo.N_edges,ms);
-[E_out,diag] = ERW_Lateral_Transport(E,topo,Q_zero,theta,Zlayer_m,active,1,18);
+[E_out,diag] = ERW_Lateral_Transport(E,topo,Q_zero,theta,Zlayer_m,active,1);
 
 max_drift = 0;
 fields = {'Na','Al','AlOH','AlOH2','AlOH3','AlOH4','An','DIC','CO2_air', ...
@@ -366,10 +366,15 @@ tiny_negative{2}(31) = -eps;
     npass,nfail);
 
 bad_env = F.args;
-bad_env{55} = 0;
+bad_env{55} = 1.01;
 [npass,nfail] = check(rejects(@() BIOGEOCHEMISTRY_DYNAMIC3(bad_env{:}), ...
     'BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment'), ...
-    'zero pore-size exponent is rejected',npass,nfail);
+    'anaerobic fraction outside [0,1] is rejected',npass,nfail);
+bad_env = F.args;
+bad_env{56} = 1.01;
+[npass,nfail] = check(rejects(@() BIOGEOCHEMISTRY_DYNAMIC3(bad_env{:}), ...
+    'BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment'), ...
+    'water-filled pore space outside [0,1] is rejected',npass,nfail);
 bad_env = F.args;
 bad_env{10} = 1.01;
 [npass,nfail] = check(rejects(@() BIOGEOCHEMISTRY_DYNAMIC3(bad_env{:}), ...

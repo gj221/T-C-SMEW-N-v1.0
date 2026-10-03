@@ -35,9 +35,8 @@
 %%% INPUTS
 %%%   pH_bulk_obs    observed bulk extract pH (e.g. ISO 10390 measurement)
 %%%   Ca_pw .. NH4_pw   initial pore-water concentrations [umol/L]
-%%%   CO2_air_ref    atmospheric CO2 [umol/L, T&C units] for the extract boundary.
-%%%                  Pass CO2_atm (not soil-air CO2): lab pH measurements equilibrate
-%%%                  at atmospheric pCO2 regardless of field soil-CO2 conditions.
+%%%   CO2_air_ref    atmospheric CO2 [umol per litre of air, T&C units]: the
+%%%                  air the forward extract stands open to.
 %%%   CO2_w_ref      soil-dissolved CO2 for pore-water An balance (T&C units)
 %%%   k1 k2 kw knh3 kH  carbonate / water / ammonium / Henry constants at reference T
 %%%   K1_Al..K4_Al   Al hydrolysis constants [umol/L]
@@ -73,6 +72,11 @@ warning_state = warning('query', 'ERW:bulkPHLargeOffset');
 warning_cleanup = onCleanup(@() warning(warning_state.state, 'ERW:bulkPHLargeOffset'));
 warning('off', 'ERW:bulkPHLargeOffset'); % large offsets expected at scan trial values
 inverse_bulk_pH_params = bulk_pH_params;
+exchange_scheme = 'TC_GT';
+if isfield(bulk_pH_params,'scheme') && ~isempty(bulk_pH_params.scheme)
+    exchange_scheme = char(string(bulk_pH_params.scheme));
+end
+ERW_Resolve_CEC_pH_Sensitivity(bulk_pH_params,exchange_scheme);
 inverse_bulk_pH_params.H_extract_anchor_umolL = ...
     10^(-pH_bulk_obs)*conv_mol;
 trial_fn = @(Ht, bpp) Initial_Bulk_pH_Trial( ...
@@ -172,6 +176,9 @@ if abs(pH_bulk_final-pH_bulk_obs) > 1e-8
         'Bulk-pH inversion residual %.6g exceeds 1e-8.', pH_bulk_final-pH_bulk_obs);
 end
 bulk_pH_params.DIC_field_umol_L = trial_state.DIC_field_umol_L;
+if needs_initial_pore_cec_reference(bulk_pH_params)
+    bulk_pH_params.CEC_ref_pH = -log10(H_pw/conv_mol);
+end
 f_Ca_eq = trial_state.f_Ca;  f_Mg_eq = trial_state.f_Mg;  f_K_eq = trial_state.f_K;
 f_Na_eq = trial_state.f_Na;  f_Al_eq = trial_state.f_Al;  f_H_eq = trial_state.f_H;
 An_eq   = trial_state.An;    Al_w_eq = trial_state.Al_w;
@@ -217,7 +224,7 @@ function [pH_bulk, trial_state] = Initial_Bulk_pH_Trial( ...
     K_AlOH3_trial, Al_CEC_scale_trial)
 %%% Evaluate the forward bulk pH at trial pore-water H = Ht, with exchange
 %%% fractions and the residual anion re-derived self-consistently at Ht.
-%%% CO2_air_trial  : lab-air CO2 for the extract boundary
+%%% CO2_air_trial  : air the open extract holds its dissolved CO2 against
 %%% CO2_w_trial    : soil-dissolved CO2 (for pore-water alkalinity / An)
 
 %%% Cation-exchange scheme selection, shared with the axial daily solver and
@@ -248,6 +255,23 @@ else
     K_Na_H_t = 0; K_K_H_t = 0; K_Ca_H2_t = 0; K_Mg_H2_t = 0; K_Al_H3_t = 0;
     appelo_alpha_t = 0;
 end
+
+%%% The pore-water side uses constants conditioned at the pore-water ionic
+%%% strength that the caller closes (ERW_MOD_PARAM_excel); 0 is the ideal
+%%% limit.  The forward extract below still receives the thermodynamic
+%%% constants and conditions its own at the extract's ionic strength.
+I_pore = 0;
+if isfield(bulk_pH_params_trial, 'pore_ionic_strength') && ...
+        ~isempty(bulk_pH_params_trial.pore_ionic_strength)
+    I_pore = bulk_pH_params_trial.pore_ionic_strength;
+end
+[k_pore, logKso_pore] = ERW_Conditional_Constants( ...
+    [k1_trial, k2_trial, k_w_trial, K1_Al, K2_Al, K3_Al, K4_Al], ...
+    K_AlOH3_trial, I_pore);
+k1_p = k_pore(1); k2_p = k_pore(2); k_w_p = k_pore(3);
+K1_p = k_pore(4); K2_p = k_pore(5); K3_p = k_pore(6); K4_p = k_pore(7);
+%%% The amorphous Al(OH)3 pin (log *Kso 10.8) takes the same activity shift.
+logKso_pin = 10.8 + (logKso_pore - K_AlOH3_trial);
 
 Al_pin = isfield(bulk_pH_params_trial, 'Al_solubility_pin') && ...
     isequal(bulk_pH_params_trial.Al_solubility_pin, true);
@@ -291,27 +315,27 @@ if has_conserved_exchange
         Ca_trial, Mg_trial, K_trial, Na_trial, Al_w_trial, Al_trial] = ...
         equilibrate_exchange_totals(Ht, Ca_trial, Mg_trial, K_trial, Na_trial, ...
         Al_w_initial, initial_f_CEC, cec_per_L, K_CEC_eff, ...
-        K1_Al, K2_Al, K3_Al, K4_Al, Al_CEC_scale_trial, ...
+        K1_p, K2_p, K3_p, K4_p, Al_CEC_scale_trial, ...
         scheme_is_appelo, appelo_alpha_t, K_Na_H_t, K_K_H_t, K_Ca_H2_t, K_Mg_H2_t, K_Al_H3_t, ...
-        Al_pin);
+        Al_pin, logKso_pin);
 else
     if any(~isfinite([Ca_trial, Mg_trial, K_trial, Na_trial])) || ...
             any([Ca_trial, Mg_trial, K_trial, Na_trial] < 0) || Ca_trial <= 0
         error('ERW:invertBulkPH', ...
             'Unconstrained inversion requires finite nonnegative cations and positive Ca.');
     end
-    Al_w_trial = Initialize_ERW_Equilibrium(Ht, K1_Al, K2_Al, K3_Al, K4_Al, ...
-        conv_mol_trial, K_AlOH3_trial, Al_CEC_scale_trial);
+    Al_w_trial = Initialize_ERW_Equilibrium(Ht, K1_p, K2_p, K3_p, K4_p, ...
+        conv_mol_trial, logKso_pore, Al_CEC_scale_trial);
     if ~isfinite(Al_w_trial) || Al_w_trial <= 0
         error('ERW:invertBulkPH', ...
             'Cannot initialize trial Al_w from Al(OH)3 equilibrium at H = %.3g umol/L.', Ht);
     end
-    Al_den = Ht^4 + Ht^3*K1_Al + Ht^2*K1_Al*K2_Al + ...
-        Ht*K1_Al*K2_Al*K3_Al + K1_Al*K2_Al*K3_Al*K4_Al;
+    Al_den = Ht^4 + Ht^3*K1_p + Ht^2*K1_p*K2_p + ...
+        Ht*K1_p*K2_p*K3_p + K1_p*K2_p*K3_p*K4_p;
     Al_trial = (Ht^4 / Al_den) * Al_w_trial;
     [f_Ca_t, f_Mg_t, f_K_t, f_Na_t, f_Al_t, f_H_t] = Exchange_Fractions_GT( ...
         Ht, Ca_trial, Mg_trial, K_trial, Na_trial, Al_w_trial, ...
-        K_CEC_eff, K1_Al, K2_Al, K3_Al, K4_Al, Al_CEC_scale_trial, ...
+        K_CEC_eff, K1_p, K2_p, K3_p, K4_p, Al_CEC_scale_trial, ...
         exchange_scheme, appelo_params);
 end
 
@@ -321,16 +345,16 @@ if isfield(bulk_pH_params_trial, 'initial_anion_convention')
     anion_convention = char(string(bulk_pH_params_trial.initial_anion_convention));
 end
 if strcmpi(anion_convention, 'carbonate_frame')
-    HCO3_trial = k1_trial*CO2_w_trial/Ht;
-    CO3_trial = k2_trial*k1_trial*CO2_w_trial/Ht^2;
-    Alk_trial = HCO3_trial+2*CO3_trial-Ht+k_w_trial/Ht;
+    HCO3_trial = k1_p*CO2_w_trial/Ht;
+    CO3_trial = k2_p*k1_p*CO2_w_trial/Ht^2;
+    Alk_trial = HCO3_trial+2*CO3_trial-Ht+k_w_p/Ht;
     An_trial = 2*Mg_trial+2*Ca_trial+Na_trial+K_trial+NH4_trial- ...
         Alk_trial-PO4_trial-NO3_trial;
 elseif strcmpi(anion_convention, 'full_charge')
     An_trial = ERW_Residual_An_From_Charge( ...
         Ht, CO2_w_trial, Ca_trial, Mg_trial, Na_trial, K_trial, ...
         NH4_trial, NO3_trial, PO4_trial, Al_w_trial, ...
-        k1_trial, k2_trial, k_w_trial, k_nh3_trial, K1_Al, K2_Al, K3_Al, K4_Al, ...
+        k1_p, k2_p, k_w_p, k_nh3_trial, K1_p, K2_p, K3_p, K4_p, ...
         Al_CEC_scale_trial);
 else
     error('ERW:invalidParam', ...
@@ -341,10 +365,14 @@ if ~(isfinite(An_trial) && An_trial >= 0)
         'Trial pH requires a negative residual strong-anion concentration.');
 end
 
-%%% Forward bulk pH with the trial field DIC conserved in the closed extract.
+%%% Forward bulk pH of the open extract.  The trial field DIC is handed over
+%%% for the extract's air-exchange diagnostic and for the daily state.
 bulk_pH_params_forward = bulk_pH_params_trial;
+if needs_initial_pore_cec_reference(bulk_pH_params_forward)
+    bulk_pH_params_forward.CEC_ref_pH = -log10(Ht/conv_mol_trial);
+end
 DIC_field_trial = CO2_w_trial * ...
-    (1+k1_trial/Ht+k1_trial*k2_trial/Ht^2);
+    (1+k1_p/Ht+k1_p*k2_p/Ht^2);
 bulk_pH_params_forward.DIC_field_umol_L = DIC_field_trial;
 pH_bulk = Porewater_to_Bulk_pH( ...
     Ht, Ca_trial, Mg_trial, K_trial, Na_trial, ...
@@ -365,19 +393,37 @@ end
 
 end % Initial_Bulk_pH_Trial
 
+function tf = needs_initial_pore_cec_reference(bulk_pH_params)
+tf = ~isfield(bulk_pH_params,'CEC_ref_pH') || isempty(bulk_pH_params.CEC_ref_pH);
+if ~tf
+    return
+end
+probe = bulk_pH_params;
+probe.CEC_ref_pH = 7;
+scheme = 'TC_GT';
+if isfield(probe,'scheme') && ~isempty(probe.scheme)
+    scheme = char(string(probe.scheme));
+end
+dCEC_dpH = ERW_Resolve_CEC_pH_Sensitivity(probe,scheme);
+tf = dCEC_dpH > 0;
+end
+
 function [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, ...
     Ca, Mg, K, Na, Al_w, Al] = equilibrate_exchange_totals( ...
     H, Ca_initial, Mg_initial, K_initial, Na_initial, Al_w_initial, ...
     f_initial, cec_per_L, K_CEC, K1_Al, K2_Al, K3_Al, K4_Al, Al_CEC_scale, ...
     scheme_is_appelo, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, ...
-    Al_solubility_pin)
+    Al_solubility_pin, logKso_pin)
+if nargin < 23
+    logKso_pin = 10.8;
+end
 if scheme_is_appelo
     [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, ...
         Ca, Mg, K, Na, Al_w, Al] = ...
         equilibrate_exchange_totals_appelo(H, Ca_initial, Mg_initial, K_initial, ...
         Na_initial, Al_w_initial, f_initial, cec_per_L, K1_Al, K2_Al, K3_Al, K4_Al, ...
         Al_CEC_scale, appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, ...
-        Al_solubility_pin);
+        Al_solubility_pin, logKso_pin);
     return
 end
 if numel(K_CEC) ~= 5 || any(~isfinite(K_CEC)) || any(K_CEC <= 0)
@@ -457,9 +503,12 @@ function [f_Ca, f_Mg, f_K, f_Na, f_Al, f_H, ...
     H, Ca_initial, Mg_initial, K_initial, Na_initial, Al_w_initial, ...
     f_initial, cec_per_L, K1_Al, K2_Al, K3_Al, K4_Al, Al_CEC_scale, ...
     appelo_alpha, K_Na_H, K_K_H, K_Ca_H2, K_Mg_H2, K_Al_H3, ...
-    Al_solubility_pin)
+    Al_solubility_pin, logKso_pin)
 if nargin < 20
     Al_solubility_pin = false;
+end
+if nargin < 21
+    logKso_pin = 10.8;
 end
 if ~(isfinite(cec_per_L) && cec_per_L > 0)
     error('ERW:invertBulkPH', 'CEC per field-water volume must be positive and finite.');
@@ -477,11 +526,12 @@ if Al_solubility_pin
     % exchangeable Al derives from solution Al3+; the measured
     % exchange-Al heritage is not conserved.  Units follow the daily
     % solver (ERW_function al3_pin_fn): Al3 [umol-equiv/L] =
-    % 10^(K_AlOH3-12)*H^3 = 10^-1.2*H^3 with H in umol/L; the store-unit
+    % 10^(K_AlOH3-12)*H^3 with H in umol/L, K_AlOH3 = 10.8 conditioned to
+    % the pore-water ionic strength by the caller; the store-unit
     % convention (Al_CEC_scale) enters only when the daily state is
     % packed (p(6) = Al3*Al_CEC_scale), never in the field-water
     % inventory basis used here.
-    Al_total = 10^-1.2 * H^3;
+    Al_total = 10^(logKso_pin-12) * H^3;
 else
     Al0_u = Al_w_initial / Al_CEC_scale;
     Al_total = Al0_u + cec_per_L*f_initial(5)/3;

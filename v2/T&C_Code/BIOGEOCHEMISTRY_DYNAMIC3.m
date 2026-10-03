@@ -16,7 +16,7 @@ function[dB,R_litter,R_microbe,R_litter_sur,R_ew,VOL,N2flx,Min_N,Min_P,...
     LEAK_Ca,LEAK_Mg,LEAK_Si,...
     Tup_P,Tup_K,...
     Tup_Ca,Tup_Mg,Tup_Si, ...
-    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,L_pore,WFPS)
+    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,f_anaer,WFPS,exchange_scheme)
 %%% OUTPUT
 %VOL ;
 %N2flx ;
@@ -45,9 +45,9 @@ if ~(isscalar(WFPS) && isreal(WFPS) && isfinite(WFPS) && ...
     error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
         'Water-filled pore space must satisfy 0 <= WFPS <= 1.');
 end
-if ~(isfinite(L_pore) && L_pore > 0)
+if ~(isfinite(f_anaer) && f_anaer >= 0 && f_anaer <= 1)
     error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
-        'The pore-size exponent must be finite and positive.');
+        'The anaerobic fraction must satisfy 0 <= f_anaer <= 1.');
 end
 if ~(isfinite(ZBIOG) && ZBIOG > 0 && isfinite(rsd) && rsd > 0)
     error('BIOGEOCHEMISTRY_DYNAMIC3:InvalidEnvironment', ...
@@ -766,28 +766,59 @@ end
 %%% N2O yield of nitrification - Inatomi et al. 2019; Val Martin et al. 2023
 N2Oflx_nit = Biogeo_Nitrification_N2O_Fraction(PH_bulk)*NO3flx; %% [gN/gsoil d]
 %%%%%%% Denitrification (Anaerobic)
-Kc = BiogeoPar.Kc/(ZBIOG*rsd); %% [gC/ gsoil] %% Li et al., 1992
-Kn = BiogeoPar.Kn/(ZBIOG*rsd); %% [gN/ gsoil] % Li et al., 1992
 ftemp=exp(308.56*(1/68.02-1/(Ts+46.02))); % Xu-Ri and Prentice 2008
-%%% Anaerobic fraction. Under Brooks-Corey Se = (Pe/|Psi|)^L, so Se^(1/L)
-%%% is Pe/|Psi|: the air-entry suction over the current suction, which is 1
-%%% at saturation and falls as the profile drains. L is the pore size
-%%% distribution index of the same retention curve that produces Se, so the
-%%% two stay consistent. The literal 0.5 that stood here was a placeholder
-%%% for L, which was never passed in; at this site L = 0.150, so it applied
-%%% an exponent of 2 where the soil calls for 6.7. Se^2 returns 0.53 at
-%%% field capacity, running denitrification at half rate in an aerobic
-%%% soil on 99% of days; Se^(1/L) returns 0.12.
-fmoist=Se^(1/L_pore); %% % Dickinson et al., 2002
-%N2flx = (B(13)/(B(13) + Kc))*ftemp*fmoist*(B(28)/(B(28) + Kn));% [gN/gsoil d]
+%%% Anaerobic fraction, Se^2: the legacy T&C form, active in every upstream
+%%% and predecessor release (TeC_Source_Code, TeC_BG_2D, T&C-SMEW, and the
+%%% TC-SMEW-N legacy trees all run Se^(1/0.5) with Se^(1/L) commented out).
+%%%
+%%% The 0.5 is an EMPIRICAL constant, not a soil property. Dickinson et al.
+%%% (2002) write the fraction as Se^(1/lambda) with lambda a Brooks-Corey
+%%% pore-size index, and under Brooks-Corey that equals the suction ratio
+%%% Pe/|Psi|. Neither holds here: this site runs SPAR = 2 (Saxton-Rawls),
+%%% whose curve is a power law in TOTAL moisture below O33 and LINEAR above
+%%% it, and whose L is a log-log slope between the 33 and 1500 kPa points,
+%%% not a pore-size index. So do NOT re-derive this exponent from L. An
+%%% earlier revision did exactly that, activating Se^(1/L_pore) = Se^6.7.
+%%%
+%%% Measured against the true Pe/|Psi| computed from the model's own
+%%% retention curve (scratch fmoist_compare, site textures), Se^2 is the
+%%% better empirical approximation and by a wide margin on the deployed
+%%% texture. Ratio of each form to Pe/|Psi| across Se = 0.40..0.99, and the
+%%% spread of that ratio (1.0 would be a pure scale error, fully absorbed by
+%%% recalibrating KNmaxd; only the SPREAD distorts which days dominate):
+%%%   workbook texture: Se^2  1.10-4.38x, spread  3.97
+%%%                     Se^6.66 0.06-1.16x, spread 18.88
+%%%   Pihlap texture:   Se^2  1.06-1.89x, spread  1.78
+%%%                     Se^3.37 0.54-1.33x, spread  2.47
+%%% Se^6.66 falls to 0.06x the physical fraction at Se = 0.40, effectively
+%%% switching denitrification off in drier soil. Se^2 is biased high but far
+%%% more uniformly, and being a FIXED exponent it carries no texture
+%%% sensitivity at all - the reciprocal-exponent amplification that moved
+%%% N2O/obs from 1.01 to 4.06 in the Pihlap texture sweep cannot occur.
+%%%
+%%% f_anaer, passed in from Biogeo_environment, is the exact Pe/|Psi| read
+%%% off whichever curve SPAR selects. It is the physically correct quantity
+%%% and is available should this be revisited; it is not used for the flux.
+%%% CALIBRATION: KNmaxd = 0.0271 /d was fitted against Se^6.7 and does NOT
+%%% carry over - Se^2 is roughly 20x larger at Se = 0.5 and 2x at 0.86, so
+%%% KNmaxd must be re-fitted before any result here is compared with the
+%%% chamber record.
+fmoist=Se^(1/0.5); %% [-] legacy T&C anaerobic fraction; Dickinson et al., 2002
 KNmax= BiogeoPar.KNmaxd; %% [1/d] % Dickinson et al., 2002
 %%% pH response of gross denitrification and its N2:N2O end products.
 [fpH_den,RN2N2O_pH] = Biogeo_Denitrification_PH_Response(PH_bulk);
-%%% Denitrifiers need NO3 as electron acceptor and labile C as donor, so
-%%% both substrates retain the Michaelis-Menten terms of Li et al. (1992).
-f_DOC_den = safe_fraction(B(12)+B(13),(B(12)+B(13))+Kc); %% [-]
-f_NO3_den = safe_fraction(B(32),B(32)+Kn); %% [-]
-DENITflx = KNmax*ftemp*fmoist*fpH_den*f_DOC_den*f_NO3_den*B(32); %% [gN/gsoil d] total denitrification (N2+N2O)
+%%% The Li et al. (1992) DOC half-saturation is volumetric. TC-SMEW stores
+%%% carbon per unit dry-soil mass, so dry bulk density supplies the required
+%%% conversion without introducing an artificial dependence on layer depth.
+%%% doi:10.1029/92JD00509.
+DOC_gC_m3 = (B(12)+B(13))*rsd; %% [gC/m3]
+f_DOC_den = safe_fraction(DOC_gC_m3,DOC_gC_m3+BiogeoPar.Kc); %% [-]
+%%% Dickinson et al. (2002) and legacy TC-SMEW use a first-order NO3
+%%% reservoir loss. The Li NOx Monod term belongs to a denitrifier biomass,
+%%% yield and maintenance model that is not present here; multiplying that
+%%% fraction by the legacy reservoir sink produced an unsupported N^2/(N+K)
+%%% hybrid. doi:10.1175/1520-0442(2002)015<0278:NCOCME>2.0.CO;2.
+DENITflx = KNmax*ftemp*fmoist*fpH_den*f_DOC_den*B(32); %% [gN/gsoil d] total denitrification (N2+N2O)
 NO3_reaction_avail = max(0,B(32)/dtd + NO3flx - ...
     N2Oflx_nit - LEAK_NO3);
 DENITflx = min(DENITflx,NO3_reaction_avail);
@@ -1009,16 +1040,15 @@ K_decomp = proportional_flux(fd*(F2l+F2c_b+F2c_f)+F3_b+F3_f, ...
 K_decomp = limit_outgoing_fluxes(B_physical(51),Ip_som_pot, ...
     K_decomp,dtd);
 %%%%%%
-Kdk=BiogeoPar.Kdk;%%%% [1/day]
-Kak= BiogeoPar.Kak; %% [1/day]
-if opt_ERW == 1
-    Kdk=0;%%%% [1/day]
-    Kak= 0; %% [1/day]  
+if ~exist('exchange_scheme','var') || isempty(exchange_scheme)
+    exchange_scheme = 'TC_GT';
 end
-
-%%%%
-K1k= BiogeoPar.K1k ; % []; %%% [1/day]
-K2k= BiogeoPar.K2k; % []; %% [1/day]
+K_rates = Biogeo_Cation_Partition_Rates([BiogeoPar.Kdk BiogeoPar.Kak ...
+    BiogeoPar.K1k BiogeoPar.K2k],opt_ERW,exchange_scheme);
+Kdk=K_rates(1);%%%% [1/day]
+Kak=K_rates(2); %% [1/day]
+K1k=K_rates(3); % []; %%% [1/day]
+K2k=K_rates(4); % []; %% [1/day]
 K3k= BiogeoPar.K3k; %% [1/day]
 Kex_sol =  Kdk*B_physical(53)- Kak*B_physical(52); %% Absrorptio desporption
 Kfix_sol = K2k*B_physical(54) - K1k*B_physical(52);  %% From fixed to solution
@@ -1045,17 +1075,12 @@ Ca_decomp = proportional_flux(fd*(F2l+F2c_b+F2c_f)+F3_b+F3_f, ...
 Ca_decomp = limit_outgoing_fluxes(B_physical(59),Ip_som_cal, ...
     Ca_decomp,dtd);
 %%%%%%
-Kdca=BiogeoPar.Kdca;%%%% [1/day]
-Kaca= BiogeoPar.Kaca; %% [1/day]
-
-if opt_ERW == 1
-    Kdca=0;%%%% [1/day]
-    Kaca= 0; %% [1/day]  
-end
-
-%%%%
-K1ca= BiogeoPar.K1ca ; % []; %%% [1/day]
-K2ca= BiogeoPar.K2ca; % []; %% [1/day]
+Ca_rates = Biogeo_Cation_Partition_Rates([BiogeoPar.Kdca BiogeoPar.Kaca ...
+    BiogeoPar.K1ca BiogeoPar.K2ca],opt_ERW,exchange_scheme);
+Kdca=Ca_rates(1);%%%% [1/day]
+Kaca=Ca_rates(2); %% [1/day]
+K1ca=Ca_rates(3); % []; %%% [1/day]
+K2ca=Ca_rates(4); % []; %% [1/day]
 K3ca= BiogeoPar.K3ca; %% [1/day]
 Caex_sol =  Kdca*B_physical(61)- Kaca*B_physical(60); %% Absrorptio desporption
 Cafix_sol = K2ca*B_physical(62) - K1ca*B_physical(60);  %% From fixed to solution
@@ -1082,15 +1107,12 @@ Mg_decomp = proportional_flux(fd*(F2l+F2c_b+F2c_f)+F3_b+F3_f, ...
 Mg_decomp = limit_outgoing_fluxes(B_physical(67),Ip_som_mag, ...
     Mg_decomp,dtd);
 %%%%%%
-Kdmg=BiogeoPar.Kdmg;%%%% [1/day]
-Kamg= BiogeoPar.Kamg; %% [1/day]
-if opt_ERW == 1
-    Kdmg=0;%%%% [1/day]
-    Kamg= 0; %% [1/day]  
-end
-%%%%
-K1mg= BiogeoPar.K1mg ; % []; %%% [1/day]
-K2mg= BiogeoPar.K2mg; % []; %% [1/day]
+Mg_rates = Biogeo_Cation_Partition_Rates([BiogeoPar.Kdmg BiogeoPar.Kamg ...
+    BiogeoPar.K1mg BiogeoPar.K2mg],opt_ERW,exchange_scheme);
+Kdmg=Mg_rates(1);%%%% [1/day]
+Kamg=Mg_rates(2); %% [1/day]
+K1mg=Mg_rates(3); % []; %%% [1/day]
+K2mg=Mg_rates(4); % []; %% [1/day]
 K3mg= BiogeoPar.K3mg; %% [1/day]
 Mgex_sol =  Kdmg*B_physical(69)- Kamg*B_physical(68); %% Absrorptio desporption
 Mgfix_sol = K2mg*B_physical(70) - K1mg*B_physical(68);  %% From fixed to solution
@@ -1218,7 +1240,6 @@ dB(46)=  Pocc_exch  ;%%%% B46  phosphorus occluded
 dB(47) = f_org_lea*Ip_lea_pho + lambda_P*P_decomp -LEAK_DOP - S_DOP;  %%% B47 DOP
 %%%%%%
 
-% to do: disable 53 and 54 for 52
 %%%%%%%%%%%%%% Potassium [gK/gsoil d]
 %%%%%%%%% POTASSIUM POOL
 dB(48)=  IS.K_sur_lit-sum(K_sur_flux); %% B48 Potassium Above-ground Litter

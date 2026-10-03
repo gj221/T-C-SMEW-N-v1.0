@@ -1,8 +1,21 @@
 function [primary_rate,secondary_rate,diag] = ERW_Calcite_Reaction_Limit( ...
     primary_rate,secondary_rate,dtw,Omega0,Ca,DIC,Alk,water_l, ...
-    k1,k2,k_w,K_CaCO3,conv_mol)
-%%% Bound the combined calcite extent at closed-water equilibrium.
+    k1,k2,k_w,K_CaCO3,conv_mol,gamma_IAP)
+%%% Bound the combined calcite extent at closed-water equilibrium on the
+%%% activity basis: the trial saturation state is gamma_IAP*Ca*CO3/K_CaCO3
+%%% with gamma_IAP = gamma_div^2 the factor the caller formed
+%%% Omega0 with, held at the step's incoming value through the bisection.
+%%% It is required: the concentration basis it would default to is the
+%%% defect this argument exists to remove.
 
+if nargin < 14
+    error('ERW:invalidCalciteLimit', ...
+        'gamma_IAP is required; pass gamma_div^2 at the step ionic strength.');
+end
+if ~(isscalar(gamma_IAP) && isfinite(gamma_IAP) && gamma_IAP > 0 && gamma_IAP <= 1)
+    error('ERW:invalidCalciteLimit', ...
+        'Calcite activity-product factor must lie in (0,1]; got %g.',gamma_IAP);
+end
 values = [primary_rate,secondary_rate,dtw,Omega0,Ca,DIC,Alk,water_l, ...
     k1,k2,k_w,K_CaCO3,conv_mol];
 if any(~isfinite(values)) || dtw <= 0 || water_l <= 0 || ...
@@ -74,16 +87,22 @@ diag = struct('limited',limited,'extent',extent,'Omega_final',Omega_final, ...
         Ca_out = Ca+xi/water_l;
         DIC_out = DIC+xi/water_l;
         Alk_out = Alk+2*xi/water_l;
-        if Ca_out < -1e-10 || DIC_out < -1e-10
+        %% The inventory limit sets the extent to -min(Ca,DIC)*water_l, and
+        %% dividing it back by water_l can leave the exhausted pool a few
+        %% ulps below zero. That is an empty pool, not a negative one: clamp
+        %% it so the carbonate root of the exhausted state (Omega = 0) is
+        %% found instead of reporting that no root exists. The tolerance is
+        %% the larger of the historical absolute bound and eight ulps of the
+        %% pool, so it stays a rounding allowance at any concentration.
+        rounding = max(1e-10,8*eps(max(Ca,DIC)));
+        if Ca_out < -rounding || DIC_out < -rounding
             Omega = NaN;
             return
         end
-        if Ca_out < 0 || DIC_out < 0
-            Omega = NaN;
-            return
-        end
+        Ca_out = max(Ca_out,0);
+        DIC_out = max(DIC_out,0);
         [H_trial,CO3_trial] = carbonate_state(DIC_out,Alk_out);
-        Omega = Ca_out*CO3_trial/K_CaCO3;
+        Omega = gamma_IAP*Ca_out*CO3_trial/K_CaCO3;
         if ~isfinite(H_trial)
             Omega = NaN;
         end

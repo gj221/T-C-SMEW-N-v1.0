@@ -6,10 +6,16 @@ if ~exist('bulk_pH_params','var') || ~isstruct(bulk_pH_params)
     bulk_pH_params = struct();
 end
 bulk_pH_params.scheme = 'appelo';
-% One static, charge-scaled shift of the SCEPTER default logKH values makes
-% the pH 6.1 bulk-extract inversion reproduce the prescribed pretreatment base
-% saturation.  Relative cation selectivity is unchanged.  Alpha 1.3 is the
-% SCEPTER v1.0 optimized value; no runtime affinity state is fitted.
+% CEC_tot_in (workbook ERW_MOD sheet) is fixed at 13 cmolc/kg for all three
+% treatments.  This is the site-specific untreated-control estimate from the
+% 2022 Energy Farm analysis; the treated value of 14 was not significantly
+% different.  The county CEC7 proxy of 19.5 and the earlier prescribed 8.6 are
+% not used in this sweep.
+% One static, charge-scaled shift of the SCEPTER code-input logKH values makes
+% the pH 6.1 bulk-extract inversion reproduce the pretreatment base saturation.
+% Alpha 1.3 is the optimized mesocosm value.  When alpha changes, each
+% full-reaction logKH moves by ion charge times delta alpha times the seed
+% f_H of 0.20, so the pretreatment base saturation holds at every alpha.
 bulk_pH_params.appelo = struct( ...
     'logKH', [4.71627429367 3.61627429367 8.10254858734 ...
               8.41854858734 12.918822881], ...
@@ -321,7 +327,7 @@ Tlo_L = [15 15];%[7.0 7.0]; %% Mean Temperature for Leaf onset
 Tls_L = [7 7]; %% Mean Temperature for Leaf Shed
 PAR_th_L= [NaN NaN]; %%% Stem allocation for Crops  
 dmg_L= [100 100];%[45 40]; %%% Tree 30 Grasses Day of Max Growth ?
-LAI_min_L = [0 0]; % Managed harvest resets crops; retain seed-scale emergence LAI
+LAI_min_L = [0.1 0.1]; %% legacy emergence LAI restored
 Trr_L = [4.5 1.0];%[4.5 6.5]; %% Translocation rate [gC /m^2 d] ?
 mjDay_L = [300 280];%[200 200]; %% Maximum Julian day for leaf onset ?
 LDay_min_L = [12.0 12.0];%[13.0 13.0]; %% Minimum Day duration for leaf onset ?
@@ -348,24 +354,30 @@ MHcrop_L =[2.5 1.0]; %%[m] maximum crop height
 % pretreatment: 2009-2016 maize-soy-maize-maize-soy-maize-maize
 % Kantola rotation: -soy-maize-maize-soy-maize for 2016-2020
 % spring cultivation operations in April
+% The same pattern continues to 2050 for the SSP projections:
+% maize-maize-soybean, soybean every third year from 2010.
+rotation_years = 2009:2050;
+soybean_year = mod(rotation_years-2010,3) == 0;
 % maize
-Mpar_L(1).Date_sowing = datenum(2009:1:2020,5,15,10,0,0) ; %% Date of Sowing
+Mpar_L(1).Date_sowing = datenum(rotation_years,5,15,10,0,0) ; %% Date of Sowing
 if NN_case_study_ERW_MOD == 21 % pretreatment
-    Mpar_L(1).Date_harvesting = datenum(2009:1:2020,08,27,10,0,0) ; %%% Fully Harvested
+    Mpar_L(1).Date_harvesting = datenum(rotation_years,08,27,10,0,0) ; %%% Fully Harvested
 else
-    Mpar_L(1).Date_harvesting = datenum(2009:1:2020,09,17,10,0,0) ; %%% Fully Harvested
+    Mpar_L(1).Date_harvesting = datenum(rotation_years,09,17,10,0,0) ; %%% Fully Harvested
 end
-Mpar_L(1).Crop_B=[0.52 0.78]; % Assumed seed-scale C boundary [g C m-2 crown]; legacy 40:60 allocation
+Mpar_L(1).Crop_B=[20 30]; %% legacy 50 gC m-2 seed initializer restored
+Mpar_L(1).SeedNut_input = [20 3 20 0.9 1.5 7];   %% legacy NPK_res_ini [N P K Ca Mg Si] restored via supported override
 Mpar_L(1).EstablishmentStoich=Stoich_L(1);
-Mpar_L(1).Crop_crown =[1 0 1 1 0 1 1 0 1 1 0 1]; 
+Mpar_L(1).Crop_crown = double(~soybean_year); 
 
 % soy
-Mpar_L(2).Date_sowing = datenum(2009:1:2020,5,25,10,0,0) ; %% Date of Sowing
-Mpar_L(2).Date_harvesting = datenum(2009:1:2020,10,10,10,0,0); %%% Fully Harvested
-Mpar_L(2).Date_harvesting = datenum(2009:1:2020,9,10,17,0,0); %%% Fully Harvested
-Mpar_L(2).Crop_B=[1.18 1.76]; % Assumed seed-scale C boundary [g C m-2 crown]; legacy 40:60 allocation
+Mpar_L(2).Date_sowing = datenum(rotation_years,5,25,10,0,0) ; %% Date of Sowing
+Mpar_L(2).Date_harvesting = datenum(rotation_years,10,10,10,0,0); %%% Fully Harvested
+%% Mpar_L(2).Date_harvesting = datenum(2009:1:2020,9,10,17,0,0); %%% Fully Harvested  %% DISABLED: overrode the Oct 10 date; Kantola reports early-October soybean harvest
+Mpar_L(2).Crop_B=[20 30]; %% legacy 50 gC m-2 seed initializer restored
+Mpar_L(2).SeedNut_input = [15 3 20 5.8 2 5.5];   %% legacy NPK_res_ini [N P K Ca Mg Si] restored via supported override
 Mpar_L(2).EstablishmentStoich=Stoich_L(2);
-Mpar_L(2).Crop_crown =[0 1 0 0 1 0 0 1 0 0 1 0]; 
+Mpar_L(2).Crop_crown = double(soybean_year); 
 
 %%%%%%%%%%%%%
 %%%%
@@ -431,20 +443,20 @@ BLit(1)=0.0;  %% [kg DM /m2 PFT] Litter Biomass
 Nreserve_H(1,:)= [0 0];
 Preserve_H(1,:)= [0 0];
 Kreserve_H(1,:)= [0 0];
-Careserve_H(1,:)= [0 0];
-Mgreserve_H(1,:)= [0 0];
-Sireserve_H(1,:)= [0 0];
+Careserve_H(1,:)= [1000 1000]; %% legacy
+Mgreserve_H(1,:)= [1000 1000]; %% legacy
+Sireserve_H(1,:)= [1000 1000]; %% legacy
 FNC_H(1,:)=[1 1];
 NupI_H(1,:,:)= [0 0 0 0 0 0; 0 0 0 0 0 0];
-Nreserve_L(1,:)= [0 0];
-Preserve_L(1,:)= [0 0];
-Kreserve_L(1,:)= [0 0];
+Nreserve_L(1,:)= [1000 1000]; %% legacy seed N reserve restored
+Preserve_L(1,:)= [100 100]; %% legacy
+Kreserve_L(1,:)= [1000 1000]; %% legacy
 FNC_L(1,:)=[1 1];
 NupI_L(1,:,:)= [0 0 0 0 0 0; 0 0 0 0 0 0];
 RexmyI(1,:)= [0 0 0]; 
-Careserve_L(1,:)= [0 0];
-Mgreserve_L(1,:)= [0 0];
-Sireserve_L(1,:)= [0 0];
+Careserve_L(1,:)= [1000 1000]; %% legacy
+Mgreserve_L(1,:)= [1000 1000]; %% legacy
+Sireserve_L(1,:)= [1000 1000]; %% legacy
 %%%%%%%%%
 
 if OPT_SoilBiogeochemistry == 1
@@ -512,7 +524,7 @@ if OPT_SoilBiogeochemistry == 1
 
     % Fertiliser application annual schedule
     FertN=zeros(1,366);
-    FertN(81:100) = 0.84;
+    FertN(81:100) = 1.01; %% 202 kg N ha-1 (Kantola 2022 + Illinois Data Bank README)
     FertP=zeros(1,366);
     FertK=zeros(1,366);
     FertCa=zeros(1,366);
@@ -523,6 +535,16 @@ if OPT_SoilBiogeochemistry == 1
     HIST=0;
 
     [B_IO]=Biogeochemistry_IO(Zs(ms+1),Lat,Lon,Upl,HIST,FertN,FertP,FertK,FertCa,FertMg,FertSi);
+    % Maize years of the crop calendar above; both frames apply the
+    % pre-planting N in these years only.
+    B_IO.FertN_years = rotation_years(~soybean_year);
+    % No atmospheric Ca, Mg or K deposition, identically in spin-up, validation
+    % and projection. At the field cell, EPA CASTNET TDep v2025.01 total
+    % deposition 2016-2020 brings 0.0174 eq/m2/yr of base cations with 0.0176
+    % of SO4 + Cl; the model carries no strong-anion deposition.
+    B_IO.DepCa = 0;
+    B_IO.DepMg = 0;
+    B_IO.DepK = 0;
     B_IO.SC_par=[1 1 1 1];
     
     B_IO.N_Man=1e-6;

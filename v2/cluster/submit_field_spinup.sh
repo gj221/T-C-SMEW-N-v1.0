@@ -27,16 +27,25 @@ for f in all subsample rf; do
   [[ -f "$TC_OUTPUT_DIR/array_indices_$f.txt" ]] || { echo "plan did not write array_indices_$f.txt" >&2; exit 1; }
 done
 
+# an index list is a SLURM --array range ("1-54") or comma list; strip whitespace
+read_list() { local v; v=$(cat "$1"); echo "${v//[[:space:]]/}"; }
 if [[ "${TC_METHOD:-per_cell}" == "rf" ]]; then
-  sub=$(cat "$TC_OUTPUT_DIR/array_indices_subsample.txt")
-  rest=$(cat "$TC_OUTPUT_DIR/array_indices_rf.txt")
+  sub=$(read_list "$TC_OUTPUT_DIR/array_indices_subsample.txt")
+  rest=$(read_list "$TC_OUTPUT_DIR/array_indices_rf.txt")
+  [[ -n "$sub" ]] || { echo "the plan has no subsample cells" >&2; exit 1; }
   echo "subsample full spin-ups: --array=$sub"
   a1=$(sbatch --parsable --export=ALL --array="$sub" field_spinup_cell.sbatch)
-  echo "RF-seeded cells: --array=$rest (after $a1)"
-  a2=$(sbatch --parsable --export=ALL --array="$rest" --dependency=afterok:"$a1" field_spinup_cell.sbatch)
-  dep="$a2"
+  if [[ -n "$rest" ]]; then
+    echo "RF-seeded cells: --array=$rest (after $a1)"
+    a2=$(sbatch --parsable --export=ALL --array="$rest" --dependency=afterok:"$a1" field_spinup_cell.sbatch)
+    dep="$a2"
+  else
+    echo "every cell is in the subsample: no RF-seeded array"
+    dep="$a1"
+  fi
 else
-  all=$(cat "$TC_OUTPUT_DIR/array_indices_all.txt")
+  all=$(read_list "$TC_OUTPUT_DIR/array_indices_all.txt")
+  [[ -n "$all" ]] || { echo "the plan has no cells" >&2; exit 1; }
   echo "full spin-ups for every cell: --array=$all"
   dep=$(sbatch --parsable --export=ALL --array="$all" field_spinup_cell.sbatch)
 fi

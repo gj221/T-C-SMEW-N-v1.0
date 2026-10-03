@@ -43,6 +43,9 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 N_col = topo.N_cells;
+if ~exist('parallel_workers','var') || isempty(parallel_workers)
+    parallel_workers = 0;
+end
 fprintf('\n=== 2D driver: %d columns over %.0f m2 ===\n', ...
     N_col, sum(topo.cell_area_m2));
 
@@ -76,6 +79,9 @@ if exist('RexmyI_out','var'); ctx.RexmyI_out = RexmyI_out; end
 if exist('NupI_L_out','var'); ctx.NupI_L_out = NupI_L_out; end
 
 PAR = cell(N_col,1);
+biogeo_exchange_scheme = repmat({'TC_GT'},N_col,1);
+biogeo_KNmaxd = cell(N_col,1);
+biogeo_overrides = cell(N_col,1);
 for c = 1:N_col
     cell_ctx = ctx;
     if isfield(ColCfg(c),'MOD_PARAM') && istable(ColCfg(c).MOD_PARAM) && ...
@@ -95,12 +101,34 @@ for c = 1:N_col
         ovr = fullfile(Parameter_Directory, [char(ColCfg(c).PFT_OVERRIDE) '.m']);
     end
     PAR{c} = Load_Cell_Parameters(char(ColCfg(c).PARAM_IC), ovr, cell_ctx);
+    if isfield(PAR{c},'bulk_pH_params') && ...
+            isfield(PAR{c}.bulk_pH_params,'scheme')
+        biogeo_exchange_scheme{c} = PAR{c}.bulk_pH_params.scheme;
+    end
+    if isfield(ColCfg(c),'KNmaxd')
+        biogeo_KNmaxd{c} = ColCfg(c).KNmaxd;
+    end
+    if isfield(ColCfg(c),'biogeo_overrides')
+        biogeo_overrides{c} = ColCfg(c).biogeo_overrides;
+    end
     if isfield(ColCfg(c),'appelo_alpha') && ~isempty(ColCfg(c).appelo_alpha)
         if ~isfield(PAR{c},'bulk_pH_params')
             error('MAIN_FRAME_BG_ERW_2D:MissingBulkPHParameters', ...
                 'AppeloAlpha requires bulk_pH_params in column %d.',c);
         end
         PAR{c}.bulk_pH_params.appelo.alpha = ColCfg(c).appelo_alpha;
+    end
+    if isfield(ColCfg(c),'cec_dpH') && ~isempty(ColCfg(c).cec_dpH)
+        %%% Variable charge is a property of the soil, not of the exchange
+        %%% scheme, but the sensitivity that reproduces a given titration
+        %%% curve depends on the selectivity constants it is fitted with.
+        %%% A scalar supplied here applies to whichever scheme is active;
+        %%% per-scheme values are declared in the parameter file instead.
+        if ~isfield(PAR{c},'bulk_pH_params')
+            error('MAIN_FRAME_BG_ERW_2D:MissingBulkPHParameters', ...
+                'CECpHSensitivity requires bulk_pH_params in column %d.',c);
+        end
+        PAR{c}.bulk_pH_params.dCEC_dpH = ColCfg(c).cec_dpH;
     end
     if isfield(ColCfg(c),'appelo_logKH') && ~isempty(ColCfg(c).appelo_logKH)
         if ~isfield(PAR{c},'bulk_pH_params')
@@ -111,6 +139,36 @@ for c = 1:N_col
     end
     fprintf('  column %2d  %-14s  %s\n', c, topo.cell_name{c}, ...
         ternary(isempty(ovr),'base parameters','PFT override'));
+end
+if exist('run_provenance','var') && isstruct(run_provenance)
+    appelo_alpha_effective = nan(N_col,1);
+    appelo_logKH_effective = nan(N_col,5);
+    for c = 1:N_col
+        if strcmpi(biogeo_exchange_scheme{c},'appelo')
+            appelo_params = [];
+            if isfield(PAR{c},'bulk_pH_params') && ...
+                    isfield(PAR{c}.bulk_pH_params,'appelo')
+                appelo_params = PAR{c}.bulk_pH_params.appelo;
+            end
+            [~,~,~,~,~,appelo_alpha_effective(c), ...
+                appelo_logKH_effective(c,:)] = ...
+                Resolve_Appelo_Constants(appelo_params);
+        end
+    end
+    cec_dpH_effective = nan(N_col,1);
+    cec_ref_pH_effective = nan(N_col,1);
+    for c = 1:N_col
+        if isfield(PAR{c},'bulk_pH_params')
+            [cec_dpH_effective(c),cec_ref_pH_effective(c)] = ...
+                ERW_Resolve_CEC_pH_Sensitivity(PAR{c}.bulk_pH_params, ...
+                    char(biogeo_exchange_scheme{c}));
+        end
+    end
+    run_provenance.exchange_scheme = biogeo_exchange_scheme;
+    run_provenance.AppeloAlpha = appelo_alpha_effective;
+    run_provenance.AppeloLogKH = appelo_logKH_effective;
+    run_provenance.CECpHSensitivity = cec_dpH_effective;
+    run_provenance.CECrefpH = cec_ref_pH_effective;
 end
 
 %% Soil layering must agree across columns: the lateral solver exchanges
@@ -174,12 +232,13 @@ end
 bio_active_fraction = min(1,max(0,bio_active_fraction));
 
 %% Per-column soil parameters for the lateral solver
-soilpar_cell = Soil_Param_To_Routing(PAR{1}.Soil_Param, PAR{1}.SPAR);
+soilpar_cell = Soil_Param_To_Routing(PAR{1}.Soil_Param, PAR{1}.SPAR, PAR{1}.aR);
 soilpar_cell = repmat(soilpar_cell, N_col, 1);
 for c = 1:N_col
-    soilpar_cell(c) = Soil_Param_To_Routing(PAR{c}.Soil_Param, PAR{c}.SPAR);
+    soilpar_cell(c) = Soil_Param_To_Routing(PAR{c}.Soil_Param, PAR{c}.SPAR, PAR{c}.aR);
 end
 A_cell = topo.cell_area_m2(:);             %% [m2]
+A_tot  = sum(A_cell);
 
 %% ========================================================================
 %% STATE ALLOCATION   (trailing dimension = column)
@@ -315,6 +374,16 @@ for c = 1:N_col
     Ccrown_c(c,:) = p.Ccrown;   Cbare_c(c) = p.Cbare;
     ZR95_H_c(c,:) = p.ZR95_H;   ZR95_L_c(c,:) = p.ZR95_L;
     RfH_Zs_c{c} = p.RfH_Zs;     RfL_Zs_c{c} = p.RfL_Zs;
+    %% Cold-start pH seed. p.PH is the OBSERVED BULK-SOIL pH from the
+    %% parameter file, the quantity BIOGEO_UNIT consumes, so seeding
+    %% PH_bulk_c from it is correct. The pore-water pH the ERW chemistry
+    %% starts from is only known once ERW_MOD_PARAM_excel has inverted that
+    %% observation (bulk_pH_params.initial_pH_mode = 'bulk_observed',
+    %% Invert_Bulk_pH), which happens inside the first ERW_Daily_Step_2D
+    %% call; the daily records written before that call are backfilled
+    %% from the ERW initial condition there ("cold-start backfill" below).
+    %% Before the first ERW call PH_c is only recorded (PH_pore_d), never
+    %% consumed, so seeding it from the bulk value is harmless.
     PH_c(c) = p.PH(1);          PH_bulk_c(c) = p.PH(1); snow_alb_c{c} = p.snow_alb;
     if isfield(p,'ERW_biogeochem') && isfield(p.ERW_biogeochem,'pH_bulk') && ...
             isfinite(p.ERW_biogeochem.pH_bulk(1))
@@ -417,6 +486,8 @@ lateral_diag = struct('water_buf_to_main', zeros(NNd,1), ...
                       'erw_mass_buf_to_main_umol',zeros(NNd,4), ...
                       'erw_CO2_buf_to_main_umol',zeros(NNd,1), ...
                       'erw_mass_residual_umol',zeros(NNd,4), ...
+                      'erw_mass_abs_residual_umol',zeros(NNd,4), ...
+                      'erw_mass_throughput_umol',zeros(NNd,4), ...
                       'sub_steps_max',     zeros(NNd,1), ...
                       'species_names',     {lateral_species}, ...
                       'erw_species_names', {{'Na','Al','An','DIC'}});
@@ -508,6 +579,10 @@ lateral_diag.surface_reinfilt_m3  = zeros(NNd,1);
 %% whole-field polygon grid (no buffer), so this is the quantity that
 %% says how much water the topography actually moved between cells.
 lateral_diag.water_edge_abs_m3 = zeros(NNd,1);
+%% Net redistribution per day [m3]: half the sum over cells of each cell's
+%% net lateral gain or loss, i.e. the water that actually changed cells,
+%% counted once.  The throughput above also counts exchange back and forth.
+lateral_diag.water_net_m3 = zeros(NNd,1);
 
 j = 1;
 tic;
@@ -546,6 +621,8 @@ ERW_runtime_parts = cell(1,N_col);
 for c = 1:N_col
     appelo_alpha_c = [];
     appelo_logKH_c = [];
+    knmaxd_c = [];
+    cec_dpH_c = [];
     ERW_runtime_param_c = ERW_PARAM_input;
     MOD_runtime_param_c = MOD_PARAM_input;
     if isfield(ColCfg(c),'ERW_PARAM')
@@ -561,6 +638,31 @@ for c = 1:N_col
     if isfield(ColCfg(c),'appelo_logKH')
         appelo_logKH_c = ColCfg(c).appelo_logKH;
     end
+    if isfield(ColCfg(c),'KNmaxd')
+        knmaxd_c = ColCfg(c).KNmaxd;
+    end
+    if isfield(ColCfg(c),'cec_dpH')
+        cec_dpH_c = ColCfg(c).cec_dpH;
+    end
+    last_app_c = [];
+    if isfield(ColCfg(c),'last_application_year')
+        last_app_c = ColCfg(c).last_application_year;
+    end
+    %% Replaced biogeochemistry literals and the saturation exponent are
+    %% part of the run's identity: a checkpoint of one member must not
+    %% resume another.
+    bgovr_c = '';
+    if isfield(ColCfg(c),'biogeo_overrides') && isstruct(ColCfg(c).biogeo_overrides)
+        bgovr_names = sort(fieldnames(ColCfg(c).biogeo_overrides));
+        bgovr_pairs = cellfun(@(n) sprintf('%s=%s',n, ...
+            mat2str(ColCfg(c).biogeo_overrides.(n),17)),bgovr_names, ...
+            'UniformOutput',false);
+        bgovr_c = strjoin(bgovr_pairs,',');
+    end
+    sexp_c = [];
+    if isfield(ColCfg(c),'saturation_exponent')
+        sexp_c = ColCfg(c).saturation_exponent;
+    end
     pft_override_c = '';
     if isfield(ColCfg(c),'PFT_OVERRIDE') && ~isempty(ColCfg(c).PFT_OVERRIDE)
         pft_override_c = char(ColCfg(c).PFT_OVERRIDE);
@@ -571,13 +673,18 @@ for c = 1:N_col
     end
     ERW_runtime_parts{c} = sprintf( ...
         ['c%d:column_param=%s;pft=%s;apply_rock=%d;mod_param=%s;' ...
-         'erw_param=%s;agronomic=%s;alpha=%s;logKH=%s'], ...
+         'erw_param=%s;agronomic=%s;alpha=%s;logKH=%s;pcla=%s;psan=%s;' ...
+         'knmaxd=%s;kbot=%s;cecdpH=%s;lastapp=%s;bgovr=%s;sexp=%s'], ...
         c,char(ColCfg(c).PARAM_IC),pft_override_c,logical(ColCfg(c).apply_rock), ...
         ERW_Runtime_Parameter_Identity(MOD_runtime_param_c), ...
         ERW_Runtime_Parameter_Identity(ERW_runtime_param_c), ...
         agronomic_identity_c, ...
         mat2str(appelo_alpha_c,17), ...
-        mat2str(appelo_logKH_c,17));
+        mat2str(appelo_logKH_c,17),mat2str(PAR{c}.Pcla,17), ...
+        mat2str(PAR{c}.Psan,17),mat2str(knmaxd_c,17), ...
+        mat2str(PAR{c}.Kbot,17), ...
+        mat2str(cec_dpH_c,17),mat2str(last_app_c,17),bgovr_c, ...
+        mat2str(sexp_c,17));
 end
 ERW_forcing_identity = sprintf('date_start=%.17g;date_end=%.17g',Date(1),Date(end));
 topology_overlap_area = topo.cell_area_m2;
@@ -625,8 +732,21 @@ if isfield(topo,'topography_attached') && topo.topography_attached
         topo_field('edge_overland_weight_ab'), ...
         topo_field('edge_overland_weight_ba'),topo_field('cell_is_outlet'));
 end
+ERW_numerical_identity = strtrim(getenv('TC_NUMERICAL_IDENTITY'));
+if isempty(ERW_numerical_identity); ERW_numerical_identity = 'unset'; end
+%% The static TC_NUMERICAL_IDENTITY string is what the submission script
+%% asked for, not what MATLAB actually loaded.  A new module build can pass
+%% campaign validation while an older checkpoint still resumes, splicing
+%% two numerical runtimes into one trajectory, so the identity carries the
+%% interpreter, platform, BLAS and thread count that are really in force.
+ERW_execution_identity = sprintf( ...
+    ['parallel_workers=%d;numerical_identity=%s;matlab=%s;computer=%s;' ...
+     'blas=%s;max_threads=%d'], ...
+    parallel_workers,ERW_numerical_identity,version,computer, ...
+    regexprep(strtrim(evalc('version -blas')),'\s+',' '),maxNumCompThreads);
 ERW_ckpt_runtime_identity = strjoin( ...
-    [{ERW_forcing_identity,ERW_topology_identity} ERW_runtime_parts],'|');
+    [{ERW_forcing_identity,ERW_topology_identity,ERW_execution_identity} ...
+     ERW_runtime_parts],'|');
 ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     ERW_ckpt_runtime_identity, ...
     fullfile(cd, '*.m'), ...
@@ -634,26 +754,30 @@ ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     fullfile(cd, 'BIOGEOCHEMISTRY_DYNAMIC3.m'), ...
     fullfile(cd, 'BIOGEO_UNIT.m'), ...
     fullfile(cd, 'Biogeochemistry_Parameter.m'), ...
+    fullfile(cd, 'Biogeo_Cation_Partition_Rates.m'), ...
     fullfile(cd, 'Biogeo_Mobile_Water_Volume.m'), ...
     fullfile(cd, 'Biogeo_Nitrification_PH_Response.m'), ...
     fullfile(cd, 'CropHeightType.m'), ...
     fullfile(cd, 'Plant_Exports.m'), ...
     fullfile(cd, 'Plant_Reserve_Fraction.m'), ...
-    fullfile(cd, 'Plant_Reserve_Growth_Limit.m'), ...
     fullfile(cd, 'Plant_Nutrient_Suppression.m'), ...
     fullfile(cd, 'Plant_Harvest_Reserve_Export.m'), ...
 	fullfile(cd, 'Crop_Planting_Harvest.m'), ...
 	fullfile(cd, 'Plant_Establishment_Element_Boundary.m'), ...
 	fullfile(cd, 'Plant_Seed_Input_Accumulator.m'), ...
     fullfile(cd, 'ERW_function.m'), fullfile(cd, 'ERW_Daily_Step_2D.m'), ...
+    fullfile(cd, 'ERW_Particle_History.m'), ...
     fullfile(cd, 'ERW_Initialize_TC_Cation_Pools.m'), ...
     fullfile(cd, 'ERW_Normalize_TC_Daily_Deltas.m'), ...
     fullfile(cd, 'ERW_Should_Apply_TC_Daily_Delta.m'), ...
+    fullfile(cd, 'ERW_Return_Weathered_Phosphorus.m'), ...
     fullfile(cd, 'ERW_Appelo_Mass_Conserving_State.m'), ...
     fullfile(cd, 'ERW_Appelo_State_At_H.m'), ...
+    fullfile(cd, 'ERW_CEC_At_H.m'), ...
     fullfile(cd, 'ERW_AlOH3_LogK.m'), ...
     fullfile(cd, 'ERW_Calcite_Kinetics.m'), ...
     fullfile(cd, 'ERW_Resolve_CEC.m'), ...
+    fullfile(cd, 'ERW_Resolve_CEC_pH_Sensitivity.m'), ...
     fullfile(cd, 'ERW_Seed_Water_Loss.m'), ...
     fullfile(cd, 'ERW_Calcite_Reaction_Limit.m'), ...
     fullfile(cd, 'ERW_Feedstock_Pathway.m'), ...
@@ -669,6 +793,10 @@ ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     fullfile(cd, 'Inputs', 'Data_Kantola.mat'), ...
     fullfile(cd, 'Inputs', 'Data_Kantola_BG.mat'), ...
     fullfile(cd, 'Inputs', 'Ca_Data.mat'), ...
+    fullfile(cd, 'Inputs', 'All_deposition_data.mat'), ...
+    fullfile(cd, 'Inputs', 'blueridge_CDF_data.json'), ...
+    fullfile(cd, '..', 'run', 'Run_One_Subfield.m'), ...
+    fullfile(cd, '..', 'run', 'Run_Matrix_12.m'), ...
     fullfile(cd, 'Resolve_Appelo_Constants.m'), ...
     fullfile(cd, 'Invert_Bulk_pH.m'), ...
     fullfile(cd, 'Porewater_to_Bulk_pH.m'), ...
@@ -682,10 +810,47 @@ if ~isempty(ERW_ckpt_file) && isfile(ERW_ckpt_file)
         keep_ckpt_file = ERW_ckpt_file;
         keep_ckpt_minutes = ERW_ckpt_minutes;
         keep_ckpt_fp = ERW_ckpt_fingerprint;
+        %% The caller's options describe this invocation, not the one that
+        %% wrote the checkpoint.  The fingerprint pins the scientific
+        %% configuration, but SaveResults and ResultDirectory are not in
+        %% it, so restoring them wholesale would make a resumed run ignore
+        %% where it was told to write and whether to write at all.
+        if exist('opt','var'); keep_opt = opt; else; keep_opt = []; end
+        %% The checkpoint carries the provenance of the segment that wrote
+        %% it.  Restoring it wholesale would make the final MAT report the
+        %% first Slurm job and node as if the run had never been
+        %% interrupted, so the segments are accumulated instead.
+        if exist('run_provenance','var'); keep_provenance = run_provenance;
+        else;                             keep_provenance = [];
+        end
         load(ERW_ckpt_file);
         ERW_ckpt_file = keep_ckpt_file;
         ERW_ckpt_minutes = keep_ckpt_minutes;
         ERW_ckpt_fingerprint = keep_ckpt_fp;
+        if ~isempty(keep_opt); opt = keep_opt; end
+        %% A checkpoint written before a ledger existed restores a
+        %% lateral_diag without it; start that ledger empty rather than
+        %% fail at the first lateral step.
+        for ledger_name = {'water_edge_abs_m3','water_net_m3'}
+            if exist('lateral_diag','var') && isstruct(lateral_diag) && ...
+                    ~isfield(lateral_diag,ledger_name{1})
+                lateral_diag.(ledger_name{1}) = zeros(NNd,1);
+            end
+        end
+        if ~isempty(keep_provenance)
+            prior_segments = {};
+            if exist('run_provenance','var') && isstruct(run_provenance)
+                if isfield(run_provenance,'execution_segments')
+                    prior_segments = run_provenance.execution_segments;
+                    run_provenance = rmfield(run_provenance, ...
+                        'execution_segments');
+                end
+                prior_segments{end+1} = run_provenance;
+            end
+            run_provenance = keep_provenance;
+            run_provenance.execution_segments = prior_segments;
+            run_provenance.resumed_from_iteration = i;
+        end
         i_resume = i + 1;
         if ckpt_ok
             fprintf(['Resuming from checkpoint at iter %d / %d (%.1f%%)\n'], ...
@@ -777,15 +942,15 @@ for i = i_resume:NN
 
             %% Rotation fertiliser rule for cropped cells
             if isempty(char(ColCfg(c).PFT_OVERRIDE))
-                if ismember(Datam(i,1),[2009 2011 2012 2014 2015 2017 2018 2020])
-                    B_IO_c_now.FertN(81:100) = 0.84;
+                if ismember(Datam(i,1),B_IO_c_now.FertN_years)
+                    B_IO_c_now.FertN(81:100) = 1.01; %% 202 kg N ha-1 (Kantola 2022; 2011/2014 were 168, outside 2016-2020)
                 else
                     B_IO_c_now.FertN = zeros(1,366);
                 end
                 B_IO_c{c} = B_IO_c_now;
             end
 
-            [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,L_bio,WFPS_bio] = Biogeo_environment( ...
+            [Se_bio,Se_fc,Psi_bio,Tdp_bio,VSUM,VTSUM,f_anaer_bio,WFPS_bio] = Biogeo_environment( ...
                 Tdp(pdind,:,c),O(pdind,:,c),V(pdind,:,c),p.Soil_Param,p.Phy,p.SPAR,p.Bio_Zs,p.Zbio);
             Tdp_bio_c(c) = Tdp_bio; VSUM_c(c) = VSUM; VTSUM_c(c) = VTSUM;
 
@@ -836,7 +1001,9 @@ for i = i_resume:NN
                     SupCa_L(j-1,:,c),SupMg_L(j-1,:,c),SupSi_L(j-1,:,c), ...
                     REXMY,RexmyI(j-1,:,c),p.ExEM,NavlI(j-1,:,c),p.Pcla,p.Psan, ...
                     B_IO_c_now,Datam(i,:),FireA,0, ...
-                    OPT_ERW,OPT_BfixN,L_bio,WFPS_bio);
+                    OPT_ERW,OPT_BfixN,f_anaer_bio,WFPS_bio, ...
+                    biogeo_exchange_scheme{c},biogeo_KNmaxd{c}, ...
+                    biogeo_overrides{c});
 
                 BLit(j,:,c) = 0.002*sum(P(j,1:5,c))*Ccrown';
                 Bam_c(c) = P(j,20,c);
@@ -1327,6 +1494,10 @@ for i = i_resume:NN
 
         lateral_diag.water_buf_to_main(j) = lateral_diag.water_buf_to_main(j) + ldiag.buf_to_main.water;
         lateral_diag.water_edge_abs_m3(j) = lateral_diag.water_edge_abs_m3(j) + sum(abs(ldiag.Q_edge(:)))*dth;
+        Q_face = sum(ldiag.Q_edge,2);                                   % m3/h, a -> b
+        Q_cell_net = accumarray(topo.edge_b(:),Q_face,[N_col 1]) - ...
+            accumarray(topo.edge_a(:),Q_face,[N_col 1]);                % m3/h gained
+        lateral_diag.water_net_m3(j) = lateral_diag.water_net_m3(j) + 0.5*sum(abs(Q_cell_net))*dth;
         lateral_diag.mass_buf_to_main(j,:) = lateral_diag.mass_buf_to_main(j,:) + ldiag.buf_to_main.net.';
         lateral_diag.NO3_buf_to_main(j)   = lateral_diag.NO3_buf_to_main(j) + ldiag.buf_to_main.net(i_lateral_NO3);
         lateral_diag.sub_steps_max(j)     = max(lateral_diag.sub_steps_max(j), ldiag.sub_steps);
@@ -1342,34 +1513,64 @@ for i = i_resume:NN
             all(cellfun(@(x) isfield(x,'init') && x.init,ERW))
         [ERW,erw_ldiag] = ERW_Lateral_Transport( ...
             ERW,topo,ldiag.Q_edge,theta_cell,Zlayer_m,bio_active_fraction, ...
-            dth,Ca(i)/22.41);
+            dth);
         lateral_diag.erw_mass_buf_to_main_umol(j,:) = ...
             lateral_diag.erw_mass_buf_to_main_umol(j,:) + erw_ldiag.buf_to_main.aqueous_umol.';
         lateral_diag.erw_CO2_buf_to_main_umol(j) = ...
             lateral_diag.erw_CO2_buf_to_main_umol(j) + erw_ldiag.buf_to_main.CO2_umol;
         lateral_diag.erw_mass_residual_umol(j,:) = ...
             lateral_diag.erw_mass_residual_umol(j,:) + erw_ldiag.mass_residual_umol.';
+        lateral_diag.erw_mass_abs_residual_umol(j,:) = ...
+            lateral_diag.erw_mass_abs_residual_umol(j,:) + abs(erw_ldiag.mass_residual_umol).';
+        erw_throughput_umol = sum(abs(erw_ldiag.aqueous_edge_umol),1);
+        erw_throughput_umol(4) = erw_throughput_umol(4) + ...
+            sum(abs(erw_ldiag.CO2_edge_umol));
+        lateral_diag.erw_mass_throughput_umol(j,:) = ...
+            lateral_diag.erw_mass_throughput_umol(j,:) + erw_throughput_umol;
     end
 
     %% ------------------------------------------------------------------
     %% ERW  --  once per day, after the current lateral transport
     %% ------------------------------------------------------------------
     if OPT_ERW == 1 && ((Datam(i,4) == 1) || i == NN)
-        for c = 1:N_col
+        ERW_next = cell(N_col,1);
+        parfor (c = 1:N_col,parallel_workers)
             ERW_PARAM_cell = ERW_PARAM_input;
             if isfield(ColCfg,'ERW_PARAM')
                 ERW_PARAM_cell = ColCfg(c).ERW_PARAM;
             end
-            ERW{c} = ERW_Daily_Step_2D(ERW{c}, ColCfg(c), PAR{c}, ...
+            ERW_next{c} = ERW_Daily_Step_2D(ERW{c}, ColCfg(c), PAR{c}, ...
                 i, j, NN, NNd, Datam, Date, Ca, ...
                 O(:,:,c), Lk(:,1,c), f(:,1,c), T_H(:,:,c), T_L(:,:,c), ...
                 Tdp_bio_c(c), VSUM_c(c), VTSUM_c(c), ...
                 R_microbe(:,1,c), R_litter(:,1,c), R_ew(:,1,c), R_litter_sur(:,1,c), ...
                 Rmr_H(:,:,c), Rmr_L(:,:,c), Ccrown_c(c,:), ...
                 P(:,:,c), PAR{c}.MOD_PARAM_input, ERW_PARAM_cell, ...
-                conv_mol, conv_Al);
+                conv_mol, conv_Al, N_col);
+        end
+        for c = 1:N_col
+            ERW{c} = ERW_next{c};
             if j == 2 && isfield(ERW{c},'P_initial')
                 P(j-1,:,c) = ERW{c}.P_initial;
+            end
+            %% Cold-start backfill of the pH records (see the seed comment
+            %% above the PH_c/PH_bulk_c initialisation). Rows 1:j were
+            %% written before this first ERW call from the bulk observation,
+            %% so the pore record carried the bulk value. bg row 1 is the
+            %% t = 0 ERW initial condition: pH(1) the pore-water pH that
+            %% Invert_Bulk_pH recovered from the bulk observation, pH_bulk(1)
+            %% the bulk pH Porewater_to_Bulk_pH returns for that state (the
+            %% observation itself, to solver tolerance). The daily loop in
+            %% ERW_Daily_Step_2D starts at row 2, so row 1 is never
+            %% overwritten. Same pairing as SCEPTER: one pore-water H state
+            %% solved at t = 0, soil pH derived from it. Records only;
+            %% PH_c/PH_bulk_c are updated from the daily step below.
+            if j == 2 && isfield(ERW{c},'bg') && isfield(ERW{c}.bg,'pH') && ...
+                    isfield(ERW{c}.bg,'pH_bulk') && ...
+                    isfinite(ERW{c}.bg.pH(1,1)) && isfinite(ERW{c}.bg.pH_bulk(1,1))
+                PH_pore_d(1:j,c) = ERW{c}.bg.pH(1,1);
+                PH_bulk_d(1:j,c) = ERW{c}.bg.pH_bulk(1,1);
+                PH_d(1:j,c)      = ERW{c}.bg.pH_bulk(1,1);
             end
             if ERW{c}.has_update
                 PH_c(c) = ERW{c}.PH;      %% pore-water pH for ERW chemistry
@@ -1383,19 +1584,18 @@ for i = i_resume:NN
                 P(j,68,c) = ERW{c}.P68;  P(j,69,c) = ERW{c}.P69;
                 P(j,52,c) = ERW{c}.P52;  P(j,53,c) = ERW{c}.P53;
                 P(j,76,c) = ERW{c}.P76;
-                %% Phosphate only returns when ERW was handed the whole labile
-                %% pool; under a solution fraction < 1 the solver carries the
-                %% dissolved subset and BIOGEOCHEMISTRY keeps ownership of P(:,43).
+                %% The full-pool path replaces P43; the dissolved-fraction
+                %% path returns only new mineral weathering P additively.
                 if isfield(ERW{c},'P43')
                     P(j,43,c) = ERW{c}.P43;
                 end
             end
         end
+        clear ERW_next
     end
 
-    %% Rolling checkpoint.  Written at most once per ERW_ckpt_minutes and
-    %% never mid-day (j advances inside the loop), so the restored state
-    %% is always a completed iteration.
+    %% Rolling checkpoint after a completed hourly iteration. Chemistry
+    %% arrays retain the last completed daily state when saved mid-day.
     if ~isempty(ERW_ckpt_file) && ...
             (toc - ERW_ckpt_last_toc) >= ERW_ckpt_minutes*60
         ERW_ckpt_tmp = [tempname(fileparts(ERW_ckpt_file)) '.mat'];
@@ -1409,6 +1609,14 @@ for i = i_resume:NN
                 'Checkpoint at iter %d failed: %s', i, ME_ckpt.message);
         end
         ERW_ckpt_last_toc = toc;
+    end
+end
+
+%% The particle-class histories were kept in daily blocks during the run
+%% (ERW_Daily_Step_2D); the results carry them as full arrays.
+if OPT_ERW == 1
+    for c = 1:N_col
+        ERW{c} = ERW_Particle_History('assemble',ERW{c});
     end
 end
 
@@ -1496,12 +1704,12 @@ if cond; out = a; else; out = b; end
 end
 
 function ctx = Cell_BG_State_Context(ctx,state)
+%% The pool state v0.9's parameter scripts read, plus the exchanger seed
+%% (Load_Cell_Parameters -> bulk_pH_params.initial_f_CEC / initial_Al_w).
+%% Respiration, the Na-seed water loss and the plant reserves start the way
+%% v0.9 starts them, from the run itself and the parameter file.
 names = {'B_out','O_out','RexmyI_out','NavlI_out','NupI_L_out', ...
-    'Nreserve_L_out','Preserve_L_out','Kreserve_L_out','Careserve_L_out', ...
-    'Mgreserve_L_out','Sireserve_L_out','Nreserve_H_out','Preserve_H_out', ...
-    'Kreserve_H_out','Careserve_H_out','Mgreserve_H_out','Sireserve_H_out', ...
-    'spinup_r_het_mean_umol_m2_d','spinup_r_aut_mean_umol_m2_d', ...
-    'spinup_water_loss_mean_l_m2_d','spinup_erw_handoff_diagnostic'};
+    'spinup_erw_handoff_diagnostic'};
 for k = 1:numel(names)
     if isfield(state,names{k})
         ctx.(names{k}) = state.(names{k});

@@ -71,10 +71,9 @@ else
     rMg_min = 0.65;
 end
 reserve = [Nreserve,Preserve,Kreserve,Careserve,Mgreserve,Sireserve];
-if any(~isfinite(reserve)) || any(reserve < 0)
+if any(~isfinite(reserve))
     error('Nutrients_Available:InvalidReserve',...
-        'Plant nutrient reserves must be finite and nonnegative (N P K Ca Mg Si = %s).', ...
-        mat2str(reserve,6));
+        'Plant nutrient reserves must be finite.');
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%% Total Nutrient Content 
@@ -165,6 +164,11 @@ end
 if sum(B) == 0
     rNc=1; rPc=1; rKc=1; rCac=1; rMgc=1; rSic=1;
 end
+%% A deficit is tissue diluted below nominal, so it cannot exceed the tissue.
+if any([rNc,rPc,rKc,rCac,rMgc,rSic] < 0)
+    error('Nutrients_Available:InvalidReserve',...
+        'A plant nutrient deficit exceeds the nutrient held in its tissue.');
+end
 persistent nw_Nl nw_active nw_count nw_sup;
 if isempty(nw_Nl); nw_Nl=[]; nw_active=logical([]); nw_count=[]; nw_sup=[]; end
 if OPT_SoilBiogeochemistry == 1
@@ -197,13 +201,22 @@ if OPT_SoilBiogeochemistry == 1
     end
 end
 rMc = min([rNc,rPc,rKc,rCac,rMgc,rSic]); %% Overall nutrient limitation used by exudation; 
-%%%%%%%%%%%%%%%%%%%%%%%%% Physical nutrient reserve available for growth
-Navail= Nreserve;  %% Available Nitrogen Plant [gN/m^2]
-Pavail= Preserve;  %% Available Phosporus Plant [gP/m2]
-Kavail= Kreserve;  %% Available Potassium Plant [gK/m2]
-Caavail= Careserve;  %% Available Calcium Plant [gCa/m2]
-Mgavail= Mgreserve;  %% Available Magnesium Plant [gMg/m2]
-Siavail= Sireserve;  %% Available Silicon Plant [gSi/m2]
+%%%%%%%%%%%%%%%%%%%%%%%%% Minimum nutrient concentration is 0.65 of non-structural nutrients (rCa_min, rMg_min for Ca, Mg)
+Navail= Nreserve + 0.35*TNITns ;  %% Available Nitrogen Plant [gN/m^2]
+Pavail= Preserve + 0.35*TPHOns ;  %% Available Phosporus Plant [gP/m2]
+Kavail= Kreserve + 0.35*TPOTns;   %% Available Potassium Plant [gK/m2]
+Navail(Navail<0)=0;
+Pavail(Pavail<0)=0;
+Kavail(Kavail<0)=0;
+
+Caavail= Careserve + (1-rCa_min)*TCALns;   %% Available Calcium Plant [gCa/m2]
+Caavail(Caavail<0)=0;
+
+Mgavail= Mgreserve + (1-rMg_min)*TMAGns;   %% Available Magnesium Plant [gMg/m2]
+Mgavail(Mgavail<0)=0;
+
+Siavail= Sireserve + 0.35*TSILns;   %% Available Silicon Plant [gSi/m2]
+Siavail(Siavail<0)=0;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 n4=90; %% 90 days 

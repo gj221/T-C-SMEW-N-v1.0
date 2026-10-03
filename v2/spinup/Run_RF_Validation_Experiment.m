@@ -16,7 +16,11 @@ function out = Run_RF_Validation_Experiment(shape_file, agronomic_file, varargin
 %%      sampling uncertainty of the method at that fraction.
 %%   2  Base-saturation attainment.  For every cell that carried measured
 %%      base saturation into its spin-up, the exchangeable Ca, Mg, K of
-%%      the truth state at handoff against the targets (cmolc kg-1).
+%%      the handoff exchanger seed (spinup_erw_handoff_diagnostic.f_CEC
+%%      times the cell's CEC), which the transient's first ERW step
+%%      installs, against the targets (cmolc kg-1).  The spin-up's own
+%%      T&C exchange pools B(61/69/53) are not scored: that step
+%%      re-initialises them from the seed.
 %%   3  RF path (optional).  If a directory of cellstate_<id>.mat files
 %%      from an RF-path run (Method rf, cell array) is given, every
 %%      RF-reconstructed cell's conserved totals and exchangeable pools
@@ -99,17 +103,33 @@ for f = opt.Fractions(:).'
         for t = 1:numel(target_names)
             row.(['heldout_rel_err_' target_names{t}]) = NaN;
             row.(['heldout_max_cell_rel_err_' target_names{t}]) = NaN;
+            row.(['heldout_p90_cell_rel_err_' target_names{t}]) = NaN;
+            row.(['heldout_skill_vs_mean_' target_names{t}]) = NaN;
+            row.(['heldout_skill_vs_nn_' target_names{t}]) = NaN;
             row.(['cv_rel_err_' target_names{t}]) = NaN;
         end
         if numel(sub) >= 2*opt.KFold && ~isempty(held)
             rf = Train_Pool_Random_Forest(X(sub,:),Y(sub,:),feature_names, ...
                 target_names,'Seed',sd,'KFold',opt.KFold);
             pred = rf.predict(X(held,:));
+            %% Baselines the forest has to beat: the training mean, and the
+            %% nearest subsample cell in standardised covariate space (the
+            %% template the RF path would otherwise copy).
+            mu = mean(X(sub,:),1); sg = std(X(sub,:),0,1); sg(sg == 0) = 1;
+            [~,nn] = min(pdist2((X(held,:)-mu)./sg,(X(sub,:)-mu)./sg),[],2);
+            pred_mean = repmat(mean(Y(sub,:),1),numel(held),1);
+            pred_nn = Y(sub(nn),:);
             for t = 1:numel(target_names)
                 obs = Y(held,t); scale = max(mean(abs(obs)),eps);
                 row.(['heldout_rel_err_' target_names{t}]) = mean(abs(pred(:,t)-obs))/scale;
-                row.(['heldout_max_cell_rel_err_' target_names{t}]) = ...
-                    max(abs(pred(:,t)-obs)./max(abs(obs),eps));
+                cell_err = abs(pred(:,t)-obs)./max(abs(obs),eps);
+                row.(['heldout_max_cell_rel_err_' target_names{t}]) = max(cell_err);
+                row.(['heldout_p90_cell_rel_err_' target_names{t}]) = prctile(cell_err,90);
+                mae = mean(abs(pred(:,t)-obs));
+                row.(['heldout_skill_vs_mean_' target_names{t}]) = ...
+                    1 - mae/max(mean(abs(pred_mean(:,t)-obs)),eps);
+                row.(['heldout_skill_vs_nn_' target_names{t}]) = ...
+                    1 - mae/max(mean(abs(pred_nn(:,t)-obs)),eps);
                 row.(['cv_rel_err_' target_names{t}]) = rf.cv_rel_error(t);
             end
             row.trained = true;
@@ -128,16 +148,26 @@ writetable(regression,files.regression);
 %% --- 2. base-saturation attainment on the truth --------------------------
 bs = table();
 if ismember('base_saturation_source',resolved.Properties.VariableNames)
-    soil_mass = MOD.rsd*MOD.Zbio/1000;                 % kg m-2, BG_Observation_Targets
-    eqw = [40.078/2, 24.305/2, 39.098];                % g per mol_c
     meas = find(resolved.base_saturation_source == "measured");
     if ~isempty(meas)
-        state = zeros(numel(meas),3); target = zeros(numel(meas),3);
+        state = nan(numel(meas),3); target = zeros(numel(meas),3);
         for i = 1:numel(meas)
-            c = meas(i); B = truth(c).B_out(end,:);
-            state(i,:) = B([61 69 53])./(soil_mass*0.01*eqw);
+            c = meas(i);
             target(i,:) = [resolved.exch_Ca_cmolc_kg(c) resolved.exch_Mg_cmolc_kg(c) ...
                 resolved.exch_K_cmolc_kg(c)];
+            %% f_CEC = [Ca Mg K Na Al H] of the exchanger the seed built
+            if isfield(truth(c),'spinup_erw_handoff_diagnostic') && ...
+                    isstruct(truth(c).spinup_erw_handoff_diagnostic) && ...
+                    isfield(truth(c).spinup_erw_handoff_diagnostic,'f_CEC') && ...
+                    numel(truth(c).spinup_erw_handoff_diagnostic.f_CEC) == 6
+                f = truth(c).spinup_erw_handoff_diagnostic.f_CEC;
+                state(i,:) = f(1:3)*resolved.CEC_cmolc_kg(c);
+            end
+        end
+        if any(isnan(state(:)))
+            warning('Run_RF_Validation_Experiment:NoHandoffSeed', ...
+                '%d measured cell(s) carry no handoff exchanger seed; scored NaN.', ...
+                nnz(any(isnan(state),2)));
         end
         bs = table(resolved.cell_id(meas),target(:,1),state(:,1),target(:,2),state(:,2), ...
             target(:,3),state(:,3),(state-target)./max(abs(target),eps), ...

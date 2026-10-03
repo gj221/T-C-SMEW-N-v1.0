@@ -40,10 +40,10 @@ args{10} = 0.8;
 args{11} = 0.5;
 args{55} = 1;
 args{2}(1:34) = max(args{2}(1:34),1e-3);
-args{2}(12) = 10*args{50}.Kc;
+args{2}(12) = 10*args{50}.Kc*args{3};
 args{2}(13) = 0;
 args{2}(31) = 0;
-args{2}(32) = args{50}.Kn;
+args{2}(32) = args{50}.Kn*args{3};
 
 [n2_dry,n2o_dry,denit_dry,nit_n2o_dry,resp_dry] = partition_flux(args,0.4);
 [n2_wet,n2o_wet,denit_wet,nit_n2o_wet,resp_wet] = partition_flux(args,0.9);

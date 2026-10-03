@@ -11,7 +11,7 @@ fNO3 = (1.0 - (0.5 + atan(pi*0.01*(NO3_ppm - 190.0))/pi))*25.0;
 fResp = 13.0 + 30.78*atan(pi*0.07*(respiration_kg_C_ha_day - 13.0))/pi;
 pDEN = 13.0^(2.2*WFPS);
 fWFPS = 1.4/13.0^(17.0/pDEN);
-expected = min(fNO3,fResp)*fWFPS*fpH;
+expected = max(0.1,min(fNO3,fResp)*fWFPS*fpH);
 
 actual = Biogeo_Denitrification_Product_Ratio( ...
     fpH,WFPS,NO3_ppm,respiration_kg_C_ha_day);
@@ -27,6 +27,13 @@ dry = Biogeo_Denitrification_Product_Ratio(fpH,0.30,NO3_ppm,respiration_kg_C_ha_
 wet = Biogeo_Denitrification_Product_Ratio(fpH,0.95,NO3_ppm,respiration_kg_C_ha_day);
 assert(wet > dry, ...
     'Increasing WFPS must raise the DayCent N2:N2O ratio.');
+
+floored = Biogeo_Denitrification_Product_Ratio(fpH,0.05,NO3_ppm, ...
+    respiration_kg_C_ha_day);
+pDEN_dry = 13.0^(2.2*0.05);
+unfloored = min(fNO3,fResp)*(1.4/13.0^(17.0/pDEN_dry))*fpH;
+assert(unfloored < 0.1 && floored == 0.1, ...
+    'A dry cell must return the Blanc-Betes Eq. 6 floor, not pure N2O.');
 
 gross_denitrification = 0.73;
 N2O = gross_denitrification/(1.0 + actual);

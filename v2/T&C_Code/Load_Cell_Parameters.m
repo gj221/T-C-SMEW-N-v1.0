@@ -60,30 +60,6 @@ if ~isempty(PFT_OVERRIDE)
     run(PFT_OVERRIDE);
 end
 
-reserve_pairs = {
-    'Nreserve_L_out','Nreserve_L'; 'Preserve_L_out','Preserve_L';
-    'Kreserve_L_out','Kreserve_L'; 'Careserve_L_out','Careserve_L';
-    'Mgreserve_L_out','Mgreserve_L'; 'Sireserve_L_out','Sireserve_L';
-    'Nreserve_H_out','Nreserve_H'; 'Preserve_H_out','Preserve_H';
-    'Kreserve_H_out','Kreserve_H'; 'Careserve_H_out','Careserve_H';
-    'Mgreserve_H_out','Mgreserve_H'; 'Sireserve_H_out','Sireserve_H'};
-for ii = 1:size(reserve_pairs,1)
-    source_name = reserve_pairs{ii,1};
-    target_name = reserve_pairs{ii,2};
-    if exist(source_name,'var') && exist(target_name,'var')
-        state_value = eval(source_name);
-        target_value = eval(target_name);
-        if numel(state_value) ~= size(target_value,2)
-            error('Load_Cell_Parameters:ReserveShape', ...
-                '%s has %d values; %s requires %d.',source_name,numel(state_value), ...
-                target_name,size(target_value,2));
-        end
-        target_value(1,:) = reshape(state_value,1,[]);
-        eval([target_name ' = target_value;']);
-    end
-end
-clear reserve_pairs source_name target_name state_value target_value
-
 if exist('spinup_erw_handoff_diagnostic','var') && ...
         isstruct(spinup_erw_handoff_diagnostic)
     if ~exist('bulk_pH_params','var') || ~isstruct(bulk_pH_params)

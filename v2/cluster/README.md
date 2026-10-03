@@ -1,13 +1,12 @@
 # Field spin-up on Bouchet
 
 The automatic spin-up costs about 48 s per forcing year in its T&C-only
-Phase 1, minutes in the stand-alone Phase 2, and about 70 min per
-coupled year in Phase 3, whose convergence test runs over complete
-seven-year rings; on the Control 2 test cell the slow cation pools were
-still drifting after 27 coupled years. A cell is therefore a job of
-one to several days, and a field is a SLURM array of them. Everything
-here runs one cell per array task and reuses finished cells, so a
-preempted or resubmitted array picks up where it stopped.
+Phase 1, about 6 min in the stand-alone Phase 2, and about 1 min per
+coupled year in the ERW-free Phase 3, whose convergence test runs over
+complete rings of cycle years (measured on one Control 2 cell, this
+workstation). A cell is a job of hours, and a field is a SLURM array of
+them. Everything here runs one cell per array task and reuses finished
+cells, so a preempted or resubmitted array picks up where it stopped.
 
 ## What runs
 
@@ -53,16 +52,24 @@ squeue -u $USER                                  # progress
 tail logs/spinup_cell_<jobid>_<task>.out         # one cell's log
 ```
 
-The array uses the `week` partition with a two-day limit per task and
+The array uses the `day` partition with a one-day limit per task and
 8 GB, which is ample: the DEM loader crops each 1 m lidar tile to the
 field window as it reads it, so a task holds one tile (about 0.8 GB)
-at its peak, not the six tiles that cover the farm. If a task is preempted or times out, resubmit the same array:
-finished cells are found on disk and reused (`cell_<id>_BG.mat`
-validated against the cell's inputs), and a cell in progress resumes
-from its phase checkpoints. `module load MATLAB/2023b` is what the
-scripts load; the code needs the Statistics and Machine Learning
-Toolbox (`TreeBagger`, `pdist2`) and the Mapping Toolbox
-(`readgeoraster`, `projcrs`) -- check `ver` once on a compute node.
+at its peak, not the six tiles that cover the farm. If a task is
+preempted or times out, resubmit the same array: a finished cell is
+reused, and a cell in progress resumes its own phase checkpoints. Both
+are recognised by a provenance key (`Spinup_Provenance`: the cell, its
+soil inputs, the workbook case, the MOD and ERW rows with their forcing,
+meteo and transient windows, and the seed), so a changed input or
+environment starts that cell afresh instead of resuming a stale run. A
+finished state also records the instant it hands off at, and the field
+transient (`Run_One_Subfield`) refuses a state for any other start.
+The scripts load `${MATLAB_MODULE:-MATLAB/2025a}` and run on
+`cpumodel:9575f` nodes, the platform of the v0.9 campaigns in
+`runtime/`, so a state is produced where the transient will run it.
+The code needs the Statistics and Machine Learning Toolbox
+(`TreeBagger`, `pdist2`) and the Mapping Toolbox (`readgeoraster`,
+`projcrs`) -- check `ver` once on a compute node.
 
 ## The robust test
 
@@ -101,7 +108,6 @@ grid runs through the same scripts by dropping `TC_CELL_M` and
 - Base saturation reaches the ERW exchanger through the per-cell
   `f_CEC_in` seed (main README, *Base saturation*); Na and Al exchange
   start at zero.
-- On the one cell tested locally, Phase 3 had not met its 1 % ring
-  criterion after 27 coupled years (slow fixed-cation pools); expect
-  long tasks and use the two-day limit with resubmission rather than a
-  looser criterion.
+- Phase 3 is ERW-free (the v0.9 driver gates its chemistry on
+  `OPT_ERW`); the ERW seed is built and checked once, from the first two
+  forcing days of the transient window, by the final handoff diagnostic.

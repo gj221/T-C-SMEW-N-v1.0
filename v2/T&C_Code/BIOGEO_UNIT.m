@@ -15,9 +15,19 @@ function[P,LEAK_NH4,LEAK_NO3,LEAK_P,LEAK_K,LEAK_DOC,LEAK_DON,LEAK_DOP,...
     SupCa_H,SupMg_H,SupSi_H,SupCa_L,SupMg_L,SupSi_L,...
     Rexmy,RexmyI,ExEM,NavlI,Pcla,Psan,...
     B_IO,Date,FireA,AAET,...
-    opt_ERW,opt_BfixN,L_pore,WFPS)
+    opt_ERW,opt_BfixN,f_anaer,WFPS,exchange_scheme,KNmaxd_override, ...
+    biogeo_overrides)
 %%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%% INPUT
+if ~exist('exchange_scheme','var') || isempty(exchange_scheme)
+    exchange_scheme = 'TC_GT';
+end
+if ~exist('KNmaxd_override','var')
+    KNmaxd_override = [];
+end
+if ~exist('biogeo_overrides','var')
+    biogeo_overrides = [];
+end
 ZBIOG=ZBIOG/1000; %% [m]
 %%%%%%%
 %%% Mean value of an exponential distribution MV = Zperc/(-ln(1-perc)); %%
@@ -164,7 +174,7 @@ IMAN(9)=  ManF./Si_Man; % [gSi/m^2 day]
 
 %%%%%%%%%%%%%%%%%%%%%%%%
 opt_cons_CUE=1;
-[BiogeoPar]=Biogeochemistry_Parameter(opt_cons_CUE);
+[BiogeoPar]=Biogeochemistry_Parameter(opt_cons_CUE,KNmaxd_override,biogeo_overrides);
 %%%%%%%%%
 [LEAK_NH4,LEAK_NO3,LEAK_P,LEAK_K,LEAK_DOC,LEAK_DON,LEAK_DOP,...
     LEAK_Ca,LEAK_Mg,LEAK_Si]= Biogeo_Leakage(Ptm1,Lk,V,BiogeoPar);
@@ -197,15 +207,9 @@ Si_Uptake=sum(Si_Uptake_H.*(1-SupSi_H) + Si_Uptake_L.*(1-SupSi_L));
 %%%%%%% Leaching keeps priority because Biogeo_Leakage is already bounded.
 uptake_pool_idx = [31 32 43 52 60 68 76];
 uptake_leak = [LEAK_NH4 LEAK_NO3 LEAK_P LEAK_K LEAK_Ca LEAK_Mg LEAK_Si];
-uptake_total = [NH4_Uptake NO3_Uptake P_Uptake K_Uptake ...
-    Ca_Uptake Mg_Uptake Si_Uptake];
-uptake_scale = ones(1,numel(uptake_pool_idx));
-for iu = 1:numel(uptake_pool_idx)
-    headroom = max(0,Ptm1(uptake_pool_idx(iu)) - uptake_leak(iu));
-    if uptake_total(iu) > headroom
-        uptake_scale(iu) = headroom/uptake_total(iu);
-    end
-end
+[uptake_scale,uptake_total] = Biogeo_Uptake_Limit(Ptm1(uptake_pool_idx), ...
+    uptake_leak,[NH4_Uptake NO3_Uptake P_Uptake K_Uptake ...
+    Ca_Uptake Mg_Uptake Si_Uptake]);
 NH4_Uptake_H = NH4_Uptake_H*uptake_scale(1);
 NH4_Uptake_L = NH4_Uptake_L*uptake_scale(1);
 NO3_Uptake_H = NO3_Uptake_H*uptake_scale(2);
@@ -220,13 +224,13 @@ Mg_Uptake_H  = Mg_Uptake_H*uptake_scale(6);
 Mg_Uptake_L  = Mg_Uptake_L*uptake_scale(6);
 Si_Uptake_H  = Si_Uptake_H*uptake_scale(7);
 Si_Uptake_L  = Si_Uptake_L*uptake_scale(7);
-NH4_Uptake = NH4_Uptake*uptake_scale(1);
-NO3_Uptake = NO3_Uptake*uptake_scale(2);
-P_Uptake   = P_Uptake*uptake_scale(3);
-K_Uptake   = K_Uptake*uptake_scale(4);
-Ca_Uptake  = Ca_Uptake*uptake_scale(5);
-Mg_Uptake  = Mg_Uptake*uptake_scale(6);
-Si_Uptake  = Si_Uptake*uptake_scale(7);
+NH4_Uptake = uptake_total(1);
+NO3_Uptake = uptake_total(2);
+P_Uptake   = uptake_total(3);
+K_Uptake   = uptake_total(4);
+Ca_Uptake  = uptake_total(5);
+Mg_Uptake  = uptake_total(6);
+Si_Uptake  = uptake_total(7);
 
 %%%%
 [BfixN]= Biogeo_Bio_fixation(AAET,LAI,Ptm1,Rexmy,Ts,opt_BfixN);
@@ -243,14 +247,14 @@ t=[];
     LEAK_Ca,LEAK_Mg,LEAK_Si,...
     Tup_P,Tup_K,...
     Tup_Ca,Tup_Mg,Tup_Si, ...
-    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,L_pore,WFPS);
+    ExEM,Pcla,Psan,BiogeoPar,SC_par,IMAN,opt_cons_CUE,opt_ERW,f_anaer,WFPS,exchange_scheme);
 %%%%%%
 if ~isreal(dP) || any(~isfinite(dP))
     error('BIOGEO_UNIT:InvalidPoolIncrement', ...
         'Biogeochemistry pool increments must be finite and real.')
 end
 %%%
-P=Ptm1+dP;
+P = Biogeo_Pool_Update(Ptm1,dP,ZBIOG*rsd*1000); %% soil in g m^-2, as in BIOGEOCHEMISTRY_DYNAMIC3
 if ~isreal(P) || any(~isfinite(P))
     error('BIOGEO_UNIT:InvalidPoolState', ...
         'Biogeochemistry pools must remain finite and real.')

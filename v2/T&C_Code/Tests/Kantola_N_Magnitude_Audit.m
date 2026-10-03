@@ -5,13 +5,33 @@ function A = Kantola_N_Magnitude_Audit(S,scenario,nd)
 %% Retained states are g N m^-2 and retained daily fluxes are
 %% g N m^-2 d^-1.  One g m^-2 equals 10 kg ha^-1.  On drainage days,
 %% (g N m^-2 d^-1)/(mm d^-1) equals g N L^-1 because 1 mm m^-2 is 1 L.
+%% Min_N is net mineralization, (NH4_in+NO3_in) in BIOGEOCHEMISTRY_DYNAMIC3,
+%% and is negative on days of net microbial immobilization; it is an
+%% internal transfer, not part of the boundary ledger, and is reported
+%% signed.
+%% Row 1 of every retained state is written before the first daily block:
+%% Ccrown_t starts as ones() and its row 1 is never overwritten, while
+%% Nreserve_L(1,:) holds the legacy seed reserve of 1000 g N per crown m^2
+%% and crop (MOD_PARAM_Kantola_Maize_Soy). Row-1 plant-side products are
+%% therefore per-crown constants under a placeholder crown of one, not
+%% ground-area pools. The ledger takes soil pools from row 1 and plant-side
+%% pools from row 2, whose retained crown is the campaign's actual crown
+%% ([0 0] on 1 January, so the carried reserve is masked); the row-1
+%% placeholder product is reported as row1_placeholder_plant_N_gNm2.
+%% The daily biogeochemistry block runs at the hour with Datam(i,4) == 1
+%% (01:00) and receives sum(Lk(pdind)) with pdind = max(1,i-24):i-1
+%% (MAIN_FRAME_BG_ERW_2D), i.e. the 24 hours from 01:00 of the previous
+%% day through 00:00 of the current day. The dry-day check and the mobile
+%% NO3 concentration rebuild exactly that window from the retained hourly
+%% dates; on the first retained day the window holds only the hours before
+%% the first block.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 required = {'P','TNIT_H','TNIT_L','Nreserve_H','Nreserve_L', ...
     'FertN_d','DepN_d','BfixN','N2Oflx','N2flx','VOL', ...
     'LEAK_NO3','LEAK_NH4','LEAK_DON','Lk','AgrHarNut','SeedInput', ...
     'Nuptake_H','Nuptake_L','DENITflx','Min_N','Ccrown_t', ...
-    'ISOIL_H','ISOIL_L','Date'};
+    'ISOIL_H','ISOIL_L','TexN_H','TexN_L','Date'};
 for k = 1:numel(required)
     assert(isfield(S,required{k}), ...
         'Kantola_N_Magnitude_Audit:MissingField', ...
@@ -54,17 +74,21 @@ A.plant_uptake_gNm2 = sum_weighted_daily( ...
     sum_weighted_daily(S.Nuptake_L,S.Ccrown_t,nd,'Nuptake_L');
 A.denitrification_gNm2 = sum_daily(S.DENITflx,nd,'DENITflx');
 A.fertilizer_gNm2 = sum_daily(S.FertN_d,nd,'FertN_d');
-A.mineralization_gNm2 = sum_daily(S.Min_N,nd,'Min_N');
+net_mineralization = signed_daily_state(S.Min_N,nd,'Min_N');
+A.mineralization_gNm2 = sum(net_mineralization);
+A.net_immobilization_gNm2 = -sum(net_mineralization(net_mineralization < 0));
+A.net_immobilization_days = nnz(net_mineralization < -1e-12);
 A.seed_input_gNm2 = sum_daily(S.SeedInput(:,2),nd,'SeedInput(:,2)');
 
 leak_no3 = daily_state(S.LEAK_NO3,nd,'LEAK_NO3');
-drainage = hourly_to_daily(S.Lk,nd,'Lk');
-wet = drainage > 0;
+drainage = hourly_to_daily(S.Lk,nd,'Lk'); %#ok<NASGU> retained daily total
+driving_drainage = block_window_sum(S.Lk,S.Date,nd,'Lk');
+wet = driving_drainage > 0;
 assert(all(leak_no3(~wet) <= 1e-12), ...
     'Kantola_N_Magnitude_Audit:DryLeakage', ...
-    'NO3 leakage is positive while drainage is zero.');
+    'NO3 leakage is positive while the drainage window of its daily block was dry.');
 mobile = NaN(nd,1);
-mobile(wet) = 1000*leak_no3(wet)./drainage(wet);
+mobile(wet) = 1000*leak_no3(wet)./driving_drainage(wet);
 if any(wet)
     A.maximum_NO3_mobile_mgNL = max(mobile(wet));
     A.latest_NO3_mobile_mgNL = mobile(find(wet,1,'last'));
@@ -76,21 +100,37 @@ end
 pending_litter_n = weighted_pending_litter_n( ...
     S.ISOIL_H,S.Ccrown_t,nd+1,'ISOIL_H') + ...
     weighted_pending_litter_n(S.ISOIL_L,S.Ccrown_t,nd+1,'ISOIL_L');
-storage = sum(P(:,23:34),2) + ...
-    weighted_row_sum(S.TNIT_H,S.Ccrown_t,nd+1,'TNIT_H') + ...
-    weighted_row_sum(S.TNIT_L,S.Ccrown_t,nd+1,'TNIT_L') + ...
-    weighted_row_sum(S.Nreserve_H,S.Ccrown_t,nd+1,'Nreserve_H') + ...
-    weighted_row_sum(S.Nreserve_L,S.Ccrown_t,nd+1,'Nreserve_L') + ...
+total_transfer_n = weighted_row_sum( ...
+    S.TexN_H,S.Ccrown_t,nd+1,'TexN_H') + ...
+    weighted_row_sum(S.TexN_L,S.Ccrown_t,nd+1,'TexN_L');
+organ_harvest_n = total_transfer_n-pending_litter_n;
+assert(all(isfinite(organ_harvest_n)) && min(organ_harvest_n) >= -1e-10, ...
+    'Kantola_N_Magnitude_Audit:OrganExport', ...
+    'Derived organ harvest N export is nonfinite or negative.');
+plant_n = weighted_plant_n(S.TNIT_H,S.Nreserve_H,S.Ccrown_t,nd+1,'H') + ...
+    weighted_plant_n(S.TNIT_L,S.Nreserve_L,S.Ccrown_t,nd+1,'L') + ...
     pending_litter_n;
+storage = sum(P(:,23:34),2) + plant_n;
+storage(1) = sum(P(1,23:34)) + plant_n(2);
+A.row1_placeholder_plant_N_gNm2 = plant_n(1)-plant_n(2);
+% The row-2 rule is exact only when no plant-side transfer happened on day
+% 1, which holds when no crop is present, or when no legacy reserve is
+% carried; refuse any other configuration rather than mis-close silently.
+assert(all(double(S.Ccrown_t(2,:)) == 0) || ...
+    max(double(S.Nreserve_L(2,:)),[],'all') < 1, ...
+    'Kantola_N_Magnitude_Audit:LegacyReserveLive', ...
+    'A crop is present on day 1 while the legacy seed reserve is still carried.');
 inputs = A.fertilizer_gNm2 + A.seed_input_gNm2 + ...
     sum_daily(S.DepN_d,nd,'DepN_d') + sum_daily(S.BfixN,nd,'BfixN');
 outputs = sum_daily(S.N2Oflx,nd,'N2Oflx') + ...
     sum_daily(S.N2flx,nd,'N2flx') + sum_daily(S.VOL,nd,'VOL') + ...
     A.cumulative_NO3_leak_gNm2 + A.cumulative_NH4_leak_gNm2 + ...
     sum_daily(S.LEAK_DON,nd,'LEAK_DON') + ...
-    sum_daily(S.AgrHarNut(:,1),nd,'AgrHarNut(:,1)');
+    sum_daily(S.AgrHarNut(:,1),nd,'AgrHarNut(:,1)') + ...
+    sum(organ_harvest_n(2:end));
 A.N_storage_change_gNm2 = storage(end)-storage(1);
 A.pending_litter_N_gNm2 = pending_litter_n(end);
+A.organ_harvest_export_gNm2 = sum(organ_harvest_n(2:end));
 A.N_closure_residual_gNm2 = inputs-outputs-A.N_storage_change_gNm2;
 assert(abs(A.N_closure_residual_gNm2) <= 1e-8, ...
     'Kantola_N_Magnitude_Audit:NClosure', ...
@@ -126,6 +166,37 @@ x = double(x(2:nd+1,:));
 assert(all(isfinite(x(:))) && min(x(:)) >= -1e-12, ...
     'Kantola_N_Magnitude_Audit:InvalidFlux','%s is nonfinite or negative.',name);
 value = sum(x,2);
+end
+
+function value = signed_daily_state(x,nd,name)
+% Net fluxes carry their sign; only finiteness is a defect.
+assert(size(x,1) >= nd+1, ...
+    'Kantola_N_Magnitude_Audit:ShortFlux','%s lacks the state row for day %d.',name,nd);
+x = double(x(2:nd+1,:));
+assert(all(isfinite(x(:))), ...
+    'Kantola_N_Magnitude_Audit:InvalidFlux','%s is nonfinite.',name);
+value = sum(x,2);
+end
+
+function value = block_window_sum(x,dates,nd,name)
+% Sum x over the model's daily-block window for each retained day: the
+% block for retained day d runs at the d-th hour with hour-of-day 1 and
+% reads the 24 hourly values before it (MAIN_FRAME_BG_ERW_2D pdind).
+assert(size(x,1) >= 24*nd && numel(dates) >= 24*nd, ...
+    'Kantola_N_Magnitude_Audit:ShortFlux','%s or Date ends before hour %d.',name,24*nd);
+x = double(x(1:24*nd,:));
+assert(all(isfinite(x(:))) && min(x(:)) >= -1e-12, ...
+    'Kantola_N_Magnitude_Audit:InvalidFlux','%s is nonfinite or negative.',name);
+hour = round(mod(double(dates(1:24*nd)),1)*24);
+block = find(hour(:) == 1);
+assert(numel(block) == nd, ...
+    'Kantola_N_Magnitude_Audit:DailyBlockCount', ...
+    'The retained dates hold %d daily-block hours for %d days.',numel(block),nd);
+hourly = sum(x,2);
+value = zeros(nd,1);
+for d = 1:nd
+    value(d) = sum(hourly(max(1,block(d)-24):block(d)-1));
+end
 end
 
 function value = hourly_to_daily(x,nd,name)
@@ -173,6 +244,16 @@ assert(all(isfinite(w(:))) && min(w(:)) >= -1e-12 && max(w(:)) <= 1+1e-12, ...
     'Kantola_N_Magnitude_Audit:InvalidCrown', ...
     'Ccrown_t is nonfinite or outside [0,1].');
 value = sum(x.*w,2);
+end
+
+function value = weighted_plant_n(tissue,reserve,w,n,name)
+% A reserve below zero is tissue diluted below its nominal N (legacy T&C),
+% so the sign check falls on the plant total, tissue plus reserve.
+assert(isequal(size(tissue),size(reserve)), ...
+    'Kantola_N_Magnitude_Audit:CrownShape', ...
+    'TNIT_%s and Nreserve_%s have different retained dimensions.',name,name);
+value = weighted_row_sum(double(tissue)+double(reserve),w,n, ...
+    ['TNIT_' name '+Nreserve_' name]);
 end
 
 function value = weighted_pending_litter_n(x,w,n,name)

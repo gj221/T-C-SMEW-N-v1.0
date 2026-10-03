@@ -1,8 +1,18 @@
 function [Omega, thermodynamic_defined] = ERW_Mineral_Saturation( ...
-    mineral, K, Ca, Mg, Na, Si, Al, PO4, H, K_sp, conv_mol)
+    mineral, K, Ca, Mg, Na, Si, Al, PO4, H, K_sp, conv_mol, Al_CEC_scale, I_str)
 %%% Primary-mineral saturation ratio from the complete modeled reaction.
 %%%
-%%% Dissolved concentrations are in umol/L and gamma_i=1. K_sp is the
+%%% Dissolved concentrations are in umol/L except Al, which arrives on the
+%%% ERW solver's Al_CEC_scale basis (conv_Al, nmol/L) and is divided by
+%%% Al_CEC_scale here; a caller that already holds Al in umol/L passes 1.
+%%% Activities are Davies single-ion activity coefficients at the pore-water
+%%% ionic strength I_str [mol/L] (ERW_Activity_Coefficient). Both are
+%%% required: the values they would default to, 1 and 0, are the two
+%%% defects these arguments exist to remove -- an Al scale read as umol/L
+%%% and a concentration-basis saturation ratio.
+%%% Every reaction quotient below is already the full quotient raised to
+%%% 1/n_H, so substituting gamma*c for each ion is the exact activity
+%%% form; Si (H4SiO4, neutral) takes no correction. K_sp is the
 %%% proton-normalized equilibrium constant for forsterite, wollastonite,
 %%% diopside, albite and anorthite. Thermoddem reports the zoisite constant
 %%% for the complete 13-H reaction, so that constant is rooted here.
@@ -39,13 +49,27 @@ end
 if ~(isfinite(K_sp) && K_sp > 0)
     error('ERW:invalidParam','Mineral equilibrium constant must be positive and finite.');
 end
+if nargin < 13
+    error('ERW:invalidParam', ...
+        ['Al_CEC_scale and I_str are required; pass the solver''s conv_Al and ' ...
+        'the step''s pore-water ionic strength.']);
+end
+if ~(isscalar(Al_CEC_scale) && isfinite(Al_CEC_scale) && Al_CEC_scale > 0)
+    error('ERW:invalidParam','Al_CEC_scale must be a positive finite scalar.');
+end
+if ~(isscalar(I_str) && isfinite(I_str) && I_str >= 0)
+    error('ERW:invalidState','Ionic strength must be a finite nonnegative scalar.');
+end
 
-ca = Ca/conv_mol;
-mg = Mg/conv_mol;
-na = Na/conv_mol;
+gamma1 = ERW_Activity_Coefficient(1,I_str);
+gamma2 = ERW_Activity_Coefficient(2,I_str);
+gamma3 = ERW_Activity_Coefficient(3,I_str);
+ca = gamma2*Ca/conv_mol;
+mg = gamma2*Mg/conv_mol;
+na = gamma1*Na/conv_mol;
 si = Si/conv_mol;
-al = Al/conv_mol;
-h = H/conv_mol;
+al = gamma3*Al/(conv_mol*Al_CEC_scale);
+h = gamma1*H/conv_mol;
 
 switch mineral
     case 'forsterite'

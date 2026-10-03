@@ -2,7 +2,7 @@
 %   Temperature Humidity Biogeochemistry Zone
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function[Se_bio,Se_fc,Psi_bio,Tdp_bio,Vtot,VT,L_bio,WFPS_bio]=Biogeo_environment(Tdp,O,V,Soil_Param,Phy,SPAR,Bio_Zs,Zbio)
+function[Se_bio,Se_fc,Psi_bio,Tdp_bio,Vtot,VT,f_anaer_bio,WFPS_bio]=Biogeo_environment(Tdp,O,V,Soil_Param,Phy,SPAR,Bio_Zs,Zbio)
 O=mean(O,1); Tdp=mean(Tdp,1);  V=mean(V,1); 
 %%%%%%%
 Ks_Zs=Soil_Param.Ks_Zs; 
@@ -36,7 +36,22 @@ Se_fc = (Ofc-Ohy)./(Osat-Ohy);%%
 [Ko,Psi_bio]=Conductivity_Suction(SPAR,sum(Bio_Zs.*Ks_Zs),Osat,Ohy,...
     sum(Bio_Zs.*L),sum(Bio_Zs.*Pe),sum(Bio_Zs.*O33),sum(Bio_Zs.*alpVG),sum(Bio_Zs.*nVG),sum(Bio_Zs.*lVG),...
      sum(Bio_Zs.*Ks_mac),sum(Bio_Zs.*Omac), sum(Bio_Zs.*alpVGM),sum(Bio_Zs.*nVGM),sum(Bio_Zs.*lVGM),Phy,sum(Bio_Zs.*s_SVG),sum(Bio_Zs.*bVG),Obio);
-L_bio = sum(Bio_Zs.*L); %% [-] pore size distribution index over the same depth
+%%% Anaerobic fraction for denitrification: air-entry suction over the
+%%% current suction, Pe/|Psi|, both in kPa. Conductivity_Suction returns
+%%% Psi_bio in mm of head, so convert with rho*g = 9.81 kPa per m; Pe is
+%%% already kPa (Soil_parameters). This is the quantity Dickinson et al.
+%%% (2002) mean by Se^(1/lambda) under Brooks-Corey, computed here from
+%%% whatever retention curve SPAR actually selects instead of assuming its
+%%% shape: under SPAR = 2 (Saxton-Rawls) the curve is linear in O above O33
+%%% and Se^(1/L) is NOT the suction ratio, L there being a log-log slope
+%%% rather than a pore-size index. The ratio is 1 at saturation (Psi -> Pe
+%%% on the Saxton-Rawls wet branch) and falls as the profile drains.
+%%% Formed from the UNCLAMPED suction: BIOGEOCHEMISTRY_DYNAMIC3 clamps its
+%%% own Psi_s to -10.1 kPa for the Moyano/Manzoni respiration functions,
+%%% which would cap this ratio at Pe/10 and never let it reach 1.
+Pe_bio = sum(Bio_Zs.*Pe); %% [kPa] air-entry suction over the active layer
+Psi_kPa = max(abs(Psi_bio)*9.81/1000, eps); %% [kPa] current suction, unclamped
+f_anaer_bio = min(1, max(0, Pe_bio/Psi_kPa)); %% [-] anaerobic fraction
 Tdp_bio = sum(Bio_Zs.*Tdp); %% [�C]
 Psi_bio=-(Psi_bio/1000)*1000*9.81/1e+6; %%[MPa]
 Vtot = sum(V); %% [mm] Volume of entire depth

@@ -54,13 +54,14 @@ if ~isempty(isowing) && sum(abs(Btm1(1:6)))<=sqrt(eps)
     %%%%
     B(B<0)=0;
     %%%%
-    Nreserve = Nreserve+SeedNut(1);
-    Preserve = Preserve+SeedNut(2);
-    Kreserve = Kreserve+SeedNut(3);
+    %% Legacy assigns the seed reserve; it does not accumulate onto carry-over.
+    Nreserve = SeedNut(1);
+    Preserve = SeedNut(2);
+    Kreserve = SeedNut(3);
 
-    Careserve = Careserve+SeedNut(4);
-    Mgreserve = Mgreserve+SeedNut(5);
-    Sireserve = Sireserve+SeedNut(6);
+    Careserve = SeedNut(4);
+    Mgreserve = SeedNut(5);
+    Sireserve = SeedNut(6);
 end
 %%%%%%%%%% Harvesting
 if  sum(abs(DD-Date_harvesting)<=0.49)>=1

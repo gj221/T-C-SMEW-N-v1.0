@@ -62,6 +62,13 @@ for c = 1:n
                 resolved.cell_id(c),mat2str(f,6));
         end
         E.f_CEC_in = string(sprintf('[%.12g %.12g %.12g 0 0 %.12g]',f(1),f(2),f(3),1-sum(f)));
+        %% The workbook's Kantola convention prescribes its own 80 % base
+        %% saturation in ERW_pre_processing and would overwrite this seed;
+        %% v0.9's f_CEC_inventory convention keeps supplied fractions as the
+        %% conserved initial inventory (same full-charge anion closure).
+        if ismember('fX_conc_convention',E.Properties.VariableNames)
+            E.fX_conc_convention = "f_CEC_inventory";
+        end
     end
     CellInputs(c).cell_id = resolved.cell_id(c);
     CellInputs(c).MOD_PARAM = M;

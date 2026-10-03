@@ -241,42 +241,62 @@ fll = Plant_Reserve_Fraction(Mgreserve,Mgsto_tm1,'Mg'); Magi = Magc/FiS +  fll*(
 fll = Plant_Reserve_Fraction(Sireserve,Sisto_tm1,'Si'); Sili = Silc/FiS +  fll*(Sill-Silc)/FiS;
 
 %%%%%%%
+rNcM=rNc; rPcM=rPc; rKcM=rKc; rCacM=rCac; rMgcM=rMgc; rSicM=rSic;
+NiM=Ni; PhoiM=Phoi; KpotiM=Kpoti; CaliM=Cali; MagiM=Magi; SiliM=Sili;
+if ManI == -2
+    %% The organs leave at the concentration the plant has that day: a
+    %% deficit is diluted tissue and goes with them, a surplus stays in
+    %% the reserve for CropHeightType to export.
+    reserve=[Nreserve Preserve Kreserve Careserve Mgreserve Sireserve];
+    tissue=dtd*(RB(1)./[Nl Phol Kpotl Call Magl Sill] + RB(3)./[Nr Phor Kpotr Calr Magr Silr] + ...
+        RB(4)./[Nc Phoc Kpotc Calc Magc Silc] + RB(5)./[Nf Phof Kpotf Calf Magf Silf]);
+    if any(reserve < -tissue)
+        error('Plant_Exports:ReserveOverdraw', ...
+            'A plant nutrient deficit exceeds the nutrient in the harvested tissue.')
+    end
+    rM=ones(1,6);
+    deficit=reserve < 0;
+    rM(deficit)=1+reserve(deficit)./tissue(deficit);
+    rNcM=rM(1); rPcM=rM(2); rKcM=rM(3); rCacM=rM(4); rMgcM=rM(5); rSicM=rM(6);
+    NiM=Nc/rNcM; PhoiM=Phoc/rPcM; KpotiM=Kpotc/rKcM;
+    CaliM=Calc/rCacM; MagiM=Magc/rMgcM; SiliM=Silc/rSicM;
+end
 
 %%% Total Exported C-N-P-K
 TexC = Sfr + Swm + Slf + Sr + sum(Rexmy) +RB(1)+RB(2)+RB(3)+RB(4)+RB(5)+RB(6)+RB(7); %% [gC/m^2 d]
 %%%%
 TexN = Slf./Nlf + rNc*Sfr/Nf + rNc*(1-ftransR*(rNc<=1))*Sr./Nr  + Swm/Nh + ...
-rNc*RB(1)./Nl + RB(7)./Nlf  + RB(2)/Ns  + rNc*RB(3)/Nr + RB(4)/Ni + rNc*RB(5)/Nf  + RB(6)/Nh ; 
+rNcM*RB(1)./Nl + RB(7)./Nlf  + RB(2)/Ns  + rNcM*RB(3)/Nr + RB(4)/NiM + rNcM*RB(5)/Nf  + RB(6)/Nh ; 
 %%%
-VarResN =  (RB(1)/Nl - rNc*RB(1)/Nl) +  (RB(3)/Nr -  rNc*RB(3)/Nr) + (RB(4)/Nc - RB(4)/Ni) + (RB(5)/Nf - rNc*RB(5)/Nf); %% % [gN/m^2 d] Variation on the reserve 
+VarResN =  (RB(1)/Nl - rNcM*RB(1)/Nl) +  (RB(3)/Nr -  rNcM*RB(3)/Nr) + (RB(4)/Nc - RB(4)/NiM) + (RB(5)/Nf - rNcM*RB(5)/Nf); %% % [gN/m^2 d] Variation on the reserve 
 %%%%
 TexP = Slf./Pholf + rPc*Sfr/Phof + rPc*(1-ftransR*(rPc<=1))*Sr./Phor  + Swm/Phoh + ...
-rPc*RB(1)./Phol  +  RB(7)./Pholf  + RB(2)/Phos  + rPc*RB(3)/Phor + RB(4)/Phoi + rPc*RB(5)/Phof  +RB(6)/Phoh  ; 
+rPcM*RB(1)./Phol  +  RB(7)./Pholf  + RB(2)/Phos  + rPcM*RB(3)/Phor + RB(4)/PhoiM + rPcM*RB(5)/Phof  +RB(6)/Phoh  ; 
 %%%%
-VarResP =  (RB(1)/Phol - rPc*RB(1)/Phol) +  (RB(3)/Phor -  rPc*RB(3)/Phor) + (RB(4)/Phoc - RB(4)/Phoi) + (RB(5)/Phof - rPc*RB(5)/Phof); %%% % [gP/m^2 d] Variation on the reserve 
+VarResP =  (RB(1)/Phol - rPcM*RB(1)/Phol) +  (RB(3)/Phor -  rPcM*RB(3)/Phor) + (RB(4)/Phoc - RB(4)/PhoiM) + (RB(5)/Phof - rPcM*RB(5)/Phof); %%% % [gP/m^2 d] Variation on the reserve 
 %%%%
 TexK = Slf./Kpotlf + rKc*Sfr/Kpotf + rKc*(1-ftransR*(rKc<=1))*Sr./Kpotr  + Swm/Kpoth + ...
-rKc*RB(1)./Kpotl + RB(7)./Kpotlf + RB(2)/Kpots  + rKc*RB(3)/Kpotr + RB(4)/Kpoti + rKc*RB(5)/Kpotf  +RB(6)/Kpoth ; 
+rKcM*RB(1)./Kpotl + RB(7)./Kpotlf + RB(2)/Kpots  + rKcM*RB(3)/Kpotr + RB(4)/KpotiM + rKcM*RB(5)/Kpotf  +RB(6)/Kpoth ; 
 %%%%
-VarResK =  (RB(1)/Kpotl - rKc*RB(1)/Kpotl) +  (RB(3)/Kpotr -  rKc*RB(3)/Kpotr) + (RB(4)/Kpotc - RB(4)/Kpoti) + (RB(5)/Kpotf - rKc*RB(5)/Kpotf); %%% % [gK/m^2 d] Variation on the reserve 
+VarResK =  (RB(1)/Kpotl - rKcM*RB(1)/Kpotl) +  (RB(3)/Kpotr -  rKcM*RB(3)/Kpotr) + (RB(4)/Kpotc - RB(4)/KpotiM) + (RB(5)/Kpotf - rKcM*RB(5)/Kpotf); %%% % [gK/m^2 d] Variation on the reserve 
 %%%%
 
 TexCa = Slf./Callf + rCac*Sfr/Calf + rCac*(1-ftransR*(rCac<=1))*Sr./Calr  + Swm/Calh + ...
-rCac*RB(1)./Call + RB(7)./Callf + RB(2)/Cals  + rCac*RB(3)/Calr + RB(4)/Cali + rCac*RB(5)/Calf  +RB(6)/Calh ; 
+rCacM*RB(1)./Call + RB(7)./Callf + RB(2)/Cals  + rCacM*RB(3)/Calr + RB(4)/CaliM + rCacM*RB(5)/Calf  +RB(6)/Calh ; 
 %%%%
-VarResCa =  (RB(1)/Call - rCac*RB(1)/Call) +  (RB(3)/Calr -  rCac*RB(3)/Calr) + (RB(4)/Calc - RB(4)/Cali) + (RB(5)/Calf - rCac*RB(5)/Calf); %%% % [gCa/m^2 d] Variation on the reserve 
+VarResCa =  (RB(1)/Call - rCacM*RB(1)/Call) +  (RB(3)/Calr -  rCacM*RB(3)/Calr) + (RB(4)/Calc - RB(4)/CaliM) + (RB(5)/Calf - rCacM*RB(5)/Calf); %%% % [gCa/m^2 d] Variation on the reserve 
 %%%%
 
 TexMg = Slf./Maglf + rMgc*Sfr/Magf + rMgc*(1-ftransR*(rMgc<=1))*Sr./Magr  + Swm/Magh + ...
-rMgc*RB(1)./Magl + RB(7)./Maglf + RB(2)/Mags  + rMgc*RB(3)/Magr + RB(4)/Magi + rMgc*RB(5)/Magf  +RB(6)/Magh ; 
+rMgcM*RB(1)./Magl + RB(7)./Maglf + RB(2)/Mags  + rMgcM*RB(3)/Magr + RB(4)/MagiM + rMgcM*RB(5)/Magf  +RB(6)/Magh ; 
 %%%%
-VarResMg =  (RB(1)/Magl - rMgc*RB(1)/Magl) +  (RB(3)/Magr -  rMgc*RB(3)/Magr) + (RB(4)/Magc - RB(4)/Magi) + (RB(5)/Magf - rMgc*RB(5)/Magf); %%% % [gMg/m^2 d] Variation on the reserve 
+VarResMg =  (RB(1)/Magl - rMgcM*RB(1)/Magl) +  (RB(3)/Magr -  rMgcM*RB(3)/Magr) + (RB(4)/Magc - RB(4)/MagiM) + (RB(5)/Magf - rMgcM*RB(5)/Magf); %%% % [gMg/m^2 d] Variation on the reserve 
 %%%%
 
 TexSi = Slf./Sillf + rSic*Sfr/Silf + rSic*(1-ftransR*(rSic<=1))*Sr./Silr  + Swm/Silh + ...
-rSic*RB(1)./Sill + RB(7)./Sillf + RB(2)/Sils  + rSic*RB(3)/Silr + RB(4)/Sili + rSic*RB(5)/Silf  +RB(6)/Silh ; 
+rSicM*RB(1)./Sill + RB(7)./Sillf + RB(2)/Sils  + rSicM*RB(3)/Silr + RB(4)/SiliM + rSicM*RB(5)/Silf  +RB(6)/Silh ; 
 %%%%
-VarResSi =  (RB(1)/Sill - rSic*RB(1)/Sill) +  (RB(3)/Silr -  rSic*RB(3)/Silr) + (RB(4)/Silc - RB(4)/Sili) + (RB(5)/Silf - rSic*RB(5)/Silf); %%% % [gSi/m^2 d] Variation on the reserve 
+VarResSi =  (RB(1)/Sill - rSicM*RB(1)/Sill) +  (RB(3)/Silr -  rSicM*RB(3)/Silr) + (RB(4)/Silc - RB(4)/SiliM) + (RB(5)/Silf - rSicM*RB(5)/Silf); %%% % [gSi/m^2 d] Variation on the reserve 
 %%%%
 
 %%% Parton et all 1988 - Krinner et al 2005  Orwin et al 2011 
@@ -296,15 +316,6 @@ frac_to_metabolic_r(frac_to_metabolic_r<0)=0;
 %%%%%%%%%%%% Managing the reserve issue
 %%ManI=; %%% Management Indicator (0) Nothing (-1) Logging (-2) Harvest (-5) Fire
 %%% No Management
-%%% Partial management retains the legacy VarRes adjustment in surviving
-%%% reserves. Complete removal has no surviving organ reserve, so close the
-%%% organ ledger in Tex before partitioning the independent reserve.
-if ManI == -2
-    TexN=TexN+VarResN; TexP=TexP+VarResP; TexK=TexK+VarResK;
-    TexCa=TexCa+VarResCa; TexMg=TexMg+VarResMg; TexSi=TexSi+VarResSi;
-    VarResN=0; VarResP=0; VarResK=0;
-    VarResCa=0; VarResMg=0; VarResSi=0;
-end
 NreserveM=Nreserve + VarResN;
 PreserveM=Preserve + VarResP;
 KreserveM=Kreserve + VarResK;
@@ -364,31 +375,6 @@ if OPT_SB == 1 %%% Only with soil-biogeochemistry on - otherwise reserves are de
             CareserveM=(1-fract_log)*CareserveM;
             MgreserveM=(1-fract_log)*MgreserveM;
             SireserveM=(1-fract_log)*SireserveM;
-
-        case -2 %%% Harvest
-            AddN = AddN+ fab*NreserveM/dtd;
-            AddP = AddP+ fab*PreserveM/dtd;
-            AddK = AddK+ fab*KreserveM/dtd;
-
-            AddCa = AddCa+ fab*CareserveM/dtd;
-            AddMg = AddMg+ fab*MgreserveM/dtd;
-            AddSi = AddSi+ fab*SireserveM/dtd;
-
-            TexN = TexN  + AddN;
-            TexP = TexP  + AddP;
-            TexK = TexK  + AddK;
-
-            TexCa = TexCa  + AddCa;
-            TexMg = TexMg  + AddMg;
-            TexSi = TexSi  + AddSi;
-
-            NreserveM=(1-fab)*NreserveM;
-            PreserveM=(1-fab)*PreserveM;
-            KreserveM=(1-fab)*KreserveM;
-
-            CareserveM=(1-fab)*CareserveM;
-            MgreserveM=(1-fab)*MgreserveM;
-            SireserveM=(1-fab)*SireserveM;
     end
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -444,9 +430,9 @@ IS_N_sur_lit =  Slf./Nlf  + rNc*Sfr/Nf ; % [gN/m^2 day]
 IS_N_wod_lit =  fab*Swm/Nh ; 
 IS_N_ssr_lit =  rNc*(1-ftransR*(rNc<=1))*Sr./Nr + fbe*Swm/Nh ;  % [gN/m^2 day]
 %%%% Managed 
-IS_N_sur_lit2 =  rNc*(fract_left*RB(1))./Nl + fract_left*RB(7)/Nlf  + rNc*fract_left_fr*RB(5)/Nf + fab*AddN ; % [gN/m^2 day]   
-IS_N_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Ns + RB(4)/Ni + RB(6)/Nh) ; 
-IS_N_ssr_lit2 =  rNc*fract_left_harBG*RB(3)/Nr + fract_left_harBG*fbe*(RB(2)/Ns+ RB(4)/Ni +RB(6)/Nh) +fbe*AddN;  % [gN/m^2 day]
+IS_N_sur_lit2 =  rNcM*(fract_left*RB(1))./Nl + fract_left*RB(7)/Nlf  + rNcM*fract_left_fr*RB(5)/Nf + fab*AddN ; % [gN/m^2 day]   
+IS_N_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Ns + RB(4)/NiM + RB(6)/Nh) ; 
+IS_N_ssr_lit2 =  rNcM*fract_left_harBG*RB(3)/Nr + fract_left_harBG*fbe*(RB(2)/Ns+ RB(4)/NiM +RB(6)/Nh) +fbe*AddN;  % [gN/m^2 day]
 %%%
 %%%%%% Fire_effect on P and K 
 if ManI == -5
@@ -465,44 +451,44 @@ IS_P_sur_lit = Slf./Pholf  + rPc*Sfr/Phof  ; % [gP/m^2 day]
 IS_P_wod_lit = fab*Swm/Phoh ; 
 IS_P_ssr_lit = rPc*(1-ftransR*(rPc<=1))*Sr./Phor + fbe*Swm/Phoh;   % [gP/m^2 day]
 %%%% Managed
-IS_P_sur_lit2 =  rPc*(fract_left*RB(1))./Phol + fract_left*RB(7)/Pholf +  rPc*fract_left_fr*RB(5)/Phof + fab*AddP ;  % [gP/m^2 day] 
-IS_P_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Phos+ RB(4)/Phoi + RB(6)/Phoh); 
-IS_P_ssr_lit2 =  rPc*fract_left_harBG*RB(3)/Phor + fract_left_harBG*fbe*(RB(2)/Phos+ RB(4)/Phoi +RB(6)/Phoh) +fbe*AddP;   % [gP/m^2 day]
+IS_P_sur_lit2 =  rPcM*(fract_left*RB(1))./Phol + fract_left*RB(7)/Pholf +  rPcM*fract_left_fr*RB(5)/Phof + fab*AddP ;  % [gP/m^2 day] 
+IS_P_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Phos+ RB(4)/PhoiM + RB(6)/Phoh); 
+IS_P_ssr_lit2 =  rPcM*fract_left_harBG*RB(3)/Phor + fract_left_harBG*fbe*(RB(2)/Phos+ RB(4)/PhoiM +RB(6)/Phoh) +fbe*AddP;   % [gP/m^2 day]
 %%%% Potassium Inputs 
 IS_K_sur_lit =  Slf./Kpotlf  + rKc*Sfr/Kpotf ; % [gK/m^2 day]
 IS_K_wod_lit = fab*Swm/Kpoth ; 
 IS_K_ssr_lit = rKc*(1-ftransR*(rKc<=1))*Sr./Kpotr + fbe*Swm/Kpoth;   % [gK/m^2 day]
 %%%%% Managed 
-IS_K_sur_lit2 =  rKc*(fract_left*RB(1))./Kpotl + fract_left*RB(7)/Kpotlf + rKc*fract_left_fr*RB(5)/Kpotf +  fab*AddK;  % [gK/m^2 day]
-IS_K_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Kpots + RB(4)/Kpoti + RB(6)/Kpoth); 
-IS_K_ssr_lit2 =  rKc*fract_left_harBG*RB(3)/Kpotr + fract_left_harBG*fbe*(RB(2)/Kpots+ RB(4)/Kpoti +RB(6)/Kpoth) +fbe*AddK;   % [gK/m^2 day]
+IS_K_sur_lit2 =  rKcM*(fract_left*RB(1))./Kpotl + fract_left*RB(7)/Kpotlf + rKcM*fract_left_fr*RB(5)/Kpotf +  fab*AddK;  % [gK/m^2 day]
+IS_K_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Kpots + RB(4)/KpotiM + RB(6)/Kpoth); 
+IS_K_ssr_lit2 =  rKcM*fract_left_harBG*RB(3)/Kpotr + fract_left_harBG*fbe*(RB(2)/Kpots+ RB(4)/KpotiM +RB(6)/Kpoth) +fbe*AddK;   % [gK/m^2 day]
 
 %%%% Calcium Inputs 
 IS_Ca_sur_lit =  Slf./Callf  + rCac*Sfr/Calf ; % [gCa/m^2 day]
 IS_Ca_wod_lit = fab*Swm/Calh ; 
 IS_Ca_ssr_lit = rCac*(1-ftransR*(rCac<=1))*Sr./Calr + fbe*Swm/Calh;   % [gCa/m^2 day]
 %%%%% Managed 
-IS_Ca_sur_lit2 =  rCac*(fract_left*RB(1))./Call + fract_left*RB(7)/Callf + rCac*fract_left_fr*RB(5)/Calf +  fab*AddCa;  % [gCa/m^2 day]
-IS_Ca_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Cals + RB(4)/Cali + RB(6)/Calh); 
-IS_Ca_ssr_lit2 =  rCac*fract_left_harBG*RB(3)/Calr + fract_left_harBG*fbe*(RB(2)/Cals+ RB(4)/Cali +RB(6)/Calh) +fbe*AddCa;   % [gCa/m^2 day]
+IS_Ca_sur_lit2 =  rCacM*(fract_left*RB(1))./Call + fract_left*RB(7)/Callf + rCacM*fract_left_fr*RB(5)/Calf +  fab*AddCa;  % [gCa/m^2 day]
+IS_Ca_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Cals + RB(4)/CaliM + RB(6)/Calh); 
+IS_Ca_ssr_lit2 =  rCacM*fract_left_harBG*RB(3)/Calr + fract_left_harBG*fbe*(RB(2)/Cals+ RB(4)/CaliM +RB(6)/Calh) +fbe*AddCa;   % [gCa/m^2 day]
 
 %%%% Magnesium Inputs 
 IS_Mg_sur_lit =  Slf./Maglf  + rMgc*Sfr/Magf ; % [gMg/m^2 day]
 IS_Mg_wod_lit = fab*Swm/Magh ; 
 IS_Mg_ssr_lit = rMgc*(1-ftransR*(rMgc<=1))*Sr./Magr + fbe*Swm/Magh;   % [gMg/m^2 day]
 %%%%% Managed 
-IS_Mg_sur_lit2 =  rMgc*(fract_left*RB(1))./Magl + fract_left*RB(7)/Maglf + rMgc*fract_left_fr*RB(5)/Magf +  fab*AddMg;  % [gMg/m^2 day]
-IS_Mg_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Mags + RB(4)/Magi + RB(6)/Magh); 
-IS_Mg_ssr_lit2 =  rMgc*fract_left_harBG*RB(3)/Magr + fract_left_harBG*fbe*(RB(2)/Mags+ RB(4)/Magi +RB(6)/Magh) +fbe*AddMg;   % [gMg/m^2 day]
+IS_Mg_sur_lit2 =  rMgcM*(fract_left*RB(1))./Magl + fract_left*RB(7)/Maglf + rMgcM*fract_left_fr*RB(5)/Magf +  fab*AddMg;  % [gMg/m^2 day]
+IS_Mg_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Mags + RB(4)/MagiM + RB(6)/Magh); 
+IS_Mg_ssr_lit2 =  rMgcM*fract_left_harBG*RB(3)/Magr + fract_left_harBG*fbe*(RB(2)/Mags+ RB(4)/MagiM +RB(6)/Magh) +fbe*AddMg;   % [gMg/m^2 day]
 
 %%%% Silicon Inputs 
 IS_Si_sur_lit =  Slf./Sillf  + rSic*Sfr/Silf ; % [gSi/m^2 day]
 IS_Si_wod_lit = fab*Swm/Silh ; 
 IS_Si_ssr_lit = rSic*(1-ftransR*(rSic<=1))*Sr./Silr + fbe*Swm/Silh;   % [gSi/m^2 day]
 %%%%% Managed 
-IS_Si_sur_lit2 =  rSic*(fract_left*RB(1))./Sill + fract_left*RB(7)/Sillf + rSic*fract_left_fr*RB(5)/Silf +  fab*AddSi;  % [gSi/m^2 day]
-IS_Si_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Sils + RB(4)/Sili + RB(6)/Silh); 
-IS_Si_ssr_lit2 =  rSic*fract_left_harBG*RB(3)/Silr + fract_left_harBG*fbe*(RB(2)/Sils+ RB(4)/Sili +RB(6)/Silh) +fbe*AddSi;   % [gSi/m^2 day]
+IS_Si_sur_lit2 =  rSicM*(fract_left*RB(1))./Sill + fract_left*RB(7)/Sillf + rSicM*fract_left_fr*RB(5)/Silf +  fab*AddSi;  % [gSi/m^2 day]
+IS_Si_wod_lit2 =  fract_left_harAB*fab*(RB(2)/Sils + RB(4)/SiliM + RB(6)/Silh); 
+IS_Si_ssr_lit2 =  rSicM*fract_left_harBG*RB(3)/Silr + fract_left_harBG*fbe*(RB(2)/Sils+ RB(4)/SiliM +RB(6)/Silh) +fbe*AddSi;   % [gSi/m^2 day]
 
 
 
