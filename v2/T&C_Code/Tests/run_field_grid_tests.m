@@ -13,4 +13,8 @@ test_cell_agronomic_inputs;
 test_field_spinup_states;
 test_field_cell_spinup_dry_run;
 test_automatic_spinup_port;
+test_lateral_flux_tracking;
+test_rf_reconstruction_paths;
+test_field_spinup_cluster_modes;
+test_spinup_handoff_only;
 end

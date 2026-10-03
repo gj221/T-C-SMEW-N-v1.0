@@ -2,10 +2,12 @@ function out = Run_RF_Validation_Experiment(shape_file, agronomic_file, varargin
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Run_RF_Validation_Experiment
 %%
-%% Score the random-forest spin-up path against the truth it is meant to
-%% replace.  The truth is a full automatic spin-up of EVERY cell of the
-%% polygon (Run_Field_Cell_Spinup, Method per_cell, assembled), which a
-%% cluster array makes affordable.  Three questions, three tables:
+%% Score the random forest of the flux-tracking field spin-up against the
+%% truth it stands in for.  The truth is a spin-up of EVERY cell of the
+%% polygon, assembled: the flux-tracking spin-up with SubsampleFraction 1
+%% (every cell tracked and replayed; Run_Field_Cell_Spinup), or Method
+%% per_cell for the 1-D reference -- a cluster array makes either
+%% affordable.  Three questions, three tables:
 %%
 %%   1  RF regression.  For each subsample fraction and seed: draw the
 %%      topographically stratified subsample, train the forest on the
@@ -21,21 +23,24 @@ function out = Run_RF_Validation_Experiment(shape_file, agronomic_file, varargin
 %%      installs, against the targets (cmolc kg-1).  The spin-up's own
 %%      T&C exchange pools B(61/69/53) are not scored: that step
 %%      re-initialises them from the seed.
-%%   3  RF path (optional).  If a directory of cellstate_<id>.mat files
-%%      from an RF-path run (Method rf, cell array) is given, every
-%%      RF-reconstructed cell's conserved totals and exchangeable pools
-%%      against its own truth, with the handoff-gate result and method.
+%%   3  Reconstructed run (optional).  If a directory of
+%%      cellstate_<id>.mat files from a flux-tracking run at a production
+%%      fraction is given, every cell's conserved totals and exchangeable
+%%      pools against its own truth, with the handoff-gate result and how
+%%      the cell was obtained (replay, rf, fallback).
 %%
 %% Name/value
 %%   'FieldFeatureIndices','FieldPolygonIndex','GridCellSizeM','MinCoverage'
 %%                        as Run_Field_Cell_Spinup
 %%   'FieldDEM'           required (the forest's covariates)
 %%   'CaseNumber'         workbook case (default 5)
-%%   'TruthStateFile'     assembled CellBGStates.mat of the per-cell truth
+%%   'TruthStateFile'     assembled CellBGStates.mat of the truth (every
+%%                        cell replayed, or per_cell)
 %%   'Fractions'          subsample fractions (default [0.10 0.15 0.20 0.30])
 %%   'Seeds'              subsample / forest seeds (default 1:5)
 %%   'KFold'              forest cross-validation folds (default 5)
-%%   'RFStatesDirectory'  cellstate files of an RF-path run (optional)
+%%   'RFStatesDirectory'  cellstate files of a flux-tracking run at a
+%%                        production fraction (optional)
 %%   'OutputDirectory'    where the CSVs and figure go (default: the
 %%                        truth file's directory)
 %%   'MODParamColumns'    provenance only (recorded)
@@ -230,7 +235,7 @@ for t = 1:numel(target_names)
 end
 yline(ax,10,'--','Lian et al. 10 %','LabelHorizontalAlignment','left');
 xlabel(ax,'subsample fraction [%]'); ylabel(ax,'held-out relative error [%]');
-title(ax,sprintf('%s: RF reconstruction against %d full spin-ups (mean +/- std over %d seeds)', ...
+title(ax,sprintf('%s: RF reconstruction against %d spun-up cells (mean +/- std over %d seeds)', ...
     stem,N,numel(opt.Seeds)),'Interpreter','none');
 legend(ax,'Location','northeastoutside'); grid(ax,'on');
 files.figure = fullfile(opt.OutputDirectory,sprintf('RF_Validation_%s.png',stem));

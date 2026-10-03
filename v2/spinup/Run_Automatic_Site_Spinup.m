@@ -345,35 +345,10 @@ if use_daily_meteo
         [spinup_all_met, spinup_met_info] = Load_Spinup_Meteo(daily_meteo_path, ...
             spinup_start, spinup_end, Lat, Lon, DeltaGMT);
         [spinup_all_yr, ~, ~] = datevec(spinup_all_met.Date);
-        spinup_avail_years = unique(spinup_all_yr)';
-        if isempty(spinup_avail_years)
-            error('TC_SMEW_N_run:SpinupYears', 'Spin-up forcing contains no meteorological years.');
-        end
-        spinup_cycle_years = spinup_avail_years;
-        handoff_start_dn = NaN;
-        handoff_end_dn = NaN;
-        if ~isnan(transient_start) && isfinite(transient_start)
-            tmp = datevec(transient_start - 1/24);
-            transient_year = tmp(1);
-            clear tmp
-            if ismember(transient_year, spinup_avail_years)
-                spinup_cycle_years = spinup_avail_years(spinup_avail_years < transient_year);
-                handoff_start_dn = datenum(transient_year, 1, 1);
-                handoff_end_dn = transient_start;
-                if isempty(spinup_cycle_years)
-                    error('TC_SMEW_N_run:SpinupHandoff', ...
-                        'No complete spin-up years are available before transient year %d.', transient_year);
-                end
-            else
-                warning('TC_SMEW_N_run:SpinupHandoff', ...
-                    'Transient year %d is outside spin-up range [%d-%d]; stopping on convergence alone.', ...
-                    transient_year, spinup_avail_years(1), spinup_avail_years(end));
-            end
-        end
-        if any(diff(spinup_cycle_years) ~= 1)
-            error('TC_SMEW_N_run:SpinupYears', 'Spin-up cycle years must be contiguous complete years.');
-        end
-        Validate_Spinup_Cycle_Years(spinup_all_met.Date, spinup_cycle_years);
+        %% The ring and the extension, defined once with the field
+        %% spin-up's tracking run (Run_Field_Lateral_Tracking).
+        [spinup_cycle_years, handoff_start_dn, handoff_end_dn, spinup_avail_years] = ...
+            Spinup_Cycle_Years(spinup_all_met.Date, transient_start);
         n_spinup_years = numel(spinup_cycle_years);
         fprintf('Spin-up forcing: %d complete cycle years (%d-%d), repeated until convergence\n', ...
             numel(spinup_cycle_years), spinup_cycle_years(1), spinup_cycle_years(end));

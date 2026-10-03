@@ -179,6 +179,33 @@ end
 function [R, rel_R, warnings] = charge_diagnostic(E, C, warnings)
 R = NaN;
 rel_R = NaN;
+%%% The balance is taken over the species the state was solved with.  v0.9
+%%% speciates the pore water with activity-conditioned constants and retains
+%%% every charged species (ERW_MOD_PARAM_excel, ERW_function); re-speciating
+%%% Al with the thermodynamic K1..K4 of ERW_const against the retained Al3+
+%%% would report the activity correction itself as an imbalance (0.69
+%%% umolc/L on a Kantola-pool Bruce Farm cell whose species close to 2e-12).
+%%% A state that does not retain them is re-speciated as before.
+held = ["H", "Ca", "Mg", "Na", "K", "NH4", "Al", "AlOH", "AlOH2", "AlOH4", ...
+    "k_w", "HCO3", "CO3", "NO3", "PO4", "An"];
+if has_fields(E, held) && has_fields(C, "Al_CEC_scale")
+    Al_scale = first_field(C, 'Al_CEC_scale');
+    H = first_field(E, 'H');
+    cations = H + 2*first_field(E, 'Ca') + 2*first_field(E, 'Mg') + ...
+        first_field(E, 'Na') + first_field(E, 'K') + first_field(E, 'NH4') + ...
+        (3*first_field(E, 'Al') + 2*first_field(E, 'AlOH') + ...
+        first_field(E, 'AlOH2'))/Al_scale;
+    anions = first_field(E, 'k_w')/H + first_field(E, 'HCO3') + ...
+        2*first_field(E, 'CO3') + first_field(E, 'NO3') + ...
+        first_field(E, 'PO4') + first_field(E, 'An') + ...
+        first_field(E, 'AlOH4')/Al_scale;
+    R = cations - anions;
+    rel_R = abs(R) / max(abs(cations) + abs(anions), eps);
+    if abs(R) > 1e-6 && rel_R > 1e-8
+        warnings = add_warning(warnings, sprintf('charge residual %.3g umolc/L exceeds tolerance', R));
+    end
+    return
+end
 req_e = ["H", "CO2_w", "Ca", "Mg", "Na", "K", "NH4", "An", "NO3", "PO4", ...
     "Al_w", "Al", "k1", "k2", "k_w", "k_nh3"];
 req_c = ["K1", "K2", "K3", "K4", "Al_CEC_scale"];

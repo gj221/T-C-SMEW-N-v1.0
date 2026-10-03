@@ -1,26 +1,45 @@
 # Field spin-up on Bouchet
 
-The automatic spin-up costs about 48 s per forcing year in its T&C-only
-Phase 1, about 6 min in the stand-alone Phase 2, and about 1 min per
-coupled year in the ERW-free Phase 3, whose convergence test runs over
-complete rings of cycle years (measured on one Control 2 cell, this
-workstation). A cell is a job of hours, and a field is a SLURM array of
-them. Everything here runs one cell per array task and reuses finished
-cells, so a preempted or resubmitted array picks up where it stopped.
+The field spin-up is the flux-tracking spin-up of T&C-BG-2D (Lian et al.
+2025, *WRR*, section 2.3), adapted for ERW; the main README, *Flux-tracking
+field spin-up*, describes the method. It has four kinds of work:
+
+- **class seeds** and **replays** are plot-scale spin-ups: about 48 s per
+  forcing year in the T&C-only Phase 1, a few minutes in the stand-alone
+  Phase 2 and about 1-2 min per coupled, ERW-free Phase-3 year, whose
+  convergence test runs over complete rings of cycle years (one Control 2
+  cell, this workstation). One is a job of hours.
+- the **tracking run** is the whole field in 2-D for the ring and its
+  handoff extension (ERW off): about one ERW-free column-year per cell
+  per segment, so ~1 h per segment on the 54-cell diagnostic grid and
+  about a day per segment on the 1461-cell production grid.
+- a **reconstruction** is the forest's prediction plus the cell's ERW
+  handoff gate: minutes.
+
+Everything is resumable: finished class seeds, segments, replays and
+reconstructions are reused under their provenance keys, and a running
+plot-scale spin-up or tracking segment resumes its own checkpoints.
 
 ## What runs
 
 | step | script | what it does |
 |---|---|---|
-| plan | `field_spinup_step.sbatch` (`TC_TASK=plan`) | `Run_Field_Cell_Spinup(...,'PlanOnly')`: `spinup_plan.csv` and the array-index lists |
-| cells | `field_spinup_cell.sbatch` (array) | one cell per task: a full spin-up (`per_cell`, or an RF subsample cell), or the RF-seeded spin-up (`rf`, after the subsample array) |
+| plan | `field_spinup_step.sbatch` (`TC_TASK=plan`) | `spinup_plan.csv`, the classes and the tracked subsample, and the array-index lists |
+| class seeds | `field_spinup_cell.sbatch` (`TC_TASK=class_seed`, array over classes) | one plot-scale spin-up per land cover x soil class, on its most typical cell |
+| tracking | `field_spinup_track.sbatch` | the 2-D field run from the class seeds, recording the tracked cells' lateral exchange (`track/record_<id>.mat`, `track/ringend_<id>.mat`, `track/handoff_states.mat`) |
+| replays | `field_spinup_cell.sbatch` (`TC_TASK=replay`, array over tracked cells) | each tracked cell's spin-up replaying its record |
+| reconstruction | `field_spinup_cell.sbatch` (`TC_TASK=reconstruct`, array over the other cells) | the forest over the replayed cells, then the cell's own ERW handoff |
 | assemble | `field_spinup_step.sbatch` (`TC_TASK=assemble`) | gathers `cellstate_<id>.mat` into the validated `CellBGStates.mat` the transient run reads |
-| validate | `field_spinup_step.sbatch` (`TC_TASK=validate`) | `Run_RF_Validation_Experiment` on the assembled truth |
+| validate | `field_spinup_step.sbatch` (`TC_TASK=validate`) | `Run_RF_Validation_Experiment` on an assembled truth |
 
-`submit_field_spinup.sh` chains them with SLURM dependencies. All
-settings are environment variables in `field_spinup.env` (copy and edit
-`field_spinup.env.example`); `Cluster_Field_Spinup_Task.m` is the only
-MATLAB entry point.
+`submit_field_spinup.sh` chains them with SLURM dependencies (with
+`TC_METHOD=per_cell`: plan, one array of every cell's own spin-up,
+assemble). All settings are environment variables in `field_spinup.env`
+(copy and edit `field_spinup.env.example`); `Cluster_Field_Spinup_Task.m`
+is the only MATLAB entry point. The tracking job may need more than one
+day on a large grid: the submitter queues `TC_TRACK_JOBS` copies (default
+3), each starting after the previous one ends; a copy continues where the
+last stopped, and one that finds the run complete exits at once.
 
 ## Getting the repository and inputs onto the cluster
 
@@ -36,7 +55,7 @@ or Globus:
    hundred MB.
 2. Put results on scratch (`~/scratch_pi_<netid>`, purged after 30
    days) and copy `CellBGStates.mat` and the CSVs back to project when
-   an array finishes.
+   a run finishes.
 3. The per-cell agronomic CSV is produced locally (templates, kriging,
    gated merge; see the main README, *Parameterizing grid cells*) and
    uploaded with the repository. The Control 2 diagnostic file is
@@ -49,56 +68,57 @@ cd ~/project_pi_<netid>/TC-SMEW-N/v2/cluster
 cp field_spinup.env.example field_spinup.env    # edit paths, method, grid
 bash submit_field_spinup.sh
 squeue -u $USER                                  # progress
-tail logs/spinup_cell_<jobid>_<task>.out         # one cell's log
+tail logs/spinup_tc_spinup_cell_<jobid>_<task>.out   # one task's log
 ```
 
-The array uses the `day` partition with a one-day limit per task and
-8 GB, which is ample: the DEM loader crops each 1 m lidar tile to the
-field window as it reads it, so a task holds one tile (about 0.8 GB)
-at its peak, not the six tiles that cover the farm. If a task is
-preempted or times out, resubmit the same array: a finished cell is
-reused, and a cell in progress resumes its own phase checkpoints. Both
-are recognised by a provenance key (`Spinup_Provenance`: the cell, its
-soil inputs, the workbook case, the MOD and ERW rows with their forcing,
-meteo and transient windows, and the seed), so a changed input or
-environment starts that cell afresh instead of resuming a stale run. A
-finished state also records the instant it hands off at, and the field
-transient (`Run_One_Subfield`) refuses a state for any other start.
-The scripts load `${MATLAB_MODULE:-MATLAB/2025a}` and run on
-`cpumodel:9575f` nodes, the platform of the v0.9 campaigns in
-`runtime/`, so a state is produced where the transient will run it.
-The code needs the Statistics and Machine Learning Toolbox
-(`TreeBagger`, `pdist2`) and the Mapping Toolbox (`readgeoraster`,
-`projcrs`) -- check `ver` once on a compute node.
+The plot-scale arrays use the `day` partition with a one-day limit per
+task and 8 GB; the DEM loader crops each 1 m lidar tile to the field
+window as it reads it, so a task holds one tile (about 0.8 GB) at its
+peak. The tracking job holds every column's hourly state for one
+segment; 64 GB is ample for the diagnostic grid, and the production grid
+needs a large-memory node (raise `--mem` in `field_spinup_track.sbatch`).
+If a task is preempted or times out, resubmit the same step: finished
+work is recognised by a provenance key (`Spinup_Provenance`: the cell,
+its soil inputs, the workbook case, the MOD and ERW rows with their
+forcing, meteo and transient windows, and what the run starts from --
+cold, or the lateral record and tracking run it replays), so a changed
+input starts that work afresh instead of resuming a stale run. A finished
+state also records the instant it hands off at, and the field transient
+(`Run_One_Subfield`) refuses a state for any other start. The scripts load
+`${MATLAB_MODULE:-MATLAB/2025a}` and run on `cpumodel:9575f` nodes, the
+platform of the v0.9 campaigns in `runtime/`, so a state is produced
+where the transient will run it. The code needs the Statistics and
+Machine Learning Toolbox (`TreeBagger`, `pdist2`) and the Mapping Toolbox
+(`readgeoraster`, `projcrs`) -- check `ver` once on a compute node.
 
 ## The robust test
 
-The random-forest path exists so that a field of N cells needs only a
-topographically stratified subsample of full spin-ups. Its
-justification is empirical, and the cluster makes the experiment that
-justifies it affordable:
+The forest exists so that only a subsample of the field's cells needs a
+replay. Its justification is empirical, and the cluster makes the
+experiment affordable:
 
-1. `TC_METHOD=per_cell` on the diagnostic grid (54 cells at 15 m): every
-   cell spun up in full, in parallel. That is the truth.
-2. `validate` (automatic after assembly): for subsample fractions
-   0.10-0.30 and five seeds, draw the stratified subsample from the
-   truth, train the forest on it, and report the held-out relative
-   error of every conserved total against Lian et al.'s 10 % target,
-   beside the forest's own k-fold estimate; check the exchangeable
-   Ca/Mg/K at handoff against the measured base saturation on the
-   cells that carried it. `RF_Validation_<polygon>.csv/.png`,
+1. `TC_SUBSAMPLE=1` on the diagnostic grid (54 cells at 15 m): every
+   cell tracked and replayed. That is the truth.
+2. `validate` (`TC_VALIDATE=1`): for subsample fractions 0.10-0.30 and
+   five seeds, draw the stratified subsample from the truth, train the
+   forest on it, and report the held-out relative error of every
+   conserved total against Lian et al.'s 10 % target, beside the forest's
+   own k-fold estimate and its skill against the training mean and the
+   nearest tracked cell; check the exchangeable Ca/Mg/K of the handoff
+   seed against the measured base saturation on the cells that carried
+   it. `RF_Validation_<polygon>.csv/.png`,
    `Base_Saturation_Attainment_<polygon>.csv`.
-3. A second run with `TC_METHOD=rf` into another output directory, then
-   `validate` with `TC_RF_STATES_DIR` pointing at it: every RF-seeded
-   cell's conserved totals, exchangeable pools and handoff-gate result
-   against its own truth (`RF_Path_vs_Truth_<polygon>.csv`).
+3. A second run at the production fraction (`TC_SUBSAMPLE=0.10`) into
+   another output directory, then `validate` with `TC_RF_STATES_DIR`
+   pointing at it: every forest-reconstructed cell's conserved totals and
+   handoff-gate result against its own replayed truth
+   (`RF_Path_vs_Truth_<polygon>.csv`).
 
-That tells you, per fraction, how much of the field's variance the
-forest recovers and whether the seeded spin-up lands where the full one
-does -- the two numbers the production grid (1461 cells at 2.33 m on
-Control 2) needs before its subsample size is chosen. The production
-grid runs through the same scripts by dropping `TC_CELL_M` and
-`TC_MIN_COVERAGE`.
+`TC_METHOD=per_cell` on the same grid gives the 1-D reference without
+lateral exchange; the difference between it and the truth of step 1 is
+the lateral redistribution the field imposes on the pools. The
+production grid (1461 cells at 2.33 m on Control 2) runs through the same
+scripts by dropping `TC_CELL_M` and `TC_MIN_COVERAGE`.
 
 ## Caveats carried from the workstation
 
@@ -108,6 +128,12 @@ grid runs through the same scripts by dropping `TC_CELL_M` and
 - Base saturation reaches the ERW exchanger through the per-cell
   `f_CEC_in` seed (main README, *Base saturation*); Na and Al exchange
   start at zero.
-- Phase 3 is ERW-free (the v0.9 driver gates its chemistry on
-  `OPT_ERW`); the ERW seed is built and checked once, from the first two
-  forcing days of the transient window, by the final handoff diagnostic.
+- Every spin-up stage is ERW-free (the v0.9 driver gates its chemistry on
+  `OPT_ERW`); each cell's ERW seed is built and checked once, from the
+  first two forcing days of the transient window, by its final handoff
+  diagnostic.
+- The 2-D driver steps its columns one after another every hour; the
+  tracking run's wall time is therefore proportional to the cell count.
+  Running the hourly column loop on parallel workers would divide it by
+  the worker count and is the obvious next speed-up for the production
+  grid (it would serve the field transient too).

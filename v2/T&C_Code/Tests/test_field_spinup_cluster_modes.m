@@ -2,15 +2,20 @@ function test_field_spinup_cluster_modes()
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test_field_spinup_cluster_modes
 %%
-%% The cell-parallel modes of Run_Field_Cell_Spinup and the validation
+%% The cluster stages of Run_Field_Cell_Spinup and the validation
 %% experiment, without spinning anything up:
-%%   1  PlanOnly writes one plan row per cell and SLURM array-index lists
-%%   2  CellIndex is validated before any work
+%%   1  the per_cell plan writes one plan row per cell and the array list;
+%%      the flux_tracking plan also writes the classes, the tracked
+%%      subsample and the forest's remainder, each cell exactly once
+%%   2  CellIndex is validated before any work, and every flux_tracking
+%%      stage refuses to start before the stage it needs (class seeds,
+%%      tracking records, replays) and refuses an untracked cell's replay;
+%%      the superseded Method rf is refused by name
 %%   3  AssembleOnly refuses a missing or mis-labelled cell state and
 %%      assembles a complete set into the file the transient loader reads
 %%   4  Run_RF_Validation_Experiment scores a forest against fabricated
 %%      truth states across fractions and seeds, reports base-saturation
-%%      attainment on the measured cells, and scores an RF-path directory
+%%      attainment on the measured cells, and scores a reconstructed run
 %% Uses the Control 2 diagnostic grid (15 m, 50 % coverage rule) and the
 %% real DEM tiles for the forest's covariates.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -61,7 +66,7 @@ agro = fullfile(tmp,'agronomic.csv'); writetable(T,agro);
 outdir = fullfile(tmp,'truth'); mkdir(outdir);
 state_file = fullfile(outdir,'CellBGStates.mat');
 common = {'FieldFeatureIndices',feats,'FieldPolygonIndex',poly,'GridCellSizeM',h, ...
-    'MinCoverage',cov,'OutputFile',state_file};
+    'MinCoverage',cov,'OutputFile',state_file,'Method','per_cell'};
 
 %% --- 1. plan ------------------------------------------------------------
 plan_file = Run_Field_Cell_Spinup(shp,agro,common{:},'PlanOnly',true);
@@ -70,13 +75,47 @@ check('plan has one row per cell with the cell ids in grid order', ...
     height(plan) == N && isequal(plan.cell_id,topo.cell_id(:)) && all(plan.method == "full"));
 all_idx = strtrim(fileread(fullfile(outdir,'array_indices_all.txt')));
 check('the all-cells array list is the SLURM range 1-N', strcmp(all_idx,sprintf('1-%d',N)));
-sub_idx = strtrim(fileread(fullfile(outdir,'array_indices_subsample.txt')));
-check('per_cell plans no subsample', isempty(sub_idx));
+check('per_cell plans no tracked subsample', ...
+    ~isfile(fullfile(outdir,'array_indices_tracked.txt')));
+ftdir = fullfile(tmp,'flux'); mkdir(ftdir);
+ft = {'FieldFeatureIndices',feats,'FieldPolygonIndex',poly,'GridCellSizeM',h, ...
+    'MinCoverage',cov,'OutputFile',fullfile(ftdir,'CellBGStates.mat'), ...
+    'FieldDEM',dem,'RFOptions',{'KFold',3}};
+ft_plan = readtable(Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','plan'),'TextType','string');
+ft_plan.is_tracked = logical(ft_plan.is_tracked);       % the CSV holds 0/1
+ft_plan.is_class_seed = logical(ft_plan.is_class_seed);
+tracked_list = str2num(strrep(strtrim(fileread(fullfile(ftdir,'array_indices_tracked.txt'))),'-',':')); %#ok<ST2NM>
+rf_list = strtrim(fileread(fullfile(ftdir,'array_indices_rf.txt')));
+check('flux_tracking plans one class, a tracked subsample and the forest''s remainder', ...
+    height(ft_plan) == N && all(ft_plan.class_index == 1) && nnz(ft_plan.is_class_seed) == 1 && ...
+    all(ft_plan.method(ft_plan.is_tracked) == "replay") && ...
+    all(ft_plan.method(~ft_plan.is_tracked) == "rf") && ...
+    strcmp(strtrim(fileread(fullfile(ftdir,'array_indices_classes.txt'))),'1-1') && ...
+    ~isempty(rf_list) && isequal(sort(tracked_list(:)),find(ft_plan.is_tracked)));
 
 %% --- 2. CellIndex validation ----------------------------------------------
 check('CellIndex outside 1..N is refused before any work', ...
     raises(@() Run_Field_Cell_Spinup(shp,agro,common{:},'CellIndex',N+1), ...
     'Run_Field_Cell_Spinup:BadCellIndex'));
+check('the superseded Method rf is refused by name', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,common{:},'Method','rf'), ...
+    'Run_Field_Cell_Spinup:BadMethod'));
+first_tracked = find(ft_plan.is_tracked,1); first_rf = find(~ft_plan.is_tracked,1);
+check('the tracking stage waits for the class seeds', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','track'), ...
+    'Run_Field_Cell_Spinup:ClassSeedNotReady'));
+check('a replay waits for the tracking records', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','replay','CellIndex',first_tracked), ...
+    'Run_Field_Cell_Spinup:TrackingNotReady'));
+check('an untracked cell has no replay', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','replay','CellIndex',first_rf), ...
+    'Run_Field_Cell_Spinup:NotTracked'));
+check('a reconstruction waits for the replays', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','reconstruct','CellIndex',first_rf), ...
+    'Run_Field_Cell_Spinup:ReplayNotReady'));
+check('a class index outside the classes is refused', ...
+    raises(@() Run_Field_Cell_Spinup(shp,agro,ft{:},'Stage','class_seed','ClassIndex',2), ...
+    'Run_Field_Cell_Spinup:BadClassIndex'));
 
 %% --- 3. assembly ----------------------------------------------------------
 [~,CellInputs] = Run_Field_Cell_Spinup(shp,agro,common{:},'DryRun',true);
@@ -132,7 +171,7 @@ check('the transient loader accepts the assembled file', numel(states) == N);
 
 %% --- 4. validation experiment ----------------------------------------------
 rfdir = fullfile(tmp,'rf'); mkdir(rfdir);
-for c = 1:5; write_cellstate(rfdir,c,"rf_seed"); end
+for c = 1:5; write_cellstate(rfdir,c,"rf"); end
 val = Run_RF_Validation_Experiment(shp,agro,'FieldFeatureIndices',feats, ...
     'FieldPolygonIndex',poly,'GridCellSizeM',h,'MinCoverage',cov,'FieldDEM',dem, ...
     'TruthStateFile',out_file,'Fractions',[0.3 0.5],'Seeds',[1 2],'KFold',3, ...

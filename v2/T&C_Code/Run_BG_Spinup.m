@@ -12,6 +12,15 @@
 %            One final cycle with OPT_pH forced on for ERW charge-balance check.
 %
 %   Checkpoint files allow automatic resume at any phase boundary.
+%
+%   Field spin-up (Lian et al. 2025 flux tracking, Run_Field_Cell_Spinup):
+%     LATERAL_REPLAY_FILE  a tracked cell replays, in every phase, the
+%                          lateral exchange recorded for it in the 2-D field
+%                          run (water in Phases 1 and 3, the mean daily
+%                          solute map in Phase 2, both in Phase 3 and the
+%                          handoff extension), with its terrain radiation.
+%     SPINUP_HANDOFF_ONLY  a reconstructed state (random forest) runs only
+%                          the observation constraint and the ERW handoff.
 % =========================================================================
 
 %% Checkpoint file names
@@ -28,6 +37,41 @@ spinup_provenance = '';
 if exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
         isfield(RUN_SETTINGS,'SPINUP_PROVENANCE')
     spinup_provenance = char(string(RUN_SETTINGS.SPINUP_PROVENANCE));
+end
+%%% A tracked cell's lateral record (Run_Field_Lateral_Tracking).  The 1-D
+%%% driver replays it through Lateral_Replay_*; without one nothing changes.
+LATERAL_REPLAY = struct([]);
+if exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
+        isfield(RUN_SETTINGS,'LATERAL_REPLAY_FILE') && ...
+        strlength(strtrim(string(RUN_SETTINGS.LATERAL_REPLAY_FILE))) > 0
+    lateral_record_file = char(string(RUN_SETTINGS.LATERAL_REPLAY_FILE));
+    tmp = load(lateral_record_file,'record');
+    if ~isfield(tmp,'record') || ~isstruct(tmp.record) || ~isscalar(tmp.record)
+        error('Run_BG_Spinup:BadLateralRecord','%s holds no lateral record.', ...
+            lateral_record_file);
+    end
+    LATERAL_REPLAY = tmp.record;
+    fprintf('Lateral replay: %s (%d steps, %d days)\n',lateral_record_file, ...
+        numel(LATERAL_REPLAY.hour_dn),numel(LATERAL_REPLAY.day_dn));
+    clear tmp lateral_record_file
+end
+lateral_replay_spinup = ~isempty(fieldnames(LATERAL_REPLAY));
+%%% The handoff alone: the state handed in (SPINUP_SEED_FILE) already stands
+%%% at the transient start -- the random-forest reconstruction of a cell the
+%%% flux-tracking spin-up did not replay -- so only the observation
+%%% constraint and the ERW charge-balance handoff run, under the cell's own
+%%% inputs, and the state keeps the convergence record of its template.
+spinup_handoff_only = exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
+    isfield(RUN_SETTINGS,'SPINUP_HANDOFF_ONLY') && ...
+    logical(RUN_SETTINGS.SPINUP_HANDOFF_ONLY);
+if spinup_handoff_only && ~(exist('bg_state','var') && isstruct(bg_state) && ...
+        isfield(bg_state,'B_out'))
+    error('Run_BG_Spinup:HandoffOnlyNeedsState', ...
+        'SPINUP_HANDOFF_ONLY needs the state to hand off (SPINUP_SEED_FILE).');
+end
+if spinup_handoff_only && lateral_replay_spinup
+    error('Run_BG_Spinup:HandoffOnlyReplay', ...
+        'A handoff-only state has no lateral replay to run.');
 end
 %%% Convergence is one drift limit stated per complete meteorological ring.
 %%% Each phase applies it over its own step: Phase 3 advances a whole ring and
@@ -147,12 +191,19 @@ if p3_done
         p3_resume_state = struct();
     end
 end
+if spinup_handoff_only
+    p1_done = false; p2_done = false; p3_done = false;
+end
 
 %% =========================================================================
 %% Phase 1: T&C-only run; extract annual-average fluxes
 %% =========================================================================
-if ~p1_done && ~p2_done && ~p3_done
+if ~spinup_handoff_only && ~p1_done && ~p2_done && ~p3_done
     fprintf('\n=== Phase 1: T&C-only run (%d years) ===\n', n_spinup_years);
+    %%% Every Phase-1 year lies in a tracked cell's record.
+    if lateral_replay_spinup
+        LATERAL_REPLAY(1).required = true;
+    end
 
     p1_n          = 0;
     p1_Ta_acc     = 0;
@@ -393,7 +444,7 @@ if ~p1_done && ~p2_done && ~p3_done
 end
 
 %% Load p1_avgs if Phase 2 still needs them
-need_p1_avgs = ~p2_done && ~p3_done;
+need_p1_avgs = ~spinup_handoff_only && ~p2_done && ~p3_done;
 if need_p1_avgs
     if ~exist('p1_avgs', 'var')
         tmp = load(p1_chk, 'p1_avgs');
@@ -406,7 +457,7 @@ end
 %% =========================================================================
 %% Phase 2: Standalone BIOGEO_UNIT; SOM steady state
 %% =========================================================================
-if ~p2_done && ~p3_done
+if ~spinup_handoff_only && ~p2_done && ~p3_done
     fprintf('\n=== Phase 2: Standalone BIOGEO_UNIT (until convergence) ===\n');
 
     % Establish PARAM_IC variables (Zbio, Bio_Zs, ExEM, B_IO, Ccrown, etc.).
@@ -556,6 +607,23 @@ if ~p2_done && ~p3_done
     %%% settled pools rather than this fertilizer-pulse initial state.
     PH = PHs;
 
+    %%% A tracked cell's lateral exchange as one mean daily map over its ring
+    %%% (the retained share and the arriving mass of each mobile pool), the
+    %%% lateral counterpart of the Phase-1 mean forcing above.
+    if lateral_replay_spinup
+        [p2_lat_yr,~,~] = datevec(LATERAL_REPLAY.day_dn);
+        p2_lat_days = ismember(p2_lat_yr,spinup_cycle_years);
+        if ~any(p2_lat_days)
+            error('Run_BG_Spinup:LateralRecordNotCovered', ...
+                'The lateral record holds no day of the cycle years.');
+        end
+        p2_lat_idx = LATERAL_REPLAY.pool_idx(:).';
+        p2_lat_retain = mean(LATERAL_REPLAY.retain(p2_lat_days,:),1);
+        p2_lat_input = mean(LATERAL_REPLAY.input(p2_lat_days,:),1);
+        p2_lat_isP = ismember(p2_lat_idx,35:47);
+        clear p2_lat_yr p2_lat_days
+    end
+
     p2_converged = false;
     p2_yr_final = p2_yr_start - 1;
     p2_R_het_last_year = NaN;
@@ -572,6 +640,10 @@ if ~p2_done && ~p3_done
             'planting',0,'litter',0,'harvest',0,'leaching',0, ...
             'soil_start',sum(p2_P_now(35:47)),'soil_end',0, ...
             'plant_start',0,'plant_end',0);
+        if lateral_replay_spinup
+            p2_p_terms.lateral_in = 0;
+            p2_p_terms.lateral_out = 0;
+        end
         FertN_avail_state = [];
         for p2_day = 1:365
             dvec = datevec(datenum(2001, 1, p2_day));
@@ -597,6 +669,14 @@ if ~p2_done && ~p3_done
                 0, OPT_BfixN_p2, ...              % opt_ERW (off in Phase 2), opt_BfixN,
                 p2_f_anaer_bio, p2_WFPS_bio, ...  % mean anaerobic fraction and WFPS of the active layer,
                 [], []);                          % exchange scheme (inert with ERW off), default KNmaxd as in Phase 3
+            if lateral_replay_spinup
+                p2_lat_T = p2_P_now(p2_lat_idx);
+                p2_P_now(p2_lat_idx) = p2_lat_retain.*p2_lat_T + p2_lat_input;
+                p2_p_terms.lateral_in = p2_p_terms.lateral_in + ...
+                    sum(p2_lat_input(p2_lat_isP));
+                p2_p_terms.lateral_out = p2_p_terms.lateral_out + ...
+                    sum((1 - p2_lat_retain(p2_lat_isP)).*p2_lat_T(p2_lat_isP));
+            end
             p2_R_het_day = p2_R_microbe + p2_R_litter + p2_R_ew - p2_R_litter_sur;
             if isfinite(p2_R_het_day)
                 p2_R_het_year_sum = p2_R_het_year_sum + p2_R_het_day;
@@ -726,7 +806,7 @@ if ~p2_done && ~p3_done
 end
 
 %% Load the latest state needed for Phase 3 if not in workspace
-if ~exist('p2_bg_state', 'var') || ~isfield(p2_bg_state, 'B_out')
+if ~spinup_handoff_only && (~exist('p2_bg_state', 'var') || ~isfield(p2_bg_state, 'B_out'))
     if p3_done
         p2_bg_state = p3_resume_state;
     else
@@ -737,7 +817,11 @@ end
 %% =========================================================================
 %% Phase 3: Coupled no-ERW loop until dynamic equilibrium
 %% =========================================================================
-fprintf('\n=== Phase 3: Coupled no-ERW convergence loop ===\n');
+if spinup_handoff_only
+    fprintf('\n=== Phase 3: handoff only, no convergence loop ===\n');
+else
+    fprintf('\n=== Phase 3: Coupled no-ERW convergence loop ===\n');
+end
 
 if isnan(transient_start) || isnan(transient_end)
     error('Run_BG_Spinup:NoTransientWindow', ...
@@ -746,24 +830,27 @@ end
 [p3_met, ~] = Load_Spinup_Meteo(daily_meteo_path, transient_start, transient_end, ...
     Lat, Lon, DeltaGMT);
 
-% Initialise BG state for Phase 3 from Phase 2 output
-B_out      = p2_bg_state.B_out;
-O_out      = p2_bg_state.O_out;
-NavlI_out  = p2_bg_state.NavlI_out;
-RexmyI_out = p2_bg_state.RexmyI_out;
-NupI_L_out = p2_bg_state.NupI_L_out;
-if isfield(p2_bg_state,'Nreserve_L_out');  Nreserve_L_out  = p2_bg_state.Nreserve_L_out;  end
-if isfield(p2_bg_state,'Preserve_L_out');  Preserve_L_out  = p2_bg_state.Preserve_L_out;  end
-if isfield(p2_bg_state,'Kreserve_L_out');  Kreserve_L_out  = p2_bg_state.Kreserve_L_out;  end
-if isfield(p2_bg_state,'Careserve_L_out'); Careserve_L_out = p2_bg_state.Careserve_L_out; end
-if isfield(p2_bg_state,'Mgreserve_L_out'); Mgreserve_L_out = p2_bg_state.Mgreserve_L_out; end
-if isfield(p2_bg_state,'Sireserve_L_out'); Sireserve_L_out = p2_bg_state.Sireserve_L_out; end
-if isfield(p2_bg_state,'Nreserve_H_out');  Nreserve_H_out  = p2_bg_state.Nreserve_H_out;  end
-if isfield(p2_bg_state,'Preserve_H_out');  Preserve_H_out  = p2_bg_state.Preserve_H_out;  end
-if isfield(p2_bg_state,'Kreserve_H_out');  Kreserve_H_out  = p2_bg_state.Kreserve_H_out;  end
-if isfield(p2_bg_state,'Careserve_H_out'); Careserve_H_out = p2_bg_state.Careserve_H_out; end
-if isfield(p2_bg_state,'Mgreserve_H_out'); Mgreserve_H_out = p2_bg_state.Mgreserve_H_out; end
-if isfield(p2_bg_state,'Sireserve_H_out'); Sireserve_H_out = p2_bg_state.Sireserve_H_out; end
+% Initialise BG state for Phase 3 from Phase 2 output (a handoff-only run
+% already holds its state, loaded from SPINUP_SEED_FILE)
+if ~spinup_handoff_only
+    B_out      = p2_bg_state.B_out;
+    O_out      = p2_bg_state.O_out;
+    NavlI_out  = p2_bg_state.NavlI_out;
+    RexmyI_out = p2_bg_state.RexmyI_out;
+    NupI_L_out = p2_bg_state.NupI_L_out;
+    if isfield(p2_bg_state,'Nreserve_L_out');  Nreserve_L_out  = p2_bg_state.Nreserve_L_out;  end
+    if isfield(p2_bg_state,'Preserve_L_out');  Preserve_L_out  = p2_bg_state.Preserve_L_out;  end
+    if isfield(p2_bg_state,'Kreserve_L_out');  Kreserve_L_out  = p2_bg_state.Kreserve_L_out;  end
+    if isfield(p2_bg_state,'Careserve_L_out'); Careserve_L_out = p2_bg_state.Careserve_L_out; end
+    if isfield(p2_bg_state,'Mgreserve_L_out'); Mgreserve_L_out = p2_bg_state.Mgreserve_L_out; end
+    if isfield(p2_bg_state,'Sireserve_L_out'); Sireserve_L_out = p2_bg_state.Sireserve_L_out; end
+    if isfield(p2_bg_state,'Nreserve_H_out');  Nreserve_H_out  = p2_bg_state.Nreserve_H_out;  end
+    if isfield(p2_bg_state,'Preserve_H_out');  Preserve_H_out  = p2_bg_state.Preserve_H_out;  end
+    if isfield(p2_bg_state,'Kreserve_H_out');  Kreserve_H_out  = p2_bg_state.Kreserve_H_out;  end
+    if isfield(p2_bg_state,'Careserve_H_out'); Careserve_H_out = p2_bg_state.Careserve_H_out; end
+    if isfield(p2_bg_state,'Mgreserve_H_out'); Mgreserve_H_out = p2_bg_state.Mgreserve_H_out; end
+    if isfield(p2_bg_state,'Sireserve_H_out'); Sireserve_H_out = p2_bg_state.Sireserve_H_out; end
+end
 
 % Resume from Phase 3 checkpoint if present
 p3_loop_start = 1;
@@ -819,6 +906,34 @@ if p3_done
     bg_state = tmp;
     clear tmp
 end
+if spinup_handoff_only
+    %%% The reconstructed state carries the convergence record of the
+    %%% replayed cell it was built from (Reconstruct_Cell_Pools_RF); its own
+    %%% ERW handoff runs below under this cell's inputs.
+    p3_handoff_source = bg_state;
+    required_record = {'spinup_converged','spinup_cycles_completed', ...
+        'spinup_ring_streak_achieved','spinup_nutrient_budgets'};
+    if ~all(isfield(p3_handoff_source,required_record)) || ...
+            ~logical(p3_handoff_source.spinup_converged)
+        error('Run_BG_Spinup:HandoffOnlyUnconverged', ...
+            'A handoff-only state must carry a converged spin-up record.');
+    end
+    %%% The plant reserves are part of the state handed on (build_bg_state
+    %%% below); a reconstructed state takes them from its template.
+    reserve_fields = strcat({'N','P','K','Ca','Mg','Si','N','P','K','Ca','Mg','Si'}, ...
+        'reserve_',{'L','L','L','L','L','L','H','H','H','H','H','H'},'_out');
+    if ~all(isfield(p3_handoff_source,reserve_fields))
+        error('Run_BG_Spinup:HandoffOnlyNeedsState', ...
+            'A handoff-only state must carry the plant reserves (%s).', ...
+            strjoin(reserve_fields(~isfield(p3_handoff_source,reserve_fields)),', '));
+    end
+    clear required_record reserve_fields
+    p3_converged = true;
+    p3_loop_last = p3_handoff_source.spinup_cycles_completed;
+    p3_ring_streak = p3_handoff_source.spinup_ring_streak_achieved;
+    p3_pass_by_ring = true(1, n_spinup_years);
+    p3_nutrient_budgets = p3_handoff_source.spinup_nutrient_budgets;
+end
 
 B_out = Project_Small_Negative_BG_Pools(B_out, P3_POOL_NEG_TOL);
 for ring_index = 1:numel(p3_B_prev_by_ring)
@@ -839,6 +954,10 @@ OPT_pH                  = 0;
 OPT_ERW_saved_p3        = OPT_ERW;
 OPT_ERW                 = 0;
 PH                      = PHs;
+%%% Every ring year and the handoff extension lie in a tracked cell's record.
+if lateral_replay_spinup
+    LATERAL_REPLAY(1).required = true;
+end
 
 p3_keep = [who; { ...
     'p3_keep'; 'p3_loop'; 'p3_loop_last'; 'p3_loop_start'; 'p3_converged'; 'p3_B_prev'; 'p3_B_prev_by_ring'; ...
@@ -856,7 +975,10 @@ p3_keep = [who; { ...
     'p3_nutrient_budgets'}];
 p3_keep = setdiff(p3_keep, {'Mpar_L','Mpar_H','ParEx_L','ParEx_H','VegH_Param_Dyn','VegL_Param_Dyn'}, 'stable');
 
-if p3_converged
+if spinup_handoff_only
+    fprintf('Handoff only: the state handed in carries a converged record (%d coupled years)\n', ...
+        p3_loop_last);
+elseif p3_converged
     fprintf('Phase 3 checkpoint is already converged at loop %d\n', p3_loop_last);
 end
 
@@ -928,6 +1050,17 @@ while ~p3_converged
         Preserve_H(1,:) + Preserve_L(1,:)));
     p3_p_terms.plant_end = sum(Ccrown_t(j,:).*(TPHO_H(j,:) + TPHO_L(j,:) + ...
         Preserve_H(j,:) + Preserve_L(j,:)));
+    if lateral_replay_spinup
+        %%% The tracked cell's lateral exchange (Lateral_Replay_Solute's
+        %%% ledger) is an input and an output of each element's budget.
+        p3_lat_in = sum(lat_rep.solute_in_g(p3_rows,:),1);
+        p3_lat_out = sum(lat_rep.solute_out_g(p3_rows,:),1);
+        p3_lat_is = ismember(lat_rep.pool_idx,35:47);
+        p3_p_terms.lateral_in = sum(p3_lat_in(p3_lat_is));
+        p3_p_terms.lateral_out = sum(p3_lat_out(p3_lat_is));
+        fprintf(['  lateral replay: %.4g mm water applied, %.4g mm refused by ' ...
+            'the moisture bounds\n'],sum(lat_rep.water_mm),sum(lat_rep.water_clip_mm));
+    end
     p3_p_budget = Phase3_Phosphorus_Budget( ...
         p3_p_terms, P3_NUTRIENT_BUDGET_ABS_TOL, P3_NUTRIENT_BUDGET_REL_TOL);
     p3_p_budget.terms = p3_p_terms;
@@ -977,6 +1110,11 @@ while ~p3_converged
         p3_terms.soil_end = sum(P(j,p3_soil_idx{p3_x}));
         p3_terms.plant_start = sum(CcrownFIX.*(p3_plant_h{p3_x}(1,:) + p3_plant_l{p3_x}(1,:) + p3_reserve_h{p3_x}(1,:) + p3_reserve_l{p3_x}(1,:)));
         p3_terms.plant_end = sum(Ccrown_t(j,:).*(p3_plant_h{p3_x}(j,:) + p3_plant_l{p3_x}(j,:) + p3_reserve_h{p3_x}(j,:) + p3_reserve_l{p3_x}(j,:)));
+        if lateral_replay_spinup
+            p3_lat_is = ismember(lat_rep.pool_idx,p3_soil_idx{p3_x});
+            p3_terms.lateral_in = sum(p3_lat_in(p3_lat_is));
+            p3_terms.lateral_out = sum(p3_lat_out(p3_lat_is));
+        end
         p3_nutrient_budgets.(p3_names{p3_x}) = Phase3_Nutrient_Budget( ...
             p3_terms,P3_NUTRIENT_BUDGET_ABS_TOL,P3_NUTRIENT_BUDGET_REL_TOL);
         p3_nutrient_budgets.(p3_names{p3_x}).terms = p3_terms;
@@ -1186,7 +1324,8 @@ Validate_BG_Pool_Physicality(B_out, p3_soil_mass, 'Phase 3 converged state');
 % between Jan 1 and the transient start (e.g. 2022-01-01 to 2022-05-04),
 % bridging the ring-cycled complete-year convergence loop above to the
 % actual observed transient window using real (not cycled) daily forcing.
-is_handoff_extension = exist('handoff_end_dn', 'var') && isfinite(handoff_end_dn);
+is_handoff_extension = ~spinup_handoff_only && ...
+    exist('handoff_end_dn', 'var') && isfinite(handoff_end_dn);
 if is_handoff_extension
     fprintf('  Phase 3 handoff extension: %s - %s (real meteo)\n', ...
         datestr(handoff_start_dn, 'yyyy-mm-dd'), datestr(handoff_end_dn - 1/24, 'yyyy-mm-dd HH:MM'));
@@ -1315,6 +1454,12 @@ ERW_PARAM_IC = fullfile(Parameter_Directory, 'ERW_MOD_PARAM_excel.m');
 
 clear Mpar_L Mpar_H ParEx_L ParEx_H VegH_Param_Dyn VegL_Param_Dyn
 clear ERW_biogeochem ERW_weathering ERW_const ERW_TC ERW_TC_const
+%%% The seed check runs the transient's first two days, which no lateral
+%%% record covers: a replayed column keeps its terrain radiation there and
+%%% receives no lateral exchange.
+if lateral_replay_spinup
+    LATERAL_REPLAY(1).required = false;
+end
 try
     %% Series the driver creates only when absent (irrigation, wetland
     %% level): one left from another year has that year's length.
@@ -1419,6 +1564,18 @@ restore_total_P_warn = onCleanup(@() warning(prev_total_P_warn));
 Validate_BG_State_For_Transient(bg_state, bg_file);
 clear restore_total_P_warn
 bg_state.spinup_provenance = spinup_provenance;
+if lateral_replay_spinup
+    bg_state.spinup_lateral_record_identity = char(string(LATERAL_REPLAY.identity));
+    bg_state.reconstruction_method = "replay";
+end
+if spinup_handoff_only
+    for inherited = {'reconstruction_method','reconstruction_template_cell_id', ...
+            'reconstruction_rf_cv_rel_error','reconstruction_tracking_key'}
+        if isfield(p3_handoff_source,inherited{1})
+            bg_state.(inherited{1}) = p3_handoff_source.(inherited{1});
+        end
+    end
+end
 %%% The instant this state hands off at: the first hour of the transient
 %%% it seeds.  Load_Field_Spinup_States refuses it for a run that starts
 %%% at any other instant.

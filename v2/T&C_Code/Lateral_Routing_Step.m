@@ -34,6 +34,9 @@ function [theta_cell, dM_cell, diag, T_cell, Oice_cell] = Lateral_Routing_Step( 
 %%   dM_cell       [N_cells x ms x N_species] solute mass change [mass]
 %%   diag          .sub_steps  adaptive sub-steps taken by the Darcy solver
 %%                 .Q_edge     [N_edges x ms] per-edge water flux [m3/h]
+%%                 .dtheta_water [N_cells x ms] the Darcy exchange alone
+%%                 .dM_edge    [N_edges x ms x N_species] signed per-edge
+%%                             solute mass over the step, a -> b
 %%                 .buf_to_main.water  net water buffer->main this step [m3]
 %%                 .buf_to_main.net    [N_species x 1] net mass buffer->main
 %%   T_cell        updated soil temperature [degC], or [] without thermal input
@@ -106,6 +109,8 @@ diag.sub_steps = sub_steps;
 diag.Q_edge    = Q_edge;
 diag.Q_solute_edge = Q_solute;
 diag.solute_edge_fraction = solute_edge_fraction;
+diag.dtheta_water = dtheta_lat;
+diag.dM_edge = dM_edge;
 diag.heat      = heat_diag;
 diag.buf_to_main.water = sum(bm_sign .* sum(Q_edge, 2)) * dt_h;     %% m3
 net_sp = zeros(N_sp, 1);

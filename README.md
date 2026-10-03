@@ -2,8 +2,9 @@
 
 v1.0 takes T&C-SMEW-N v0.9 from plot columns to field grids: irregular
 polygon grids, kriged per-cell soil inputs, DEM topography with
-gravity-driven lateral flow, and a per-cell or random-forest field spin-up
-for the Bruce Farm (Virginia) control fields. It carries the v0.9 model of
+gravity-driven lateral flow, and the flux-tracking field spin-up of
+T&C-BG-2D (Lian et al. 2025), adapted for ERW, for the Bruce Farm
+(Virginia) control fields. It carries the v0.9 model of
 package u (2026-10-02) unchanged in the Energy Farm (Kantola) runs; the
 section *Model lineage from v0.9* at the end records what each v0.9
 package changed, and `RUNBOOK_2026-09-24.md` orders the Energy Farm
@@ -25,7 +26,8 @@ v2/interpolation/  soil-sample kriging and the grid figure it feeds:
 v2/figures/      every PNG and FIG the plotting scripts write
 v2/Spatial inputs/   field polygons used by full-grid simulations
 v2/T&C_Code/     model source, Inputs, Parameters and Tests
-v2/spinup/       the automatic spin-up and the field (per-cell / RF) launchers
+v2/spinup/       the automatic spin-up and the field spin-up (flux tracking,
+                 per cell) with its tracking run, replays and forest
 v2/cluster/      SLURM scripts and entry point for the field spin-up on Bouchet
 v2/SIM/          simulation results (not tracked)
 v2/logs/         worker logs and status files (not tracked)
@@ -412,10 +414,11 @@ their toggle is false. Automatic spin-up is then run separately for each
 polygon:
 
 ```matlab
+dem = fullfile('v2','Spatial inputs','Bruce Farm Virginia','DEM');
 [state_1,config_1] = Run_Field_Cell_Spinup(shape_file,files{1}, ...
-    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',1);
+    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',1,'FieldDEM',dem);
 [state_2,config_2] = Run_Field_Cell_Spinup(shape_file,files{2}, ...
-    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',2);
+    'FieldFeatureIndices',[1 2],'FieldPolygonIndex',2,'FieldDEM',dem);
 ```
 
 The site workbook row must provide `meteo_file`, `meteo_start` and `meteo_end`
@@ -425,7 +428,10 @@ launcher's `MODParamColumns` option, see *Spin-up forcing* below). This
 is a hard preflight check. The imported machinery
 is from `Model/TC-SMEW-N` commit `31e9e13`. It retains the three spin-up phases,
 checkpoint rejection, convergence checks, 79-pool physicality screen, six
-nutrient budgets and ERW handoff gate.
+nutrient budgets and ERW handoff gate. The field spin-up around it is the
+flux-tracking spin-up of T&C-BG-2D (see *Flux-tracking field spin-up*);
+`'Method','per_cell'` runs every cell's own spin-up instead, without lateral
+exchange.
 
 The transient launcher requires the matching agronomic and state file for
 each polygon:
@@ -947,21 +953,103 @@ fields F1-F8, 0-15 cm) lies 4 km from the control plots with no site
 inside them, so per-cell bulk density is likewise not available; the
 pedotransfer value from `Soil_parameters` stands.
 
-### Charge-balanced random-forest spin-up
+### Flux-tracking field spin-up (T&C-BG-2D, adapted for ERW)
 
-`Run_Field_Cell_Spinup(..., 'Method','rf')` reconstructs the distributed
-biogeochemistry pools from a topographically-stratified subsample of full
-spin-ups plus a random forest on {elevation, slope, aspect, curvature,
-TWI, soil class, vegetation} -> conserved pool totals (Lian et al.
-Fig. 3e; needs the Statistics and Machine Learning Toolbox, falls back to
-`'per_cell'` otherwise). Every reconstructed cell is seeded from its
-nearest subsample neighbour and finished with a short
-`Run_Automatic_Site_Spinup` that starts near equilibrium and runs the
-standard ERW handoff gate (`ERW_Handoff_Readiness`), so electroneutrality
-and pore-water pH are closed by the same code the transient run trusts;
-cells that fail the gate fall back to a cold-start spin-up. The
-charge-closure primitive `ERW_Initial_H_From_Anion_Budget` is ported from
-the `Model/TC-SMEW-N` branch `lian-spinup-convergence`.
+The field spin-up follows the T&C-BG-2D initialisation of Lian et al.
+(2025, *WRR* 61, e2025WR040260, section 2.3 and Fig. 3): a plot-scale
+flux-tracking spin-up combined with a random forest, so the slow soil pools
+carry the lateral redistribution a 2-D field imposes without a multi-century
+2-D run. `Run_Field_Cell_Spinup(..., 'Method','flux_tracking')` (the
+default; it needs `FieldDEM`) runs four stages:
+
+1. **Class seeds** (Fig. 3a-b). One plot-scale spin-up per land cover x
+   soil class: `Run_BG_Spinup` (T&C-only ring, the stand-alone
+   biogeochemistry under the long-term mean forcing to steady state, the
+   coupled ring to dynamic steady state). Classes are the categorical
+   columns of the agronomic table (`ClassColumns`, by default whichever of
+   `land_cover`, `vegetation`, `pft`, `soil_class`, `texture_class` it
+   carries; none -> one class), and each is spun up on its most typical
+   cell, the one nearest the class median of the resolved soil
+   properties. Every cell of a class starts from its seed.
+2. **Tracking** (Fig. 3c). The whole field runs in 2-D from those seeds
+   (`Run_Field_Lateral_Tracking`, `MAIN_FRAME_BG_ERW_2D` with the terrain
+   attached) over the spin-up's meteorological ring and its handoff
+   extension, split exactly as Phase 3 splits its ring: one segment per
+   cycle year, then the partial year up to the transient start, every
+   column restarting from the previous segment's end state through the
+   same hand-over. Meanwhile `Lateral_Track_Record` records, for a
+   topographically stratified ~10 % subsample (`Select_Topographic_Subsample`,
+   `SubsampleFraction` 0.10 as Lian et al.), what entered and left each
+   tracked cell: the hourly Darcy change of every layer's water content,
+   the hourly overland run-on, and each day's exchange of every mobile
+   pool as one exact affine map `T_end = retain .* T_start + input`,
+   composed from the hourly upwind steps (subsurface transport,
+   saturation-excess runoff and re-infiltrating run-on). `retain` is the
+   share of the cell's own pool that stayed, `input` what arrived from its
+   neighbours, so when the map is replayed the cell's export stays
+   proportional to its own, evolving pool while what arrives from
+   upslope is imposed as recorded: the upwind scheme with the
+   neighbours' concentrations frozen at their tracked values.
+3. **Replays** (Fig. 3d). Each tracked cell's own plot-scale spin-up with
+   that exchange replayed in every phase (`LATERAL_REPLAY_FILE`): the
+   water in Phase 1, the record's mean daily map in the stand-alone
+   Phase 2, water and solute hour by hour and day by day in the Phase-3
+   ring and the handoff extension, through inert hooks in the v0.9
+   10-minute driver (`Lateral_Replay_Prepare`, `_Water`, `_Solute`), and
+   with the topographic shortwave the cell received in the field run
+   (`Topographic_Radiation_Projection`, one definition with the 2-D
+   driver). The lateral gains and losses enter the six Phase-3 nutrient
+   budgets as inputs and outputs, so they still close. The replay starts
+   from the cell's own tracking-run state at the end of the ring and runs
+   until Phase 3's ring-convergence test passes, the dynamic steady state
+   Lian et al. reach with 1,000 years.
+4. **Reconstruction** (Fig. 3e-f). A random forest
+   (`Train_Pool_Random_Forest`, k-fold cross-validated; Lian et al. report
+   < 10 %) maps terrain (elevation, slope, aspect, curvatures, TWI) and
+   soil (sand, clay, OM, bulk pH, CEC) onto the replayed cells' conserved
+   pool totals (POC, MAOC, DOC, microbial C, total N, NH4, NO3, total P),
+   and every other cell gets its prediction mapped onto the 79-pool state
+   of its nearest replayed cell, keeping that cell's partition and
+   stoichiometry (`Initialize_BG_State_From_Observations`), with its own
+   soil moisture from the 2-D run at the transient start
+   (`Reconstruct_Cell_Pools_RF`). As in Lian et al. that is the cell's
+   initial condition; no further spin-up runs.
+
+**Adapted for ERW.** The ERW chemistry is off in every stage, as in every
+spin-up phase of v0.9: the exchanger and the pore water are never spun
+up, so neither the tracking nor the forest touches them. Every cell,
+replayed or reconstructed, is handed on through the transient's own seed
+path: the observation constraint at the transient start, then the ERW
+seed built from the cell's own bulk pH, CEC and measured base saturation
+(`Invert_Bulk_pH`, the `f_CEC_inventory` convention), gated by
+`ERW_Handoff_Readiness` (charge balance, pore and bulk pH, base
+saturation). A reconstructed cell runs that gate alone
+(`Run_Automatic_Site_Spinup` with `SPINUP_HANDOFF_ONLY`), keeping the
+convergence record of the replayed cell it was built from
+(`reconstruction_template_cell_id`, `reconstruction_rf_cv_rel_error`). The
+forest predicts biological and nutrient pools only, never the exchanger,
+pore-water pH, Al, DIC or the residual anion, so electroneutrality holds
+by construction. What the tracking does carry for ERW is the lateral
+redistribution of the solution K, Ca, Mg and Si pools and of NO3 and NH4,
+the charged species the seed's anion budget closes against. A cell whose
+reconstruction fails falls back to its own cold spin-up (flagged
+`fallback`); one whose fallback fails too is flagged `failed` and stops
+the assembly.
+
+`Method 'per_cell'` remains the 1-D reference: every cell's own spin-up
+with no lateral exchange.
+
+`test_lateral_flux_tracking` checks the machinery: the radiation
+projection, the exact composition of the hourly exchange into the daily
+map (both directions of a face split layer by layer), the replay hooks'
+coverage rules and exact ledgers, and, decisively, that a cell tracked in
+a small topographic 2-D run and then run as a plot-scale column replaying
+its record follows the 2-D cell far more closely than the same column
+with the exchange left out. `test_spinup_handoff_only` runs a
+reconstructed cell's handoff on Control 2 cell 1: no spin-up phase runs,
+the seed built from the cell's own inputs passes the gate, and the pools,
+soil moisture, convergence record and provenance are kept.
+
 
 **Spin-up forcing.** The automatic spin-up cycles complete
 meteorological years until its phases converge, then runs the handoff
@@ -1030,6 +1118,12 @@ handoff diagnostic waited for a readiness record the v0.9 driver never
 writes (and ran the whole transient window doing so): it now runs the
 two forcing days the ERW seed reads, with ERW on, and scores the seed the
 driver itself built (`ERW_Handoff_Diagnostic`, `ERW_Handoff_Readiness`).
+Its charge balance is taken over the species the seed holds: v0.9
+speciates the pore water with activity-conditioned constants, and
+re-speciating its Al with the thermodynamic constants had reported the
+activity correction as an imbalance growing with dissolved Al (0.7
+umolc/L at 25 umol/L on Control 2 cell 1, 75 umolc/L at 289 umol/L on
+cell 17), failing every acidic Bruce Farm cell at the end of its spin-up.
 The respiration and water-loss hand-offs are gone, because the v0.9
 drivers seed the CO2 boundary and the Na rain seed from the run itself;
 plant reserves start from the parameter file, as in v0.9. Phase 1 runs
@@ -1047,34 +1141,36 @@ the seed), so a task resumes only its own work and reuses only a state
 of the same run, and a state records the instant it hands off at, which
 `Run_One_Subfield` checks against its own first hour.
 
-**Cost, measured on one Control 2 cell with the Kantola case (seven
-cycle years, 2017 handoff), single column, this machine:** Phase 1
-(T&C only) runs at 48 s per forcing year, 5.6 min for the ring; Phase 2
-(stand-alone biogeochemistry under the mean forcing) converged after
-641 mean-forcing years in about 3 min; Phase 3, the fully coupled loop
-with the ERW chemistry solved daily, costs about 70 min per forcing
-year, and its convergence test is taken over complete rings of seven
-years. On the test cell the ring drift of the slow fixed-cation pools
-(B(54), B(62), B(70)) was still 0.24 per ring against the 0.01 limit
-after 27 coupled years, falling by about 4 % per year, so a cell is a
-job of days, not hours.
-That is the cost the random-forest path exists to avoid: the production
-2.33 m Control 2 grid has 1461 cells, and even the ~10-15 % subsample
-the RF trains on is weeks of single-threaded compute, so the field
-spin-up has to be run cell-parallel (the `Run_All_12_Parallel` pattern)
-and is not something a session completes end to end. The pipeline up to
-the spin-up call (templates, kriging, gated merge, resolved per-cell
-inputs, topographic subsample, spin-up configuration) was exercised on
-the real Control 2 grid (54 cells at 15 m under a 50 % coverage rule;
-14 in-hull cells took every kriged attribute including base
-saturation) and is covered by the tests; the single-cell spin-up above
-is the integration check of the spin-up itself: it completed Phases 1
-and 2 and 27 coupled Phase-3 years with all six nutrient budgets closing
-every year, and was stopped unconverged (above). The field spin-up is
-therefore a cluster job: `v2/cluster/README.md` describes the SLURM
-array on Bouchet (one cell per task, finished cells reused, plan /
-assemble / validate steps) and the validation experiment that scores
-the random-forest path against full spin-ups of every cell.
+**Cost, measured on one Control 2 cell with the Kantola case (six cycle
+years 2009-2014, a 2016-01-01 handoff after the 2015 extension), single
+column, on this workstation while several other MATLAB jobs shared it:**
+Phase 1 (T&C only) about 80 s per forcing year, 8 min for the ring;
+Phase 2 (stand-alone biogeochemistry under the mean forcing) converged
+after 787 mean-forcing years in 7 min; Phase 3, the coupled ERW-free
+loop, about 1.3 min per forcing year, with its convergence test taken over
+complete six-year rings. On the test cell the ring drift fell from 0.67 to
+0.022 per ring over the first 97 coupled years against the 0.01 limit,
+decaying with an e-folding time of about 60 coupled years in both the
+dynamic and the slow pools, so it is on course to converge near coupled
+year 160 and a plot-scale spin-up is a job of about four hours. In the
+flux-tracking spin-up that
+cost is paid only by the class seeds and by the replays of the tracked
+~10 % of cells, all array tasks; the 2-D tracking run costs about one
+ERW-free column-year per cell per segment, because the 2-D driver steps
+its columns one after another; and every other cell costs only its
+two-day ERW handoff. The pipeline up to the spin-up call (templates,
+kriging, gated merge, resolved per-cell inputs, topographic subsample,
+spin-up configuration) was exercised on the real Control 2 grid (54 cells
+at 15 m under a 50 % coverage rule; 14 in-hull cells took every kriged
+attribute including base saturation) and is covered by the tests. The
+flux-tracking stages were exercised on this workstation on a coarse
+Control 2 grid: the 2-D tracking run with its records, a replay spin-up
+of one cell with a lateral record through Phases 1 to 3 with its budgets
+closing, and the handoff-only gate. The field spin-up itself is a cluster
+job: `v2/cluster/README.md` describes the SLURM chain on Bouchet (plan,
+class seeds, tracking, replays, reconstruction, assembly) and the
+validation experiment that scores the random forest against a run in
+which every cell is replayed.
 
 ### Energy Farm Bouchet R2025a runs
 

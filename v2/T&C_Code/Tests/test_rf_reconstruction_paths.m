@@ -2,26 +2,31 @@ function test_rf_reconstruction_paths()
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test_rf_reconstruction_paths
 %%
-%% Reconstruct_Cell_Pools_RF end to end on a synthetic hillslope, with the
-%% expensive Run_Automatic_Site_Spinup replaced by a stub (a function of
-%% the same name placed first on the path) that writes a validated state
-%% from the seed it is given, or from a converged template on a cold
-%% start, and fails on demand.  The subsample states are the archived,
-%% converged Kantola state (Data_Kantola_BG.mat) scaled smoothly with
-%% elevation, so the seed mapping is exercised on a real converged
-%% stoichiometry rather than on round numbers:
-%%   1  every non-subsample cell is RF-seeded (no silent fallback): the
-%%      seed mapping accepts the template's own converged partition
+%% Reconstruct_Cell_Pools_RF (the forest stage of the flux-tracking field
+%% spin-up) end to end on a synthetic hillslope, with the expensive
+%% Run_Automatic_Site_Spinup replaced by a stub (a function of the same
+%% name placed first on the path) that writes a validated state from the
+%% seed it is given (the handoff-only run of a reconstructed cell), or from
+%% a converged template on a cold start, and fails on demand.  The replayed
+%% states are the archived, converged Kantola state (Data_Kantola_BG.mat)
+%% scaled smoothly with elevation, so the seed mapping is exercised on a
+%% real converged stoichiometry rather than on round numbers:
+%%   1  every untracked cell is reconstructed (no silent fallback), and
+%%      only through its handoff gate (SPINUP_HANDOFF_ONLY): the seed
+%%      mapping accepts the template's own converged partition, takes the
+%%      cell's own soil moisture from the tracking run, and records its
+%%      template
 %%   2  every returned state carries reconstruction_method and
 %%      reconstruction_failed, and the array is one uniform struct
-%%   3  a seeded failure falls back to a cold start, which runs
-%%   4  a cell whose seeded and cold runs both fail is returned flagged
-%%      'failed' with its OWN cell_id and unconverged / not handoff-ready
-%%      flags, and the reconstruction of the other cells survives
-%%   5  the seeded and the cold run of a cell carry different spin-up
-%%      provenance keys (so neither resumes the other's checkpoints), a
-%%      re-run of the same seed carries the same key, and nothing on
-%%      disk is deleted to tell them apart
+%%   3  a failed reconstruction falls back to a cold start, which runs
+%%   4  a cell whose reconstruction and cold run both fail is returned
+%%      flagged 'failed' with its OWN cell_id and unconverged / not
+%%      handoff-ready flags, and the reconstruction of the other cells
+%%      survives
+%%   5  the reconstruction and the cold run of a cell carry different
+%%      spin-up provenance keys (so neither resumes the other's
+%%      checkpoints), a re-run of the same reconstruction carries the same
+%%      key, and nothing on disk is deleted to tell them apart
 %%   6  CellIndex reconstructs one cell, identical to the full run's
 %%   7  an unknown option is rejected
 %%   8  Select_Topographic_Subsample coarsens its bins when three bins
@@ -73,6 +78,10 @@ for s = 1:numel(sub_idx)
     sub_states(s) = mock_state(B, c, ident{c}, K);
 end
 
+%% the tracking run's handoff states: every cell's own soil moisture
+handoff = repmat(struct('O_out',K.O_out(end,:)),N,1);
+for c = 1:N; handoff(c).O_out = K.O_out(end,:)*(0.95 + 0.1*zn(c)); end
+
 %% --- the stub spin-up, first on the path -----------------------------------
 stub_dir = tempname; mkdir(stub_dir);
 out_dir = tempname; mkdir(out_dir);
@@ -92,13 +101,19 @@ rf_cells = setdiff((1:N).', sub_idx);
 other_run = fullfile(out_dir, sprintf('cell_%04d_BG_checkpoint_p3_loop.mat', rf_cells(1)));
 dummy = 1; save(other_run,'dummy'); %#ok<NASGU>
 [S1,rep1] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs,sub_states,sub_idx, ...
-    'OutputDirectory',out_dir,'RFOptions',rf_opts);
-check('every non-subsample cell is RF-seeded, none silently falls back', ...
-    rep1.n_rf_seed == numel(rf_cells) && rep1.n_fallback == 0 && rep1.n_failed == 0, ...
-    sprintf('full %d, rf_seed %d, fallback %d, failed %d', rep1.n_full, rep1.n_rf_seed, ...
+    handoff,'OutputDirectory',out_dir,'RFOptions',rf_opts);
+check('every untracked cell is reconstructed, none silently falls back', ...
+    rep1.n_rf == numel(rf_cells) && rep1.n_fallback == 0 && rep1.n_failed == 0, ...
+    sprintf('replay %d, rf %d, fallback %d, failed %d', rep1.n_replay, rep1.n_rf, ...
     rep1.n_fallback, rep1.n_failed));
-check('subsample cells keep their full spin-up', rep1.n_full == numel(sub_idx) && ...
-    all(rep1.method_per_cell(sub_idx) == "full"));
+check('tracked cells keep their replayed state', rep1.n_replay == numel(sub_idx) && ...
+    all(rep1.method_per_cell(sub_idx) == "replay"));
+c_rf = rf_cells(1);
+seed1 = load(fullfile(out_dir,sprintf('rf_seed_%04d.mat',c_rf)));
+check('a reconstructed cell hands on its own soil moisture and names its template', ...
+    isequal(seed1.O_out,handoff(c_rf).O_out) && ...
+    ismember(seed1.reconstruction_template_cell_id,sub_idx) && ...
+    seed1.reconstruction_method == "rf");
 check('every state is stamped with its method and a failure flag', ...
     all(isfield(S1,{'reconstruction_method','reconstruction_failed'})) && ...
     isequal(string({S1.reconstruction_method}).', rep1.method_per_cell) && ...
@@ -108,6 +123,8 @@ check('no checkpoint is deleted to separate runs (provenance does it)', isfile(o
 L1 = read_calls(log_file);
 check('every spin-up call carries a provenance key', ...
     height(L1) == numel(rf_cells) && all(strlength(L1.provenance) == 64));
+check('a reconstructed cell runs only its handoff gate', ...
+    all(L1.seeded == 1) && all(L1.handoff_only == 1));
 
 %% 3, 4: a seeded failure falls back; a double failure is flagged
 k_fb = rf_cells(2); k_dead = rf_cells(3);
@@ -120,7 +137,7 @@ warning('off','Reconstruct_Cell_Pools_RF:UnreconstructedCells');
 ok_run = true;
 try
     [S2,rep2] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs,sub_states,sub_idx, ...
-        'OutputDirectory',out_dir,'RFOptions',rf_opts);
+        handoff,'OutputDirectory',out_dir,'RFOptions',rf_opts);
 catch ME
     ok_run = false; fprintf('    %s\n', ME.message);
 end
@@ -134,11 +151,11 @@ if ok_run
     seeded_key = L2.provenance(L2.cell == k_fb & L2.seeded == 1);
     cold_key = L2.provenance(L2.cell == k_fb & L2.seeded == 0);
     first_key = L1.provenance(L1.cell == k_fb);
-    check('the seeded and the cold run of a cell carry different provenance', ...
+    check('the reconstruction and the cold run of a cell carry different provenance', ...
         isscalar(seeded_key) && isscalar(cold_key) && seeded_key ~= cold_key);
-    check('a re-run of the same seed carries the same provenance', ...
+    check('a re-run of the same reconstruction carries the same provenance', ...
         isscalar(first_key) && seeded_key == first_key);
-    check('a seeded failure falls back to a cold start that runs', ...
+    check('a failed reconstruction falls back to a cold start that runs', ...
         rep2.method_per_cell(k_fb) == "fallback" && cold_for_fb && ...
         S2(k_fb).reconstruction_method == "fallback");
     check('a double failure is flagged failed, with the cell''s own id', ...
@@ -148,23 +165,23 @@ if ok_run
     check('a failed cell is marked unconverged and not handoff-ready', ...
         ~S2(k_dead).spinup_converged && ~S2(k_dead).spinup_erw_handoff_ready);
     check('the other cells are unaffected by the two failures', ...
-        rep2.n_rf_seed == numel(rf_cells) - 2 && rep2.n_failed == 1 && rep2.n_fallback == 1);
+        rep2.n_rf == numel(rf_cells) - 2 && rep2.n_failed == 1 && rep2.n_fallback == 1);
 end
 setenv('TC_STUB_FAIL_SEEDED',''); setenv('TC_STUB_FAIL_COLD','');
 
 %% 6: CellIndex
 k1 = rf_cells(4);
 [S3,rep3] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs,sub_states,sub_idx, ...
-    'OutputDirectory',out_dir,'RFOptions',rf_opts,'CellIndex',k1);
-check('CellIndex returns one RF-seeded state for that cell, equal to the full run''s', ...
-    numel(S3) == 1 && S3.cell_id == k1 && rep3.method_per_cell == "rf_seed" && ...
+    handoff,'OutputDirectory',out_dir,'RFOptions',rf_opts,'CellIndex',k1);
+check('CellIndex returns one reconstructed state for that cell, equal to the full run''s', ...
+    numel(S3) == 1 && S3.cell_id == k1 && rep3.method_per_cell == "rf" && ...
     max(abs(S3.B_out(end,:) - S1(k1).B_out(end,:))) < 1e-9);
 
 %% 7: options
 ok = false;
 try
     Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs,sub_states,sub_idx, ...
-        'OutputDirectory',out_dir,'ShortSpinupCap',50);
+        handoff,'OutputDirectory',out_dir,'ShortSpinupCap',50);
 catch ME
     ok = strcmp(ME.identifier,'Reconstruct_Cell_Pools_RF:UnknownOption');
 end
@@ -209,7 +226,8 @@ lines = {
 'fail_seeded = str2num(getenv(''TC_STUB_FAIL_SEEDED'')); %#ok<ST2NM>'
 'fail_cold   = str2num(getenv(''TC_STUB_FAIL_COLD''));   %#ok<ST2NM>'
 'seeded = isfield(S,''SPINUP_SEED_FILE'');'
-'fid = fopen(getenv(''TC_STUB_LOG''),''a''); fprintf(fid,''%d,%d,%s\n'',S.CELL_ID,seeded,S.SPINUP_PROVENANCE); fclose(fid);'
+'handoff_only = isfield(S,''SPINUP_HANDOFF_ONLY'') && S.SPINUP_HANDOFF_ONLY;'
+'fid = fopen(getenv(''TC_STUB_LOG''),''a''); fprintf(fid,''%d,%d,%d,%s\n'',S.CELL_ID,seeded,handoff_only,S.SPINUP_PROVENANCE); fclose(fid);'
 'if seeded && ismember(S.CELL_ID,fail_seeded); error(''stub:seeded'',''stub seeded failure''); end'
 'if ~seeded && ismember(S.CELL_ID,fail_cold); error(''stub:cold'',''stub cold failure''); end'
 'if seeded; src = load(S.SPINUP_SEED_FILE); else; src = load(getenv(''TC_STUB_TEMPLATE'')); end'
@@ -232,10 +250,10 @@ fprintf(fid,'%s\n',lines{:}); fclose(fid);
 end
 
 function L = read_calls(log_file)
-%% The stub's call log: cell id, seeded flag, provenance key.
+%% The stub's call log: cell id, seeded and handoff-only flags, provenance key.
 L = readtable(log_file,'FileType','text','Delimiter',',','ReadVariableNames',false, ...
-    'TextType','string','Format','%f%f%s');
-L.Properties.VariableNames = {'cell','seeded','provenance'};
+    'TextType','string','Format','%f%f%f%s');
+L.Properties.VariableNames = {'cell','seeded','handoff_only','provenance'};
 end
 
 function restore(old_dir, old_path, stub_dir, out_dir)
