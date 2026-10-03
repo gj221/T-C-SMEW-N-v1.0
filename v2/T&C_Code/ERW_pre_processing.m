@@ -162,8 +162,26 @@ elseif excel_input.fX_conc_convention == "Kantola"
     % its own exchange data can override them.
     %% Pretreatment base saturation is approximately 80% in Fig. 1F.
     f_CEC_sat = 0.80;
-    f_H(1) = 0.15;
-    f_Al(1) = (1-f_CEC_sat)-f_H(1);
+    %% The 20% exchangeable acidity is carried entirely by H.
+    %%
+    %% It was previously split f_H = 0.15, f_Al = 0.05, but that 5% Al is not
+    %% supportable here. This configuration runs with Al_solubility_pin = 1,
+    %% so dissolved Al is held at amorphous Al(OH)3 saturation, and at the
+    %% site pH of about 6 that supports f_Al near 4e-4 -- some 125x short of
+    %% 0.05. The Appelo activity term 10^(alpha*3*f_H) cannot close that gap
+    %% either: the whole range from the SCEPTER default alpha of 3.4 down to
+    %% the 1.3 used here spans only 8.8x. The seed was therefore prescribing
+    %% an exchange composition the chemistry strips on the first solve,
+    %% moving the state off the measured 80% anchor before the run starts.
+    %%
+    %% Carrying the acidity as H is also the better soil-chemical claim at
+    %% this pH: exchangeable Al only dominates below roughly pH 5.5, and a
+    %% near-neutral Mollisol at pH 6.2 holds its exchangeable acidity as H
+    %% and hydroxy-Al rather than as exchangeable Al3+. Al remains free to
+    %% populate the complex from solution if the chemistry supports it; it
+    %% is simply no longer asserted at initialisation.
+    f_H(1) = 1 - f_CEC_sat;
+    f_Al(1) = 0;
 
     % Pore-water Na is prescribed or deposition-derived, so it is set first and the
     % exchange fraction follows from the Appelo law rather than the other
@@ -178,7 +196,30 @@ elseif excel_input.fX_conc_convention == "Kantola"
     if ~(isfinite(Na(1)) && Na(1) > 0)
         Na(1) = 200;
     end
-    [K_Na_H_kant, ~, ~, ~, ~, alpha_kant] = Resolve_Appelo_Constants([]);
+    % The seed must be built on the same exchanger the run applies. Calling
+    % Resolve_Appelo_Constants([]) takes the SCEPTER default alpha of 3.4,
+    % but a run supplies its own through bulk_pH_params.appelo (1.3 for the
+    % Kantola campaign). The activity term is 10^(alpha*Z*f_H), so at
+    % f_H = 0.15 the two differ by 10^((3.4-1.3)*0.15) = 2.1 for sodium and
+    % by the cube of that, 8.8, for aluminium. A seed built at 3.4 therefore
+    % prescribes an exchange composition the run cannot hold, and the first
+    % solve strips it: f_Al falls from the prescribed 0.05 to ~4e-4, leaving
+    % exchangeable acidity carried entirely by H, which titrates far more
+    % readily than Al and overstates the pH response to feedstock.
+    appelo_params_kant = [];
+    if exist('ERW_TC_const_input','var') && isstruct(ERW_TC_const_input) && ...
+            isfield(ERW_TC_const_input,'bulk_pH_params') && ...
+            isstruct(ERW_TC_const_input.bulk_pH_params) && ...
+            isfield(ERW_TC_const_input.bulk_pH_params,'appelo')
+        appelo_params_kant = ERW_TC_const_input.bulk_pH_params.appelo;
+    else
+        warning('ERW:KantolaSeedAlphaDefault', ...
+            ['Kantola seed could not read the run Appelo parameters and is ' ...
+             'using the SCEPTER defaults. The seed exchanger will not match ' ...
+             'the run if the run overrides alpha or logKH.']);
+    end
+    [K_Na_H_kant, ~, ~, ~, ~, alpha_kant] = ...
+        Resolve_Appelo_Constants(appelo_params_kant);
     f_Na(1) = K_Na_H_kant*Na(1)*(f_H(1)/H(1))*10^(alpha_kant*f_H(1));
     if ~(isfinite(f_Na(1)) && f_Na(1) >= 0 && f_Na(1) <= f_CEC_sat)
         error('ERW:InfeasibleKantolaNaExchange', ...

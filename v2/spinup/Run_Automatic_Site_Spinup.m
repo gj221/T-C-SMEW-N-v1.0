@@ -111,7 +111,9 @@ else
     buffer_width_m = NaN;
 end
 
-id_location = char(table_value(MOD_PARAM_input,'id_location',MOD_PARAM_input.MOD_PARAM));
+%% The workbook Location names the forcing and state files, as in
+%% Run_One_Subfield (Data_<Location>.mat, Data_<Location>_BG.mat).
+id_location = char(table_value(MOD_PARAM_input,'id_location',MOD_PARAM_input.Location));
 forcing_file = char(table_value(MOD_PARAM_input,'forcing_file',"Data_" + string(id_location) + ".mat"));
 daily_meteo_file = char(table_value(MOD_PARAM_input,'meteo_file',""));
 pH_dilution_factor = table_value(MOD_PARAM_input,'pH_DilutionFactor',NaN);
@@ -177,6 +179,14 @@ if isfield(RUN_SETTINGS,'BG_OUTPUT_FILE') && ...
         ~isempty(strtrim(char(string(RUN_SETTINGS.BG_OUTPUT_FILE))))
     bg_file = char(string(RUN_SETTINGS.BG_OUTPUT_FILE));
 end
+%% A spin-up without an explicit output writes the location's default state
+%% file, the seed the transient campaign reads; it never replaces one unasked.
+if IS_BG_SPINUP && ~(isfield(RUN_SETTINGS,'BG_OUTPUT_FILE') && ...
+        ~isempty(strtrim(char(string(RUN_SETTINGS.BG_OUTPUT_FILE))))) && isfile(bg_file)
+    error('Run_Automatic_Site_Spinup:WouldOverwriteState', ...
+        ['A spin-up without BG_OUTPUT_FILE writes %s, which already exists. ' ...
+         'Pass BG_OUTPUT_FILE, or move the existing state away first.'], bg_file);
+end
 if IS_BG_SPINUP
     bg_state = [];
     if exist('SPINUP_SEED_FILE','var') && ~isempty(strtrim(char(SPINUP_SEED_FILE)))
@@ -220,36 +230,8 @@ else
     NupI_L_out = bg_state.NupI_L_out;
     O_out = bg_state.O_out;
     RexmyI_out = bg_state.RexmyI_out;
-    if isfield(bg_state,'Nreserve_L_out');  Nreserve_L_out  = bg_state.Nreserve_L_out;  end
-    if isfield(bg_state,'Preserve_L_out');   Preserve_L_out   = bg_state.Preserve_L_out;   end
-    if isfield(bg_state,'Kreserve_L_out');   Kreserve_L_out   = bg_state.Kreserve_L_out;   end
-    if isfield(bg_state,'Careserve_L_out');  Careserve_L_out  = bg_state.Careserve_L_out;  end
-    if isfield(bg_state,'Mgreserve_L_out');  Mgreserve_L_out  = bg_state.Mgreserve_L_out;  end
-    if isfield(bg_state,'Sireserve_L_out');  Sireserve_L_out  = bg_state.Sireserve_L_out;  end
-    if isfield(bg_state,'Nreserve_H_out');   Nreserve_H_out   = bg_state.Nreserve_H_out;   end
-    if isfield(bg_state,'Preserve_H_out');   Preserve_H_out   = bg_state.Preserve_H_out;   end
-    if isfield(bg_state,'Kreserve_H_out');   Kreserve_H_out   = bg_state.Kreserve_H_out;   end
-    if isfield(bg_state,'Careserve_H_out');  Careserve_H_out  = bg_state.Careserve_H_out;  end
-    if isfield(bg_state,'Mgreserve_H_out');  Mgreserve_H_out  = bg_state.Mgreserve_H_out;  end
-    if isfield(bg_state,'Sireserve_H_out');  Sireserve_H_out  = bg_state.Sireserve_H_out;  end
-    % Read each respiration handoff independently: the spin-up writes r_het and
-    % r_aut separately (r_het has a Phase 2 fallback, r_aut does not), so a
-    % handoff may carry one without the other.  MAIN_FRAME tolerates an empty
-    % value (keeps its own dynamic respiration for that component).
-    if isfield(bg_state,'spinup_r_het_mean_umol_m2_d')
-        spinup_r_het_mean_umol_m2_d = bg_state.spinup_r_het_mean_umol_m2_d;
-    else
-        spinup_r_het_mean_umol_m2_d = [];
-    end
-    if isfield(bg_state,'spinup_r_aut_mean_umol_m2_d')
-        spinup_r_aut_mean_umol_m2_d = bg_state.spinup_r_aut_mean_umol_m2_d;
-    else
-        spinup_r_aut_mean_umol_m2_d = [];
-    end
-    % Annual-mean water loss behind the steady-state solute seeds.  Required,
-    % not optional: the transient cannot re-derive it from the two days it has
-    % at initialisation, and a silently re-derived seed mis-scales every solute.
-    spinup_water_loss_mean_l_m2_d = bg_state.spinup_water_loss_mean_l_m2_d;
+    %% Respiration, the Na-seed water loss and the plant reserves start the
+    %% way the v0.9 driver starts them, from the run and the parameter file.
     % Keep the converged exchange state for the transient pH inversion.
     if isfield(bg_state, 'spinup_erw_handoff_diagnostic') && ...
             isstruct(bg_state.spinup_erw_handoff_diagnostic)
@@ -291,7 +273,19 @@ eval(append('Zs', '=', eval('MOD_PARAM_input.Zs'), ';'));
 ms = length(Zs) - 1;
 cc = MOD_PARAM_input.cc;
 
+site_Lat = Lat; site_Lon = Lon; site_DeltaGMT = DeltaGMT;
 load(data_input_file);
+%% The forcing file carries its own site; the case row decides where the
+%% run is.  A file prepared for another site is refused rather than
+%% silently moving the run (and its solar geometry) there.
+if exist('Lat','var') && exist('Lon','var') && ...
+        (abs(double(Lat) - site_Lat) > 0.01 || abs(double(Lon) - site_Lon) > 0.01)
+    error('Run_Automatic_Site_Spinup:SiteMismatch', ...
+        ['%s holds forcing for %.4f N %.4f E; the case row is at ' ...
+         '%.4f N %.4f E.'], data_input_file, Lat, Lon, site_Lat, site_Lon);
+end
+Lat = site_Lat; Lon = site_Lon; DeltaGMT = site_DeltaGMT;
+clear site_Lat site_Lon site_DeltaGMT
 % Find the observation struct generically (the only workspace struct with Date and pH)
 obs_vars = whos;
 field_obs = struct();
@@ -496,6 +490,15 @@ else
     topo = [];
 end
 
+if IS_BG_SPINUP && isfield(RUN_SETTINGS,'CELL_ID')
+    %% Run_BG_Spinup stamps these on the state before its single write.
+    RUN_SETTINGS.CELL_ID = validate_cell_id(RUN_SETTINGS.CELL_ID);
+    if ~isfield(RUN_SETTINGS,'CELL_AGRONOMIC_IDENTITY') || ...
+            isempty(strtrim(char(string(RUN_SETTINGS.CELL_AGRONOMIC_IDENTITY))))
+        error('Run_Automatic_Site_Spinup:MissingCellIdentity', ...
+            'CELL_AGRONOMIC_IDENTITY is required when CELL_ID is supplied.');
+    end
+end
 if IS_BG_SPINUP
     run('Run_BG_Spinup.m');
 else
@@ -506,18 +509,6 @@ else
     cd(current_directory);
 end
 
-if IS_BG_SPINUP && isfield(RUN_SETTINGS,'CELL_ID')
-    bg_state = load_bg_state(bg_file);
-    bg_state.cell_id = validate_cell_id(RUN_SETTINGS.CELL_ID);
-    if ~isfield(RUN_SETTINGS,'CELL_AGRONOMIC_IDENTITY') || ...
-            isempty(strtrim(char(string(RUN_SETTINGS.CELL_AGRONOMIC_IDENTITY))))
-        error('Run_Automatic_Site_Spinup:MissingCellIdentity', ...
-            'CELL_AGRONOMIC_IDENTITY is required when CELL_ID is supplied.');
-    end
-    bg_state.cell_agronomic_identity = ...
-        char(string(RUN_SETTINGS.CELL_AGRONOMIC_IDENTITY));
-    save_bg_state(bg_file,bg_state);
-end
 
 % PH_out is pre-allocated as zeros; row 1 (initial state) is never written
 % by the model loop, so set it explicitly from the parameter initial value.

@@ -69,6 +69,7 @@ UP_Si = zeros(length(t), 1);
 
 PO4 = zeros(length(t), 1);
 PO4_tot = zeros(length(t), 1);
+P_weathering_release = zeros(length(t), 1);
 
 NO3 = zeros(length(t), 1);
 NO3_tot = zeros(length(t), 1);
@@ -107,7 +108,17 @@ AlOH3_solid = zeros(length(t), 1);
 Omega_AlOH3 = zeros(length(t), 1);
 Al_inventory_residual = nan(length(t), 1);
 charge_residual = nan(length(t), 1);
+dAlk_sil = zeros(length(t), 1);
+dAlk_carb = zeros(length(t), 1);
+dAlk_check = zeros(length(t), 1);
+dAlk_total = zeros(length(t), 1);
 gamma_i = nan(length(t), 5);
+pH_conc = zeros(length(t), 1);
+ionic_str = zeros(length(t), 1);
+activity_I = zeros(length(t), 1);
+gamma_mono = zeros(length(t), 1);
+pCO2_atm = zeros(length(t), 1);
+activity_passes = zeros(length(t), 1);
 
 M_rock = zeros(length(t), 1);
 SA = zeros(length(t), 1);
@@ -168,6 +179,10 @@ Pcla = NaN;
 if isfield(ERW_TC_const_input,'Pcla'); Pcla = ERW_TC_const_input.Pcla; end
 Al_CEC_scale = conv_Al;
 M_rock_add = ERW_TC_const_input.M_rock_add;
+M_rock_add_CaCO3 = 0;
+if isfield(ERW_TC_const_input,'M_rock_add_CaCO3')
+    M_rock_add_CaCO3 = ERW_TC_const_input.M_rock_add_CaCO3;
+end
 
 % varying varaibles
 temp_soil = TT_m_input.temp_soil;
@@ -269,7 +284,7 @@ CEC_tot = CEC_tot_in*1e-5*rho_bulk*Zrw*conv_mol*ones(length(t), 1); % [umol_c]
 pH(1)= pH_in;
 
 % Carbonate minerals (considered as an additional pool)
-CaCO3(1) = CaCO3_in; %[umol-conv]
+CaCO3(1) = CaCO3_in + M_rock_add_CaCO3(1); %[umol-conv]
 MgCO3(1) = MgCO3_in;
 
 
@@ -451,7 +466,11 @@ end
 % n_extract is set exclusively from pH_DilutionFactor in the Excel parameter
 % table (L water / kg dry soil).  Runs after the merge so Excel always wins.
 % Methods: 1:1 water:soil (n=1), 1:2 DI water (n=2), 1:2.5 (n=2.5), 1:5 (n=5).
-% Kantola/Beerling production uses 1:2 DI water when the matrix is unstated.
+% Beerling et al. (2023 preprint, arXiv 2307.05343), Soil analyses: soil pH
+% measured in a 1:2.5 soil-to-water paste - 10 g air-dried soil sieved <2 mm
+% with 25 mL ultrapure water, vortexed 10 s.  The 2024 PNAS
+% version cites the method by reference only; its 10 g / 25 mL figure appears
+% in the sodium-phosphate Si extraction, which is a different assay.
 if exist('pH_DilutionFactor','var') && isnumeric(pH_DilutionFactor) && ...
         isfinite(pH_DilutionFactor) && pH_DilutionFactor > 0
     bulk_pH_params.n_extract = pH_DilutionFactor;
@@ -645,13 +664,13 @@ k_v = 1000*1e2; % temperate forest
 %Carb weathering constants
 % Carbonate solutibility products
 % https://booksite.elsevier.com/9780120885305/appendices/Web_Appendices.pdf
-K_CaCO3 = 10^(-8.35)*conv_mol^2; % Calcite [mol^2]
-K_MgCO3 = 10^(-7.46)*conv_mol^2; % Magnesite [mol^2]
+K_CaCO3 = 10^(-171.9065-0.077993*T_K(1)+2839.319/T_K(1)+71.595*log10(T_K(1)))*conv_mol^2; % Calcite [mol^2], Plummer & Busenberg (1982)
+K_MgCO3 = 10^(-5.27)*exp(17170/R*(1/T_K(1)-1/298.15))*conv_mol^2; % Nesquehonite [mol^2], Harrison et al. (2019), van't Hoff with dH_r = -17.17 kJ/mol
 
 % precipitation rate
 % https://nora.nerc.ac.uk/id/eprint/511084/1/Kirk%20et%20al%202015%20Geochmica%20et%20Cosmochimica%20Acta.pdf
 r_CaCO3 = 5e-10*1e3*(24*3600)*conv_mol; % [umol m^-3 soil d^-1]
-r_MgCO3 = 0; % direct anhydrous MgCO3 precipitation is inhibited at field temperature
+r_MgCO3 = r_CaCO3; % nesquehonite; no soil rate is published and it precipitates at equilibrium within hours (Harrison et al., 2013)
 
 
 
@@ -659,6 +678,11 @@ r_MgCO3 = 0; % direct anhydrous MgCO3 precipitation is inhibited at field temper
 CO2_w_rain(1) = k_H(1)*CO2_atm(1); % [mol/l] Henry's law
 
 %pCO2 - partial pressure of CO2 [Pa]
+%%% For uniform production q over a layer of depth L with a no-flux base,
+%%% D*C'' = -q gives an excess over the atmosphere of q*L^2/(2D) at the base
+%%% and q*L^2/(3D) as the layer mean.  The box flux q*L = D*(C-C_atm)/Z_CO2
+%%% with Z_CO2 = Zrw/2 therefore carries the BASE excess, 1.5 times the
+%%% layer-mean excess (Z_CO2 = Zrw/3 would carry the mean).
 if Zrw<=0.3
     Z_CO2=Zrw/2;
 else
@@ -692,7 +716,7 @@ if ~isfield(bulk_pH_params, 'initial_Al_w')
     end
 end
 if string(excel_input.fX_conc_convention) == "Kantola"
-    bulk_pH_params.initial_anion_convention = 'carbonate_frame';
+    bulk_pH_params.initial_anion_convention = 'full_charge';
 end
 
 % The initialization boundary is explicit: either retain a prescribed field
@@ -703,83 +727,147 @@ if ~isfield(bulk_pH_params,'n_extract') || ...
     error('ERW:missingParam', ...
         'Observed bulk pH initialization requires a positive extraction ratio.');
 end
-if initial_pH_mode == "bulk_observed"
-    [H(1), bulk_pH_params, f_Ca(1), f_Mg(1), f_K(1), f_Na(1), f_Al(1), f_H(1), ...
-        An(1), Al_w(1), Ca(1), Mg(1), K(1), Na(1)] = Invert_Bulk_pH( ...
-        pH_in, Ca(1), Mg(1), K(1), Na(1), NO3(1), PO4(1), NH4(1), ...
-        CO2_atm(1), CO2_w(1), k1(1), k2(1), k_w(1), k_nh3(1), k_H(1), ...
-        K1, K2, K3, K4, CEC_tot(1), rho_bulk, Zrw, conv_mol, ...
-        bulk_pH_params, K_AlOH3, Al_CEC_scale);
-end
-
-% Sodium needs no re-baseline here.  The Kantola seed
-% (ERW_pre_processing) sets pore-water Na from deposition and derives
-% its exchange fraction from the Appelo law, so the inventory handed
-% to the inversion is already the one the exchanger can host.
-
-pH(1) = -log10(H(1)/conv_mol);
-Al_den_seed = H(1)^4 + H(1)^3*K1 + H(1)^2*K1*K2 + ...
-    H(1)*K1*K2*K3 + K1*K2*K3*K4;
-Al(1) = (H(1)^4/Al_den_seed) * Al_w(1);
-f_CEC(1,:) = [f_Ca(1), f_Mg(1), f_K(1), f_Na(1), f_Al(1), f_H(1)];
-bulk_pH_params.H_init = NaN;
-bulk_pH_params.H_extract_anchor_umolL = NaN;
-bulk_pH_params.H_pore_anchor_umolL = H(1);
-
-%carbonate system
-HCO3(1)= k1(1)*CO2_w(1)/H(1); % bicarbonate [umol/l]
-CO3(1)= k2(1)*k1(1)*CO2_w(1)/(H(1)^2); % carbonate [umol/l]
-DIC(1)= HCO3(1)+CO3(1)+CO2_w(1); % dissolved inorganic C (includes bicarbonate, carbonate and dissolved CO2 (carbonic acid))
-IC_tot(1)=(DIC(1)*s(1)+CO2_air(1)*(1-s(1)))*(n(1)*Zrw*1000);% total inorganic C [umol]
-
-%Alkalinity
-Alk(1)= HCO3(1)+2*CO3(1)-H(1)+k_w(1)/H(1); % [umol/L]
-
-% Al from Ca-Al GT exchange at initial pore-water pH
-% If exchange inputs fail, use Al(OH)3 saturation.
-if isnan(Al_w_in) && ~(isfinite(Al_w(1)) && Al_w(1) >= 0)
-    Al_w_eq = Initialize_ERW_Equilibrium(H(1), Ca(1), f_Ca(1), f_Al(1), ...
-        K_Ca_Al, K1, K2, K3, K4, Al_CEC_scale);
-    if isnan(Al_w_eq)
-        Al_w_eq = Initialize_ERW_Equilibrium(H(1), K1, K2, K3, K4, ...
-            conv_mol, K_AlOH3, Al_CEC_scale);
+%%% Activity closure of the seed.  The seed has to satisfy the conditional
+%%% constants (ERW_Conditional_Constants) at its OWN ionic strength, which
+%%% depends on the seed, so the inversion and speciation are repeated from
+%%% the same inputs until that ionic strength is stationary.  An observed
+%%% bulk pH_in is an electrode (activity) pH.  The exported k1, k2, k_w,
+%%% K1..K4 and K_AlOH3 stay thermodynamic: the daily solver and the extract
+%%% operator condition them at their own ionic strength.
+seed_Ca = Ca(1); seed_Mg = Mg(1); seed_K = K(1); seed_Na = Na(1);
+seed_An = An(1); seed_Al_w = Al_w(1);
+seed_f = [f_Ca(1), f_Mg(1), f_K(1), f_Na(1), f_Al(1), f_H(1)];
+seed_bulk_pH_params = bulk_pH_params;
+ionic_str_seed = 0;
+ionic_str_next = NaN;
+seed_closed = false;
+for seed_pass = 1:30
+    Ca(1) = seed_Ca; Mg(1) = seed_Mg; K(1) = seed_K; Na(1) = seed_Na;
+    An(1) = seed_An; Al_w(1) = seed_Al_w;
+    f_Ca(1) = seed_f(1); f_Mg(1) = seed_f(2); f_K(1) = seed_f(3);
+    f_Na(1) = seed_f(4); f_Al(1) = seed_f(5); f_H(1) = seed_f(6);
+    bulk_pH_params = seed_bulk_pH_params;
+    [k_seed,K_AlOH3_s,gamma_seed] = ERW_Conditional_Constants( ...
+        [k1(1),k2(1),k_w(1),K1,K2,K3,K4],K_AlOH3,ionic_str_seed);
+    k1_s = k_seed(1); k2_s = k_seed(2); k_w_s = k_seed(3);
+    K1_s = k_seed(4); K2_s = k_seed(5); K3_s = k_seed(6); K4_s = k_seed(7);
+    gamma_mono_0 = gamma_seed(1);
+    gamma_div_0 = gamma_seed(2);
+    if initial_pH_mode == "bulk_observed"
+        bulk_pH_params.pore_ionic_strength = ionic_str_seed;
+        [H(1), bulk_pH_params, f_Ca(1), f_Mg(1), f_K(1), f_Na(1), f_Al(1), f_H(1), ...
+            An(1), Al_w(1), Ca(1), Mg(1), K(1), Na(1)] = Invert_Bulk_pH( ...
+            pH_in, Ca(1), Mg(1), K(1), Na(1), NO3(1), PO4(1), NH4(1), ...
+            CO2_atm(1), CO2_w(1), k1(1), k2(1), k_w(1), k_nh3(1), k_H(1), ...
+            K1, K2, K3, K4, CEC_tot(1), rho_bulk, Zrw, conv_mol, ...
+            bulk_pH_params, K_AlOH3, Al_CEC_scale);
     end
-    if ~isfinite(Al_w_eq) || Al_w_eq <= 0
-        error('Cannot initialize Al_w from exchange or Al(OH)3 equilibrium.');
+    %%% A prescribed pore-water state keeps its hydrogen concentration: the
+    %%% pre-processing seed (exchange fractions, Al) was derived at it.  Only
+    %%% its reported pH moves to the activity scale.
+
+    % Sodium needs no re-baseline here.  The Kantola seed
+    % (ERW_pre_processing) sets pore-water Na from deposition and derives
+    % its exchange fraction from the Appelo law, so the inventory handed
+    % to the inversion is already the one the exchanger can host.
+
+    pH_conc(1) = -log10(H(1)/conv_mol);
+    pH(1) = pH_conc(1)-log10(gamma_mono_0);
+    if isfield(bulk_pH_params,'dCEC_dpH') && ...
+            (~isfield(bulk_pH_params,'CEC_ref_pH') || isempty(bulk_pH_params.CEC_ref_pH))
+        cec_probe = bulk_pH_params;
+        cec_probe.CEC_ref_pH = pH_conc(1);
+        cec_scheme = 'TC_GT';
+        if isfield(cec_probe,'scheme') && ~isempty(cec_probe.scheme)
+            cec_scheme = char(string(cec_probe.scheme));
+        end
+        if ERW_Resolve_CEC_pH_Sensitivity(cec_probe,cec_scheme) > 0
+            bulk_pH_params.CEC_ref_pH = pH_conc(1);
+        end
+        clear cec_probe cec_scheme
     end
-    Al_w(1) = Al_w_eq;
-end
+    Al_den_seed = H(1)^4 + H(1)^3*K1_s + H(1)^2*K1_s*K2_s + ...
+        H(1)*K1_s*K2_s*K3_s + K1_s*K2_s*K3_s*K4_s;
+    Al(1) = (H(1)^4/Al_den_seed) * Al_w(1);
+    f_CEC(1,:) = [f_Ca(1), f_Mg(1), f_K(1), f_Na(1), f_Al(1), f_H(1)];
+    bulk_pH_params.H_init = NaN;
+    bulk_pH_params.H_extract_anchor_umolL = NaN;
+    bulk_pH_params.H_pore_anchor_umolL = H(1);
 
-% aluminium speciation
-Al(1)=(H(1)^4/(H(1)^4+H(1)^3*K1+H(1)^2*K1*K2+H(1)*K1*K2*K3+K1*K2*K3*K4))*Al_w(1);% [mol/l]
-AlOH(1)=(H(1)^3*K1/(H(1)^4+H(1)^3*K1+H(1)^2*K1* K2+H(1)*K1*K2*K3+K1*K2*K3*K4))* Al_w(1);
-AlOH2(1)=(H(1)^2*K1*K2/(H(1)^4+H(1)^3*K1+H(1)^2*K1*K2+H(1)*K1*K2*K3+K1*K2*K3*K4))*Al_w(1);
-AlOH3(1)=(H(1)*K1*K2*K3/(H(1)^4+H(1)^3*K1+H(1)^2*K1*K2+H(1)*K1*K2*K3+K1*K2*K3*K4))*Al_w(1);
-AlOH4(1)= Al_w(1)-(Al(1)+AlOH(1)+AlOH2(1)+AlOH3(1));
+    %carbonate system
+    HCO3(1)= k1_s*CO2_w(1)/H(1); % bicarbonate [umol/l]
+    CO3(1)= k2_s*k1_s*CO2_w(1)/(H(1)^2); % carbonate [umol/l]
+    DIC(1)= HCO3(1)+CO3(1)+CO2_w(1); % dissolved inorganic C (includes bicarbonate, carbonate and dissolved CO2 (carbonic acid))
+    IC_tot(1)=(DIC(1)*s(1)+CO2_air(1)*(1-s(1)))*(n(1)*Zrw*1000);% total inorganic C [umol]
 
-Al_w_sat(1) = Initialize_ERW_Equilibrium(H(1), K1, K2, K3, K4, conv_mol, K_AlOH3, Al_CEC_scale);
-Omega_AlOH3(1) = Al_w(1) / max(Al_w_sat(1), eps);
+    %Alkalinity
+    Alk(1)= HCO3(1)+2*CO3(1)-H(1)+k_w_s/H(1); % [umol/L]
 
-% Initial An is the unmodelled strong-anion countercharge returned by the
-% observed-pH inverse.  The deposition budget below supplies future fluxes only.
-%
-% Kantola convention: the daily solver closes the charge balance with the
-% carbonate-only species (eq3: HCO3+2CO3-H+k_w/H), and the legacy seed An
-% was the carbonate-frame countercharge.  The bulk-pH inverse returns its
-% own counter-anion from its fuller charge accounting, which on high-Al
-% soils (Kantola Al pools ~2e10 umol/m2) makes Alk_tot negative and leaves
-% the daily balance with no physical root at near-neutral pH.  Restore the
-% legacy carbonate-frame counter-anion so that
-%   Alk_tot = R_alk + Alk*porewater_volume
-% stays positive and the daily system converges.
-if string(excel_input.fX_conc_convention) == "Kantola" && ...
-        initial_pH_mode == "state_prescribed"
-    An(1) = 2*Mg(1)+2*Ca(1)+Na(1)+K(1)+NH4(1)-Alk(1)-PO4(1)-NO3(1);
-    if ~(isfinite(An(1)) && An(1) >= 0)
-        error('ERW:invalidSeed', ...
-            'The Kantola seed charge balance requires a negative residual anion.');
+    % Al from Ca-Al GT exchange at initial pore-water pH
+    % If exchange inputs fail, use Al(OH)3 saturation.
+    if isnan(Al_w_in) && ~(isfinite(Al_w(1)) && Al_w(1) >= 0)
+        Al_w_eq = Initialize_ERW_Equilibrium(H(1), Ca(1), f_Ca(1), f_Al(1), ...
+            K_Ca_Al, K1_s, K2_s, K3_s, K4_s, Al_CEC_scale);
+        if isnan(Al_w_eq)
+            Al_w_eq = Initialize_ERW_Equilibrium(H(1), K1_s, K2_s, K3_s, K4_s, ...
+                conv_mol, K_AlOH3_s, Al_CEC_scale);
+        end
+        if ~isfinite(Al_w_eq) || Al_w_eq <= 0
+            error('Cannot initialize Al_w from exchange or Al(OH)3 equilibrium.');
+        end
+        Al_w(1) = Al_w_eq;
     end
+
+    % aluminium speciation
+    Al(1)=(H(1)^4/(H(1)^4+H(1)^3*K1_s+H(1)^2*K1_s*K2_s+H(1)*K1_s*K2_s*K3_s+K1_s*K2_s*K3_s*K4_s))*Al_w(1);% [mol/l]
+    AlOH(1)=(H(1)^3*K1_s/(H(1)^4+H(1)^3*K1_s+H(1)^2*K1_s* K2_s+H(1)*K1_s*K2_s*K3_s+K1_s*K2_s*K3_s*K4_s))* Al_w(1);
+    AlOH2(1)=(H(1)^2*K1_s*K2_s/(H(1)^4+H(1)^3*K1_s+H(1)^2*K1_s*K2_s+H(1)*K1_s*K2_s*K3_s+K1_s*K2_s*K3_s*K4_s))*Al_w(1);
+    AlOH3(1)=(H(1)*K1_s*K2_s*K3_s/(H(1)^4+H(1)^3*K1_s+H(1)^2*K1_s*K2_s+H(1)*K1_s*K2_s*K3_s+K1_s*K2_s*K3_s*K4_s))*Al_w(1);
+    AlOH4(1)= Al_w(1)-(Al(1)+AlOH(1)+AlOH2(1)+AlOH3(1));
+
+    Al_w_sat(1) = Initialize_ERW_Equilibrium(H(1), K1_s, K2_s, K3_s, K4_s, conv_mol, K_AlOH3_s, Al_CEC_scale);
+    Omega_AlOH3(1) = Al_w(1) / max(Al_w_sat(1), eps);
+
+    % Initial An is the unmodelled strong-anion countercharge returned by the
+    % observed-pH inverse.  The deposition budget below supplies future fluxes only.
+    %
+    if string(excel_input.fX_conc_convention) == "Kantola" && ...
+            initial_pH_mode == "state_prescribed"
+        An(1) = ERW_Residual_An_From_Charge(H(1),CO2_w(1),Ca(1),Mg(1), ...
+            Na(1),K(1),NH4(1),NO3(1),PO4(1),Al_w(1),k1_s,k2_s, ...
+            k_w_s,k_nh3(1),K1_s,K2_s,K3_s,K4_s,Al_CEC_scale);
+        if ~(isfinite(An(1)) && An(1) >= 0)
+            error('ERW:invalidSeed', ...
+                'The Kantola seed has a negative residual anion.');
+        end
+    end
+
+    ionic_str_next = ERW_Ionic_Strength(Ca(1),Mg(1),Na(1),K(1),Al(1)/Al_CEC_scale, ...
+        H(1),NH4(1),NO3(1),HCO3(1),CO3(1),An(1),conv_mol,PO4(1), ...
+        AlOH(1)/Al_CEC_scale,AlOH2(1)/Al_CEC_scale,AlOH4(1)/Al_CEC_scale,k_w_s/H(1));
+    if abs(ionic_str_next-ionic_str_seed) <= 1e-6*max(ionic_str_next,1e-6)
+        seed_closed = true;
+        break
+    end
+    ionic_str_seed = ionic_str_next;
 end
+if ~seed_closed
+    error('ERW:seedActivityClosure', ...
+        'The seed ionic strength did not close in %d passes (%.6g -> %.6g mol/L).', ...
+        seed_pass,ionic_str_seed,ionic_str_next);
+end
+if isfield(bulk_pH_params,'pore_ionic_strength')
+    bulk_pH_params = rmfield(bulk_pH_params,'pore_ionic_strength');
+end
+ionic_str(1) = ionic_str_next;
+activity_I(1) = ionic_str_seed;
+gamma_mono(1) = gamma_mono_0;
+activity_passes(1) = seed_pass;
+%%% The record carries the conditioned constants the seed was speciated
+%%% with, as ERW_function records them at every later step.
+k1(1) = k1_s;
+k2(1) = k2_s;
+k_w(1) = k_w_s;
 
 R_alk(1)=(f_Mg(1)+f_Ca(1)+f_Na(1)+f_K(1))*CEC_tot(1); % [umol_c]
 Ca_tot(1) = Ca(1)*n(1)*s(1)*Zrw*1000+f_Ca(1)/2*CEC_tot(1);
@@ -793,8 +881,10 @@ An_tot(1) = An(1)*n(1)*s(1)*Zrw*1000;
 soil_water_l_0 = n(1)*Zrw*s(1)*1000;
 [~,AlOH3_solid(1),Al_inventory_residual(1)] = ERW_Al_Equilibrium_Target( ...
     H(1),f_Al(1),Al_tot(1),soil_water_l_0,CEC_tot(1),Al_CEC_scale, ...
-    K_AlOH3,K1,K2,K3,K4);
-charge_residual(1) = HCO3(1)+2*CO3(1)-H(1)+k_w(1)/H(1)-Alk(1);
+    K_AlOH3_s,K1_s,K2_s,K3_s,K4_s);
+charge_residual(1) = H(1)+2*Ca(1)+2*Mg(1)+Na(1)+K(1)+NH4(1)+ ...
+    (3*Al(1)+2*AlOH(1)+AlOH2(1)-AlOH4(1))/Al_CEC_scale- ...
+    (k_w_s/H(1)+HCO3(1)+2*CO3(1)+NO3(1)+PO4(1)+An(1));
 if isfield(bulk_pH_params,'scheme') && strcmpi(bulk_pH_params.scheme,'appelo')
     appelo_seed = [];
     if isfield(bulk_pH_params,'appelo')
@@ -838,8 +928,14 @@ I_K = 0;
 I_Si = 0;
 
 %Carbonate weathering
-Omega_CaCO3(1) =Ca(1)*CO3(1)/K_CaCO3;% carbonate saturation index [-]
-Omega_MgCO3(1) = Mg(1)*CO3(1)/K_MgCO3;
+% The seed's HCO3 and CO3 come from the conditional constants, so they are
+% concentrations like Ca and Mg and the carbonate ion activity product is
+% gamma_div^2*Ca*CO3, at the ionic strength the seed closed at -- the
+% same basis ERW_function uses at every later step.
+pCO2_atm(1) = CO2_air(1)*22.41/conv_mol;
+gamma_IAP_0 = gamma_div_0^2;
+Omega_CaCO3(1) = gamma_IAP_0*Ca(1)*CO3(1)/K_CaCO3;% carbonate saturation index, activity basis [-]
+Omega_MgCO3(1) = gamma_IAP_0*Mg(1)*CO3(1)/K_MgCO3;
 
 % dissolution timescale
 tau_CaCO3 = 30; % [d]
@@ -869,7 +965,7 @@ if active_rock_input(rock_f_in) && num_rock_app > 0
     k_diss_OH_t(1,:) = k_diss_OH.*exp(-E_OH.*1000/R*(1/T_K(1,1)-1/T_ref(1))); % temperature-dependent dissociation constant with respect to hydroxide [umol/m²/d]
 
     %rock composition
-    M_rock(1) = M_rock_in; % rock mass [g/m2]
+    M_rock(1) = max(M_rock_in,M_rock_add(1)); % rock mass [g/m2]
     rock_f(1,:)= rock_f_in;
     M_min(1,:)= rock_f(1,:)*M_rock(1); % mineral mass [g/m2]
     M_iner(1) = M_rock(1)*(1-sum(rock_f(1,:))); % inert rock mass??[g/m2]
@@ -902,18 +998,18 @@ if active_rock_input(rock_f_in) && num_rock_app > 0
         for min_j = 1:length(mineral)
             if strcmpi(mineral(min_j),'calcite')
                 [Omega(1,min_j),Wr(1,min_j),EW(1,min_j)] = ERW_Calcite_Kinetics( ...
-                    Ca(1),CO3(1),K_CaCO3,H(1),CO2_air(1),conv_mol,s(1),diss_f, ...
+                    Ca(1),CO3(1),K_CaCO3,gamma_mono_0*H(1),CO2_air(1),conv_mol,s(1),diss_f, ...
                     k_diss_H_t(1,min_j),k_diss_w_t(1,min_j),k_diss_OH_t(1,min_j), ...
                     n_H(min_j),n_OH(min_j),SA(1),rock_f(1,min_j), ...
-                    M_min(1,min_j),MM_min(min_j),dtw_init);
+                    M_min(1,min_j),MM_min(min_j),dtw_init,gamma_IAP_0);
             else
-                [Omega(1,min_j),Omega_defined] = ERW_Mineral_Saturation(mineral(min_j), K(1), Ca(1), Mg(1), Na(1), Si(1), Al(1), PO4(1), H(1), K_sp(min_j), conv_mol);
+                [Omega(1,min_j),Omega_defined] = ERW_Mineral_Saturation(mineral(min_j), K(1), Ca(1), Mg(1), Na(1), Si(1), Al(1), PO4(1), H(1), K_sp(min_j), conv_mol, Al_CEC_scale, activity_I(1));
                 if Omega_defined
                     dissolution_affinity = max(0,1-Omega(1,min_j));
                 else
                     dissolution_affinity = 1; % missing aqueous products: far-from-equilibrium kinetic assumption
                 end
-                Wr(1, min_j) = s(1).*diss_f.*(k_diss_H_t(1,min_j).*(H(1)/conv_mol).^n_H(min_j)+k_diss_w_t(1,min_j)+k_diss_OH_t(1,min_j).*(H(1)/conv_mol).^n_OH(min_j)).*dissolution_affinity; % background weathering rate [mol-conv/ m2 d]
+                Wr(1, min_j) = s(1).*diss_f.*(k_diss_H_t(1,min_j).*(gamma_mono_0*H(1)/conv_mol).^n_H(min_j)+k_diss_w_t(1,min_j)+k_diss_OH_t(1,min_j).*(gamma_mono_0*H(1)/conv_mol).^n_OH(min_j)).*dissolution_affinity; % background weathering rate [mol-conv/ m2 d]
                 EW(1, min_j) = Wr(1, min_j).*SA(1).*rock_f(1, min_j); % enhanced weathering rate [umol/d]
                 EW_inventory_max = M_min(1,min_j)/MM_min(min_j)/dtw_init;
                 if EW(1,min_j) > EW_inventory_max
@@ -937,9 +1033,12 @@ EW_calcite = 0;
 if active_rock_input(rock_f_in) && num_rock_app > 0 && ~isempty(calcite_j)
     EW_calcite = EW(1,calcite_j);
 end
-[EW_calcite,W_CaCO3(1)] = ERW_Calcite_Reaction_Limit( ...
+[EW_calcite,W_CaCO3(1),calcite_limit] = ERW_Calcite_Reaction_Limit( ...
     EW_calcite,W_CaCO3(1),dtw_init,Omega_CaCO3(1),Ca(1),DIC(1),Alk(1), ...
-    n(1)*Zrw*s(1)*1000,k1(1),k2(1),k_w(1),K_CaCO3,conv_mol);
+    n(1)*Zrw*s(1)*1000,k1_s,k2_s,k_w_s,K_CaCO3,conv_mol,gamma_IAP_0);
+[~,W_MgCO3(1)] = ERW_Calcite_Reaction_Limit( ...
+    0,W_MgCO3(1),dtw_init,Omega_MgCO3(1),Mg(1),calcite_limit.DIC_final,calcite_limit.Alk_final, ...
+    n(1)*Zrw*s(1)*1000,k1_s,k2_s,k_w_s,K_MgCO3,conv_mol,gamma_IAP_0);
 if active_rock_input(rock_f_in) && num_rock_app > 0 && ~isempty(calcite_j)
     EW(1,calcite_j) = EW_calcite;
     area_fraction = SA(1)*rock_f(1,calcite_j);
@@ -955,8 +1054,8 @@ end
 ERW_biogeochem_varnames = {'pH';'CO2_air';'CO2_atm';'Ca';'Mg';'K';'Na';'An';'Al';'AlOH';'AlOH2';'AlOH3';'AlOH4';'Si';'PO4';'NO3';'NH4';'H';
     'Ca_tot';'Mg_tot';'K_tot';'Na_tot';'An_tot';'Al_tot';'Si_tot';'PO4_tot';'NO3_tot';'NH4_tot';'IC_tot';'CEC_tot';'K_CEC';
     'R_alk';'Fs';'DIC';'CaCO3';'MgCO3';'f_Ca';'f_Mg';'f_K';'f_Na';'f_Al';'f_H';'f_CEC';'M_min';'CO2_w';'Alk';'Alk_tot';'k_H';'ADV';'DIC_rain';'D';'CO3';...
-    'Al_w';'Al_w_sat';'AlOH3_solid';'Al_inventory_residual';'charge_residual';'gamma_i';'HCO3';'Leak_Na';'Leak_Al';'Leak_An';'Leak_DIC';'Na_uptake';'An_uptake';...
-    'k1';'k2';'k_w';'k_nh3'};
+    'Al_w';'Al_w_sat';'AlOH3_solid';'Al_inventory_residual';'charge_residual';'dAlk_sil';'dAlk_carb';'dAlk_check';'dAlk_total';'gamma_i';'HCO3';'Leak_Na';'Leak_Al';'Leak_An';'Leak_DIC';'Na_uptake';'An_uptake';...
+    'k1';'k2';'k_w';'k_nh3';'pH_conc';'ionic_str';'activity_I';'gamma_mono';'pCO2_atm';'activity_passes';'Omega_CaCO3'};
 
 ERW_biogeochem = struct();
 for var_index = 1:size(ERW_biogeochem_varnames,1)
@@ -980,7 +1079,7 @@ ERW_biogeochem.pH_bulk(1) = pH_bulk_raw;
 
 % structure containing weathering variables
 ERW_weathering_varnames = {'EW';'Wr';'psd';'d';'lamb';'SSA';
-    'W_CaCO3';'W_MgCO3';'Omega';'Omega_AlOH3';'delta_d';'SA'};
+    'W_CaCO3';'W_MgCO3';'P_weathering_release';'Omega';'Omega_AlOH3';'delta_d';'SA'};
 
 ERW_weathering = struct();
 for var_index = 1:size(ERW_weathering_varnames,1)
@@ -1192,7 +1291,7 @@ function [MM_min,k_diss_H,k_diss_w,k_diss_OH,E_H,E_w,...
         n_H = 0.457; % reaction order
         n_OH = -0.572;
         min_st = [0, 0, 0, 1, 1, 3, 0]; % Stochiometric coefficients [Ca, Mg, K, Na, Al, Si, P]
-        K_sp = 10^(-0.68);
+        K_sp = 10^(2.7645/4); % NaAlSi3O8 + 4H+ = Na+ + Al+++ + 3H4SiO4, llnl.dat, per proton
     elseif strcmp(mineral, 'anorthite') % CaAl2Si2O8
         MM_min = 278/conv_mol; % [g/mol-conv]
         k_diss_H = 10^(-3.5)*24*3600*conv_mol; % [mol-conv m-2 d-1]
@@ -1204,7 +1303,7 @@ function [MM_min,k_diss_H,k_diss_w,k_diss_OH,E_H,E_w,...
         n_H = 1.4; % reaction order
         n_OH = 1;
         min_st = [1, 0, 0, 0, 2, 2, 0]; % Stochiometric coefficients [Ca, Mg, K, Na, Al, Si, P]
-        K_sp = 10^(9.83);
+        K_sp = 10^(26.578/8); % CaAl2Si2O8 + 8H+ = Ca++ + 2Al+++ + 2H4SiO4, llnl.dat, per proton
     elseif strcmp(mineral, 'labradorite') % Na0.4Ca0.6Al1.6Si2.4O8 (http://webmineral.com/data/Labradorite.shtml)
         MM_min = 272/conv_mol; % [g/mol-conv]
         k_diss_H = 10^(-7.87)*24*3600*conv_mol; % [mol-conv m-2 d-1]
@@ -1291,13 +1390,19 @@ function [MM_min,k_diss_H,k_diss_w,k_diss_OH,E_H,E_w,...
         K_sp = 10^(43.85); % https://thermoddem.brgm.fr/species/epidote
     elseif strcmp(mineral, 'ferroactinolite') % Ca2(Mg0.75Fe0.25)5Si8.5O22(OH)2 - Amphibole  - Lewis et al. (2021)
         MM_min = 865.8/conv_mol; % [g/mol-conv]
-        k_diss_H = 10^(-8.4)*24*3600*conv_mol; % [mol-conv m-2 d-1]
-        k_diss_w = 10^(-10.6)*24*3600*conv_mol;
+        % Rate law of Hermanska et al. (2022, Chem. Geol. 597, 120807), whose
+        % tremolite fit PHREEQC's phreeqc_rates.dat also lists for
+        % ferroactinolite. The Palandri and Kharaka (2004) tremolite row used
+        % before (10^-8.4, 18.9, 0.7; 10^-10.6, 94.4) is taken from Sverdrup
+        % (1990), not fitted to tremolite experiments, and is about 60 times
+        % the measured rate at pH 6 (AMPHIBOLE_KINETICS_2026-10-02.md).
+        k_diss_H = 10^(-11.3)*24*3600*conv_mol; % [mol-conv m-2 d-1]
+        k_diss_w = 10^(-13.1)*24*3600*conv_mol;
         k_diss_OH = 0;
-        E_H = 18.9; % [kJ/mol]: activation energies
-        E_w = 94.4;
+        E_H = 50; % [kJ/mol]: activation energies
+        E_w = 48;
         E_OH = 0;
-        n_H = 0.7; % reaction order
+        n_H = 0.2; % reaction order
         n_OH = 1;
         min_st = [2, 3.75, 0, 0, 0, 8.5, 0]; % Stochiometric coefficients [Ca, Mg, K, Na, Al, Si, P]]
         K_sp = 10^(7.3); % https://thermoddem.brgm.fr/species/actinolite
@@ -1315,13 +1420,14 @@ function [MM_min,k_diss_H,k_diss_w,k_diss_OH,E_H,E_w,...
         K_sp = 10^(-4); 
     elseif strcmp(mineral, 'actinolite') % Ca2(Mg2.25Fe2.5Al0.25)(Si7.75Al0.25)O22(OH)2 - https://thermoddem.brgm.fr/species/actinolite
         MM_min = 892/conv_mol; % [g/mol-conv]
-        k_diss_H = 10^(-8.4)*24*3600*conv_mol; % [mol-conv m-2 d-1]
-        k_diss_w = 10^(-10.6)*24*3600*conv_mol;
+        % Same amphibole rate law as ferroactinolite (Hermanska et al. 2022).
+        k_diss_H = 10^(-11.3)*24*3600*conv_mol; % [mol-conv m-2 d-1]
+        k_diss_w = 10^(-13.1)*24*3600*conv_mol;
         k_diss_OH = 0;
-        E_H = 18.9; % [kJ/mol]: activation energies
-        E_w = 94.4;
+        E_H = 50; % [kJ/mol]: activation energies
+        E_w = 48;
         E_OH = 0;
-        n_H = 0.7; % reaction order
+        n_H = 0.2; % reaction order
         n_OH = 1;
         min_st = [2, 2.25, 0, 0, 0.5, 7.75, 0]; % Stochiometric coefficients [Ca, Mg, K, Na, Al, Si, P]
         K_sp = 10^(7.13); 

@@ -233,8 +233,9 @@ assert(all([ParEx_H.bfix] == 0) && all([ParEx_L.bfix] == 0), ...
     'PFT_Prairie_Margin:UnexpectedBNF', ...
     'Big bluestem and purple coneflower must both be non-fixing PFTs.');
 
-%% --- Management: an established perennial margin is neither sown nor
-%%     harvested during the simulation, and receives no fertiliser.
+%% --- Management: a perennial margin sown at the start of the simulation
+%%     (initial stand state below). The crop machinery never sows or
+%%     harvests it, it is mown once a year, and it receives no fertiliser.
 %% Overwrite fields on the management structs the base file already
 %% built.  Re-calling Vegetation_Management_Parameter here would fail:
 %% the base file adds crop-rotation fields (Date_sowing, Crop_B, ...) to
@@ -255,10 +256,91 @@ for islot = 1:2
     Mpar_L(islot).fract_left_AB   = 1;
     Mpar_L(islot).fract_left_BG   = 1;
 end
+%% Reserves. The base file initialises the L slots with large seed reserves
+%% (Nreserve_L = 1000 gN/m2) which Crop_Planting_Harvest overwrites at every
+%% planting via Nreserve = SeedNut(1). Prairie sets Date_sowing = [], so
+%% planting never fires and that initialisation would persist for the whole
+%% run: rNc reaches ~200, e_relN exceeds the 100 guard in Nutrients_Available
+%% (line 212) and the function returns early with its outputs unset. The
+%% base file also seeds Careserve/Mgreserve/Sireserve at 1000 g/m2 for BOTH
+%% slots (unlike Nreserve/Preserve/Kreserve, it never zeroes these for the
+%% H slot either). Nutrients_Available's rCac/rMgc/rSic take the identical
+%% uncapped form as rNc, so the same failure mode applies to Ca, Mg and Si:
+%% hundreds against an actual plant nutrient content of a few g/m2, both
+%% inflating litter nutrient return without bound and saturating
+%% Plant_Nutrient_Suppression at 1 (uptake fully suppressed). Traced against
+%% a Bouchet trajectory (control, margin_prairie, run 7): this was the
+%% source of the >0.4 eq/m2/d unbalanced base-cation influx that drove
+%% pore-water pH past 11 by day 153 and refused ERW_function's Appelo
+%% exchange step (dominant residual f_Al, the selectivity product falling
+%% below the solver's 1e-24 log floor).
+%%
+%% The margin starts from seed (initial stand state below), so give it the
+%% reserve a sowing event gives a crop. Crop_Planting_Harvest seeds every
+%% element with SeedNut = Crop_B(2) * (1/leaf - 1/storage): the nutrient
+%% the seed carbohydrate reserve holds at storage stoichiometry beyond its
+%% leaf stoichiometry. That is exactly the flexible storage capacity
+%% Xsto = FiS*B(4)*(1/leaf - 1/storage) that Nutrients_Available computes
+%% for B(4) = Crop_B(2) (FiS = 1, reserve-pool ratios equal the storage
+%% ratios), so every relative-concentration factor starts at its neutral
+%% value 1 and Plant_Nutrient_Suppression starts partially engaged, the
+%% state a sown crop starts from. Set every element for both slots
+%% explicitly (slot 2 is empty and gets zero) so this override does not
+%% depend on which element the base file happens to leave nonzero.
+%% The helper variables are cleared after the stand state below, so they
+%% do not end up in the cell parameter struct Load_Cell_Parameters builds.
+prairie_seed_B = [20 30];   %% [gC/m2 crown] sowing fine root, sowing reserve (base file Crop_B)
+St_seed = Stoich_H(1);
+prairie_seed_H = max(0, prairie_seed_B(2) .* ...
+    ([1/St_seed.Nl 1/St_seed.Phol 1/St_seed.Kpotl 1/St_seed.Call 1/St_seed.Magl 1/St_seed.Sill] - ...
+     [1/St_seed.Ns 1/St_seed.Phos 1/St_seed.Kpots 1/St_seed.Cals 1/St_seed.Mags 1/St_seed.Sils]));
+St_seed = Stoich_L(1);
+prairie_seed_L = max(0, prairie_seed_B(2) .* ...
+    ([1/St_seed.Nl 1/St_seed.Phol 1/St_seed.Kpotl 1/St_seed.Call 1/St_seed.Magl 1/St_seed.Sill] - ...
+     [1/St_seed.Ns 1/St_seed.Phos 1/St_seed.Kpots 1/St_seed.Cals 1/St_seed.Mags 1/St_seed.Sils]));
+Nreserve_H(1,:)  = [prairie_seed_H(1) 0];
+Preserve_H(1,:)  = [prairie_seed_H(2) 0];
+Kreserve_H(1,:)  = [prairie_seed_H(3) 0];
+Careserve_H(1,:) = [prairie_seed_H(4) 0];
+Mgreserve_H(1,:) = [prairie_seed_H(5) 0];
+Sireserve_H(1,:) = [prairie_seed_H(6) 0];
+Nreserve_L(1,:)  = [prairie_seed_L(1) 0];
+Preserve_L(1,:)  = [prairie_seed_L(2) 0];
+Kreserve_L(1,:)  = [prairie_seed_L(3) 0];
+Careserve_L(1,:) = [prairie_seed_L(4) 0];
+Mgreserve_L(1,:) = [prairie_seed_L(5) 0];
+Sireserve_L(1,:) = [prairie_seed_L(6) 0];
+
 Mpar_H(1).Crop_crown = ones(1,12);    %% present all year, every year
 Mpar_H(2).Crop_crown = zeros(1,12);
 Mpar_L(1).Crop_crown = ones(1,12);
 Mpar_L(2).Crop_crown = zeros(1,12);
+
+%% Hay management. A field-edge prairie strip is mown rather than left
+%% unmanaged. Warm-season tallgrass hay in central Illinois is taken as a
+%% single cut in late summer -- after mid-July so ground-nesting birds have
+%% fledged, early enough that the sward regrows before dormancy.
+%%   MowKeepFraction 0.4 -> 60% of standing leaf and standing dead removed.
+%%   fract_left 0.1      -> 90% of the cut material is baled off site, 10%
+%%                          returns as field loss. Roots, sapwood and the
+%%                          carbohydrate reserve are untouched, so the
+%%                          perennial regrows from its own reserves.
+%% Slot 2 is unused (Crop_crown all zero) and stays unmanaged.
+for islot = 1
+    %% Grass cut. VEGGIE_UNIT calls Grass_Cut_Grazing when aSE==2, which
+    %% caps LAI at LAI_cut and returns the removed leaf and standing dead
+    %% in RB([1,7]); fract_left then splits that between litter and export.
+    %% Roots, sapwood and reserves are untouched, so the sward regrows.
+    %% jDay_cut holds datenums (VEGGIE_UNIT:222 compares against datenum).
+    Mpar_H(islot).jDay_cut = datenum(2009:1:2050,8,1);
+    Mpar_L(islot).jDay_cut = datenum(2009:1:2050,8,1);
+    Mpar_H(islot).LAI_cut  = 1.0;
+    Mpar_L(islot).LAI_cut  = 1.0;
+    Mpar_H(islot).fract_left    = 0.1;
+    Mpar_L(islot).fract_left    = 0.1;
+    Mpar_H(islot).fract_left_fr = 0.1;
+    Mpar_L(islot).fract_left_fr = 0.1;
+end
 %% Litter returned to soil  [N P K Ca Mg Si] of residue
 Mpar_H(1).NPK_res_ini = [10 1.5 12 3.0 2.0 8.0];   %% C4 grass litter, low N
 Mpar_L(1).NPK_res_ini = [18 2.5 18 8.0 3.0 1.0];   %% forb litter, higher N and Ca
@@ -275,23 +357,32 @@ if exist('B_IO','var') && isstruct(B_IO)
     B_IO.FertSi = zeros(1,366);
 end
 
-%% --- Initial stand state: an established margin, not a bare seedbed
-LAI_H(1,:)  = [0.3 0.0];
-LAI_L(1,:)  = [0.2 0.0];
-hc_H(1,:)   = [1.8 0.0];    %% [m] mature big bluestem culm height
-hc_L(1,:)   = [0.8 0.0];    %% [m] coneflower flowering height
-SAI_H(1,:)  = [0.05 0.0];
-SAI_L(1,:)  = [0.01 0.0];
+%% --- Initial stand state: sown from seed at the start of the run, not an
+%%     established margin. The strip is taken to be sown on the start date,
+%%     so the stand begins as the post-sowing state Crop_Planting_Harvest
+%%     creates for a crop (fine root B(3) = Crop_B(1), carbohydrate reserve
+%%     B(4) = Crop_B(2), nothing else) with the matching seed nutrient
+%%     reserve set above: no leaf, no standing dead, no leaf age, seedling
+%%     height. The sward has to grow from its own reserve. Dormant
+%%     (PHE_S = 1) at a January start; phenology releases growth when the
+%%     season allows. Slot 2 is the base file's soybean slot, empty.
+LAI_H(1,:)  = [0.0 0.0];
+LAI_L(1,:)  = [0.0 0.0];
+hc_H(1,:)   = [0.05 0.0];   %% [m] seedling height
+hc_L(1,:)   = [0.05 0.0];   %% [m] seedling height
+SAI_H(1,:)  = [0.001 0.0];
+SAI_L(1,:)  = [0.001 0.0];
 PHE_S_H(1,:)= [1 0];
 PHE_S_L(1,:)= [1 0];
 %% Live leaves / sapwood / fine roots / reserve / fruit / heartwood / dead leaves
-B_H(1,1,:)  = [15 0 250 120 0 0 10 0];
-B_L(1,1,:)  = [10 0 120  80 0 0  5 0];
+B_H(1,1,:)  = [0 0 prairie_seed_B(1) prairie_seed_B(2) 0 0 0 0];
+B_L(1,1,:)  = [0 0 prairie_seed_B(1) prairie_seed_B(2) 0 0 0 0];
 B_H(1,2,:)  = zeros(1,8);
 B_L(1,2,:)  = zeros(1,8);
-AgeL_H(1,:) = [30 0];
-AgeL_L(1,:) = [30 0];
+AgeL_H(1,:) = [0 0];
+AgeL_L(1,:) = [0 0];
+clear prairie_seed_B prairie_seed_H prairie_seed_L St_seed
 
 fprintf(['[PFT_Prairie_Margin] big bluestem (C4, HIGH, ZR95=%d mm) + ' ...
-    'purple coneflower (C3, LOW, ZR95=%d mm), perennial, unfertilised\n'], ...
+    'purple coneflower (C3, LOW, ZR95=%d mm), perennial, sown from seed, unfertilised\n'], ...
     ZR95_H(1), ZR95_L(1));

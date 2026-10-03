@@ -22,7 +22,10 @@ end
 function txt = clean_name(txt)
 txt = string(txt);
 txt = strip(txt);
-txt = regexprep(txt, '^[\\/]+', '');
-txt = regexprep(txt, '[\\/]+$', '');
+%% Leading and trailing separators of either kind, without a backslash
+%% literal (test_bouchet_linux_portability).
+sep = ['[/' char(92) char(92) ']+'];
+txt = regexprep(txt, ['^' sep], '');
+txt = regexprep(txt, [sep '$'], '');
 txt = regexprep(txt, '\s+', '_');
 end

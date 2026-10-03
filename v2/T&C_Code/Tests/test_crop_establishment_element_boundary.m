@@ -8,16 +8,16 @@ crop_file = fullfile(code_dir,'Crop_Planting_Harvest.m');
 maize = Veg_Stoichiometric_Parameter(15,"Maize");
 soy = Veg_Stoichiometric_Parameter(12,"Soybean");
 
-maize_c = [0.52 0.78];
-soy_c = [1.18 1.76];
+maize_c = [20 30];   %% legacy 50 g C m-2 seed initializer
+soy_c   = [20 30];   %% legacy 50 g C m-2 seed initializer
 zero_seed = zeros(1,6);
 extra_seed = [0.03 0.004 0.01 0.002 0.001 0];
 
 maize_input = Plant_Establishment_Element_Boundary(maize_c,zero_seed,maize);
 soy_input = Plant_Establishment_Element_Boundary(soy_c,extra_seed,soy);
 
-assert(sum(maize_c)<2 && sum(soy_c)<4, ...
-    'Crop establishment C must remain within the prescribed seed-carbon scale.');
+assert(abs(sum(maize_c)-50)<1e-12 && abs(sum(soy_c)-50)<1e-12, ...
+    'Crop establishment C must match the legacy 50 g C m-2 seed initializer.');
 assert(max(abs(maize_input-[sum(maize_c) implied_elements(maize_c,maize)]))<1e-14, ...
     'Maize establishment does not conserve the initialized tissue elements.');
 assert(max(abs(soy_input-[sum(soy_c) implied_elements(soy_c,soy)+extra_seed]))<1e-14, ...
@@ -32,8 +32,8 @@ expect_error(@() Plant_Establishment_Element_Boundary(maize_c,[-1 zeros(1,5)],ma
 
 param_source = fileread(param_file);
 crop_source = fileread(crop_file);
-assert(~contains(param_source,'Crop_B=[20 30]'), ...
-    'The legacy 50 g C m-2 crop initializer remains active.');
+assert(contains(param_source,'Crop_B=[20 30]'), ...
+    'The legacy 50 g C m-2 crop initializer is not active.');
 seed_lai = [0.034*maize_c(2) 0.033*soy_c(2)];
 lai_floor_token = regexp(param_source,'LAI_min_L\s*=\s*\[([^\]]+)\]', ...
     'tokens','once');

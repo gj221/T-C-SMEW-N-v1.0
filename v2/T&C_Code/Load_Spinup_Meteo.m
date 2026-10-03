@@ -68,11 +68,25 @@ if isnan(start_dn) || isnan(end_dn)
 end
 target_days = (floor(start_dn):floor(end_dn))';
 keep = day >= target_days(1) & day <= target_days(end);
-have = ismember(target_days, unique(day(keep)));
-if any(~have)
+%% Whole days only: every day of the window must carry all 24 hourly
+%% stamps.  The first and last days of a forcing file are usually partial
+%% (its UTC boundaries fall mid-day in local time: Data_Kantola.mat runs
+%% 2008-12-31 18:00 to 2020-12-31 17:00), and a partial day accepted as a
+%% whole one would leave a cycle or handoff window silently hours short.
+counts = accumarray(day(keep) - target_days(1) + 1, 1, [numel(target_days) 1]);
+if any(counts == 0)
     error('Load_Spinup_Meteo:MissingDays', ...
-        '%s is missing %d day(s) of the window %s to %s.', meteo_file, nnz(~have), ...
+        '%s is missing %d day(s) of the window %s to %s.', meteo_file, nnz(counts == 0), ...
         datestr(target_days(1),'yyyy-mm-dd'), datestr(target_days(end),'yyyy-mm-dd'));
+end
+if any(counts ~= 24)
+    partial = find(counts ~= 24, 1, 'first');
+    error('Load_Spinup_Meteo:PartialDays', ...
+        ['%s has %d incomplete day(s) in the window %s to %s (first: %s, %d of ' ...
+         '24 hours); end the window on the file''s last complete day.'], ...
+        meteo_file, nnz(counts ~= 24), datestr(target_days(1),'yyyy-mm-dd'), ...
+        datestr(target_days(end),'yyyy-mm-dd'), ...
+        datestr(target_days(partial),'yyyy-mm-dd'), counts(partial));
 end
 
 met = struct();

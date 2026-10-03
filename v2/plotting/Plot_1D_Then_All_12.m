@@ -4,11 +4,12 @@
 %%
 %% Default behaviour
 %%   1) The vertical 1-D weathering and nitrogen figure (runs 10:12).
-%%      Base cations, cumulative denitrification and WFPS are panels that
+%%      Base cations, cumulative gaseous N loss and WFPS are panels that
 %%      the summary figure does not carry.  Prints the years-2-onward
 %%      nitrogen statistics.
-%%   2) The twelve-scenario summary and time dynamics (runs 1:12),
-%%      including the associated FIG files.
+%%   2) Separate summary and time-dynamics figures for each metric.  Each
+%%      compares control, basalt and calcite in every available 1-D and
+%%      2-D configuration.
 %%
 %% PNG and FIG copies of every figure are written to v2/figures.
 %%
@@ -23,29 +24,33 @@
 %%   ResultDirectory  folder holding the run results     [SIM/Subfield_12]
 %%   FigureDirectory  folder the figures are written to           [figures]
 %%   NDays            shortened-run filename tag       []
+%%   Scenario         scenario filename tag, e.g. 'ssp245'; results are
+%%                    then TC_2D_run%02d_<name>__<Scenario>[__%dd].mat  ['']
+%%   UncertaintyFile  uncertainty_summary.mat of the 1-D parameter
+%%                    ensemble (Summarize_Uncertainty); draws
+%%                    the member min-max as bands under the 1-D lines
+%%                    and as range bars on the 1-D summary bars       ['']
 %%   Visible          figure visibility                ['on']
-%%   OutputFile       summary PNG (single-group mode)  []
-%%   TimeOutputFile   dynamics PNG (single-group mode) []
+%%   OutputFile       summary PNG filename prefix      []
+%%   TimeOutputFile   dynamics PNG filename prefix     []
 %%   DryRun           print the plan without plotting  [false]
 %%
 %% Examples
 %%   matlab -batch "cd('v2/plotting'); Plot_1D_Then_All_12"
 %%   matlab -batch "cd('v2/plotting'); NDays=1; Plot_1D_Then_All_12"
 %%   matlab -batch "cd('v2/plotting'); Runs=10:12; Plot_1D_Then_All_12"
+%%   matlab -batch "cd('v2/plotting'); ResultDirectory='../SIM/Projection'; Scenario='ssp245'; Plot_1D_Then_All_12"
 %%
-%% Result variables are left in the workspace: summary, fig,
-%% time_fig, plot_file, time_plot_file for the summary stage, and
-%% fig1d, plot_file_1d, stats_1d for the 1-D weathering stage.
+%% Result variables are left in the workspace: summary, six-element fig
+%% and time_fig arrays, six-element plot_file and time_plot_file cells,
+%% and fig1d, plot_file_1d, stats_1d for the 1-D weathering stage.
 %%
 %% NEE follows the TC sign convention: positive is carbon released to the
-%% atmosphere, normalised by the full domain area.  Cumulative crop yield
-%% stays in the returned summary table but is no longer plotted; the sixth
-%% panel of both figures now compares the modelled N2O flux against the
-%% crop-matched 2017-2018 digitised Val Martin et al. maize chamber
-%% measurements, read from
-%% Experimental observations/Web plot digitizer/figure3a_n2o_digitised.csv
-%% and reported in g N ha^-1 d^-1.  The panel is drawn without the field
-%% data, with a warning, when that file is absent.
+%% atmosphere, normalised by the full domain area.  The comparison figures
+%% show all three treatments in each available configuration.  Chamber
+%% dates from figure3a_n2o_digitised.csv define the observation-day N2O mean.
+%% The observed bulk pH carries the SEM of the block means read from
+%% Beerling2024_Fig1E_vector_extraction.csv.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% This script lives in v2/plotting; the repository root is one level up.
@@ -64,15 +69,18 @@ if ~exist('FigureDirectory','var') || isempty(FigureDirectory)
 end
 if ~exist('Runs','var'); Runs = []; end
 if ~exist('NDays','var'); NDays = []; end
+if ~exist('Scenario','var') || isempty(Scenario); Scenario = ''; end
+if ~exist('UncertaintyFile','var') || isempty(UncertaintyFile); UncertaintyFile = ''; end
 if ~exist('Visible','var') || isempty(Visible); Visible = 'on'; end
 if ~exist('OutputFile','var') || isempty(OutputFile); OutputFile = ''; end
 if ~exist('TimeOutputFile','var') || isempty(TimeOutputFile); TimeOutputFile = ''; end
 if ~exist('DryRun','var') || isempty(DryRun); DryRun = false; end
 
-validate_options(NDays,Visible,DryRun,ResultDirectory);
+validate_options(NDays,Scenario,UncertaintyFile,Visible,DryRun,ResultDirectory);
 if ~isfolder(FigureDirectory); mkdir(FigureDirectory); end
 opt = struct('ResultDirectory',ResultDirectory, ...
     'FigureDirectory',FigureDirectory,'NDays',NDays, ...
+    'Scenario',char(Scenario),'Uncertainty',load_uncertainty(UncertaintyFile), ...
     'Visible',Visible,'OutputFile',OutputFile, ...
     'TimeOutputFile',TimeOutputFile,'Root',root);
 
@@ -131,10 +139,22 @@ end
 end
 
 %% =======================================================================
-function validate_options(NDays,Visible,DryRun,ResultDirectory)
+function validate_options(NDays,Scenario,UncertaintyFile,Visible,DryRun,ResultDirectory)
 if ~isempty(NDays) && ~(isnumeric(NDays) && isscalar(NDays) && ...
         isfinite(NDays) && NDays == fix(NDays) && NDays >= 1)
     error('Plot_1D_Then_All_12:BadOptions','NDays must be a positive integer.');
+end
+if ~(ischar(Scenario) || (isstring(Scenario) && isscalar(Scenario)))
+    error('Plot_1D_Then_All_12:BadOptions', ...
+        'Scenario must be a character vector or scalar string.');
+end
+if ~(ischar(UncertaintyFile) || (isstring(UncertaintyFile) && isscalar(UncertaintyFile)))
+    error('Plot_1D_Then_All_12:BadOptions', ...
+        'UncertaintyFile must be a character vector or scalar string.');
+end
+if ~isempty(UncertaintyFile) && ~isfile(UncertaintyFile)
+    error('Plot_1D_Then_All_12:MissingUncertainty', ...
+        'Uncertainty summary not found: %s',UncertaintyFile);
 end
 if ~(ischar(Visible) && ismember(char(Visible),{'on','off'}))
     error('Plot_1D_Then_All_12:BadOptions','Visible must be on or off.');
@@ -154,11 +174,9 @@ function [fig,plot_file,stats] = plot_group_figure(run_ids,opt)
 %%
 %% Former Plot_1D_Group.  This figure complements the summary figure
 %% rather than repeating it: base cations Ca, Mg and Si, cumulative
-%% denitrification (N2 + N2O), and water-filled pore space live here.
-%% The denitrification N2O fraction rN2O is computed and reported
-%% flux-weighted in the printed statistics, but is not plotted: as a daily
-%% curve it is just the partition function re-evaluated on that day's pH,
-%% which reads as a larger treatment effect than the run actually produces.
+%% gaseous N loss (N2 + N2O), and water-filled pore space live here.
+%% The denitrification N2O fraction is reported from the saved total N2O,
+%% nitrification N2O and N2 fluxes. It is not plotted as a daily curve.
 %%
 %% Colours, line weights, axis treatment, application markers and legend
 %% placement follow the summary figure so the two figures read as one set.
@@ -176,14 +194,12 @@ application_color = [0.45 0.45 0.45];
 %% Pool column indices in P.
 iCa = 60; iMg = 68; iSi = 76;
 
-suffix = '';
-if ~isempty(opt.NDays); suffix = sprintf('__%dd',opt.NDays); end
+suffix = filename_suffix(opt);
 
 Date_d = datetime.empty(0,1);
 for i = 1:3
     id = run_ids(i);
-    result_file = fullfile(opt.ResultDirectory, ...
-        sprintf('TC_2D_run%02d_%s%s.mat',id,RM(id).name,suffix));
+    result_file = result_filename(opt,id,RM(id).name);
     if ~isfile(result_file)
         error('Plot_1D_Then_All_12:MissingResult','Missing result: %s',result_file);
     end
@@ -191,54 +207,40 @@ for i = 1:3
     P = S.P; if ndims(P) == 3; P = P(:,:,1); end
     nd = size(P,1);
     if i == 1
+        %% Daily row j holds the BIOGEO day running from 01:00 of
+        %% Date(1)+(j-3); row 2 is the lone first hour.
         Date_d = datetime(S.Datam(1,1),S.Datam(1,2),S.Datam(1,3)) + ...
-            caldays((0:nd-1).');
+            caldays((0:nd-1).'-2);
         ca = zeros(nd,3); mg = zeros(nd,3); si = zeros(nd,3);
-        den = zeros(nd,3); n2o = zeros(nd,3); wfps = zeros(nd,3);
-        ph = zeros(nd,3); n2 = zeros(nd,3);
+        gaseous_n = zeros(nd,3); n2o = zeros(nd,3); wfps = zeros(nd,3);
+        n2o_nit = zeros(nd,3); n2 = zeros(nd,3);
     end
     ca(:,i) = P(:,iCa); mg(:,i) = P(:,iMg); si(:,i) = P(:,iSi);
-    n2o(:,i) = daily(S,'N2Oflx',nd);
-    n2(:,i)  = daily(S,'N2flx',nd);
-    den(:,i) = n2(:,i) + n2o(:,i);
-    wfps(:,i) = water_filled_pore_space(S,nd);
-    ph(:,i) = daily(S,'PH_d',nd);
+    n2o(:,i) = required_daily(S,'N2Oflx',nd);
+    n2o_nit(:,i) = required_daily(S,'N2Oflx_nit',nd);
+    n2(:,i)  = required_daily(S,'N2flx',nd);
+    gaseous_n(:,i) = n2(:,i) + n2o(:,i);
+    wfps(:,i) = Daily_WFPS_From_Hourly(S.O,S.p,nd);
 end
+check_uncertainty_axis(opt.Uncertainty,Date_d);
 
-%% Denitrification N2O fraction, evaluated from the model's own partition.
-%%
-%% Do not compute this as N2Oflx/(N2Oflx+N2flx) from the saved fluxes. That
-%% ratio is not the denitrification partition, because N2Oflx carries a
-%% second source:
-%%
-%%   N2Oflx = f_N2O_nit*NO3flx  +  rN2O*DENITflx
-%%
-%% The first term is nitrification N2O and has nothing to do with the N2O
-%% against N2 split.  Reconstruct rN2O directly from daily pH using the
-%% same expression BIOGEOCHEMISTRY_DYNAMIC3 uses, defined on every day.
-BiogeoPar = Biogeochemistry_Parameter(1);
-[~,RN2N2O_pH] = Biogeo_Denitrification_PH_Response(ph);
-rN2O = 100./(1+RN2N2O_pH);
-rN2O(ph <= 0) = NaN;
-
-%% Denitrification-weighted rN2O over the equilibrium years, used to label
-%% panel 5.  What the nitrogen actually experiences is the daily share
-%% weighted by the denitrification flux, which differs from the plain mean
-%% because denitrification concentrates on wet days that do not carry the
-%% mean pH.
-nd_all = size(den,1);
+%% The saved N2O flux includes nitrification. Subtract that source before
+%% calculating the N2O/N2 split for denitrification.
+nd_all = size(gaseous_n,1);
 eq = min(nd_all,round(365.25)+1):nd_all;
 rN2O_fw = zeros(1,3);
 for i = 1:3
-    rN2O_fw(i) = rN2O_fluxweighted(rN2O(eq,i),n2(eq,i));
+    rN2O_fw(i) = denitrification_n2o_share( ...
+        n2o(eq,i),n2o_nit(eq,i),n2(eq,i));
 end
 
-time_value = {ca,mg,si,cumsum(den,1),wfps};
+time_value = {ca,mg,si,cumsum(gaseous_n,1),wfps};
 time_label = {'Ca solution','Mg solution','Si solution', ...
-    'Cumulative denitrification (N_2 + N_2O)','Water-filled pore space'};
-time_units = {'\mu mol','\mu mol','\mu mol','g N m^{-2}','%'};
+    'Cumulative gaseous N loss (N_2 + N_2O)','Water-filled pore space'};
+time_units = {'g Ca m^{-2}','g Mg m^{-2}','g Si m^{-2}', ...
+    'g N m^{-2}','%'};
 time_tag = {'CaSolution','MgSolution','SiSolution', ...
-    'CumulativeDenitrification','WFPS'};
+    'CumulativeGaseousNLoss','WFPS'};
 
 application_dates = datetime([2016 11 10; 2017 11 10; ...
     2018 11 10; 2019 11 10]);
@@ -260,10 +262,13 @@ time_axes = gobjects(5,1);
 legend_lines = gobjects(3,1);
 application_legend = gobjects(1);
 fertilizer_legend = gobjects(1);
+n_band = 0;
 for measurement = 1:5
     ax = nexttile(tl,tile_span{measurement});
     time_axes(measurement) = ax;
     ax.Tag = sprintf('TimeMetric%d',measurement);
+    n_band = n_band+draw_uncertainty_bands(ax,Date_d,opt.Uncertainty, ...
+        time_tag{measurement},run_ids,treatment_colors);
     ln = plot(ax,Date_d,time_value{measurement},'LineWidth',1.15);
     for treatment = 1:3
         ln(treatment).Color = treatment_colors(treatment,:);
@@ -283,7 +288,9 @@ for measurement = 1:5
     format_time_axis(ax);
     ylabel(ax,time_units{measurement},'Color','k');
     if measurement >= 4; xlabel(ax,'Date','Color','k'); end
-    text(ax,0.02,0.96,time_label{measurement},'Units','normalized', ...
+    label_y = 0.96;
+    if measurement >= 4; label_y = 0.88; end
+    text(ax,0.02,label_y,time_label{measurement},'Units','normalized', ...
         'VerticalAlignment','top','Color','k','FontWeight','bold');
     if measurement == 1; legend_lines = ln; end
 end
@@ -298,13 +305,14 @@ if isgraphics(application_legend)
 end
 if isgraphics(fertilizer_legend)
     legend_handles(end+1) = fertilizer_legend;
-    legend_labels{end+1} = 'Maize fertilizer, days 81-100';
+    legend_labels{end+1} = 'Maize fertilizer';
 end
 lgd = legend(legend_handles,legend_labels,'Orientation','horizontal', ...
     'Box','off','TextColor','k','Color','w','EdgeColor','none');
 lgd.Layout.Tile = 'south';
 title(tl,sprintf('%s: weathering signal and nitrogen partitioning', ...
     group_label),'Color','k');
+if n_band > 0; annotate_uncertainty(tl,opt.Uncertainty,'Shaded'); end
 
 plot_file = fullfile(opt.FigureDirectory, ...
     sprintf('%s_weathering_nitrogen%s.png',RM(run_ids(1)).layout,suffix));
@@ -317,23 +325,24 @@ fprintf('Saved: %s\n',fullfile(plot_folder,[plot_name '.fig']));
 %% Equilibrium statistics, excluding year one. The spin-up starts NO3 near
 %% 0.737 gN/m2 and roughly doubles before settling, so a first-year mean
 %% reports the transient rather than the model's own steady state.
-nd = size(den,1);
+nd = size(gaseous_n,1);
 sl = min(nd,round(365.25)+1):nd;
 f = 10/(numel(sl)/365.25);          %% gN/m2 over the window -> kg N/ha/yr
 stats = struct();
-fprintf('\nyears 2 onward, kg N/ha/yr\n');
+fprintf('\nyears 2 onward\n');
+fprintf('N fluxes: kg N/ha/yr; rN2O and WFPS: %%; Ca end: g Ca/m2\n');
 fprintf('%-8s %7s %8s %10s %8s %9s\n', ...
-    'run','N2O','denit','rN2O','WFPS','Ca end');
+    'run','N2O','gas N','rN2O','WFPS','Ca end');
 for i = 1:3
     st = struct('treatment',treatment_labels{i}, ...
         'N2O',sum(n2o(sl,i),'omitnan')*f, ...
-        'denit',sum(den(sl,i),'omitnan')*f, ...
+        'gaseous_N_loss',sum(gaseous_n(sl,i),'omitnan')*f, ...
         'rN2O',rN2O_fw(i), ...
         'wfps',mean(wfps(sl,i),'omitnan'), ...
         'Ca_end',ca(end,i),'Mg_end',mg(end,i),'Si_end',si(end,i));
     stats.(lower(treatment_labels{i})) = st;
     fprintf('%-8s %7.1f %8.1f %9.1f%% %7.1f%% %9.2f\n', ...
-        st.treatment,st.N2O,st.denit,st.rN2O,st.wfps,st.Ca_end);
+        st.treatment,st.N2O,st.gaseous_N_loss,st.rN2O,st.wfps,st.Ca_end);
 end
 
 end
@@ -364,10 +373,7 @@ carbon_fields = {'NPP_H','NPP_L','Ccrown_t','R_litter','R_microbe','R_ew'};
 result_fields = {'R','Domain','Datam','RB_L','topo','ColCfg'};
 for i = 1:n
     run_id = RM(i).id;
-    tag = RM(i).name;
-    if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
-    result_file = fullfile(opt.ResultDirectory, ...
-        sprintf('TC_2D_run%02d_%s.mat',run_id,tag));
+    result_file = result_filename(opt,run_id,RM(i).name);
     if ~isfile(result_file)
         error('Plot_1D_Then_All_12:MissingResult', ...
             'Result not found: %s',result_file);
@@ -388,14 +394,28 @@ for i = 1:n
         error('Plot_1D_Then_All_12:WrongResult', ...
             'Result does not match run %d: %s',run_id,result_file);
     end
+    %% PH_bulk_d and PH_pore_d get the same completeness, shape, length and
+    %% finiteness checks as the other Domain series whenever a run carries
+    %% them, instead of reaching format_ph_axis unchecked: an empty or
+    %% mismatched pair used to fail as a generic assignment error or a
+    %% NaN ylim rather than one of this function's own error identifiers.
+    run_has_bulk_pore_ph = isfield(S.Domain,'PH_bulk_d') && isfield(S.Domain,'PH_pore_d');
     required = {'N2Oflx','LEAK_NO3','NO3_pool','PH_d'};
+    if run_has_bulk_pore_ph
+        required = [required {'PH_bulk_d','PH_pore_d'}];
+    end
     if ~all(isfield(S.Domain,required)) || ~isfield(S,'Datam') || ...
-            isempty(S.Domain.NO3_pool) || isempty(S.Domain.PH_d)
+            isempty(S.Domain.NO3_pool) || isempty(S.Domain.PH_d) || ...
+            (run_has_bulk_pore_ph && (isempty(S.Domain.PH_bulk_d) || ...
+            isempty(S.Domain.PH_pore_d)))
         error('Plot_1D_Then_All_12:IncompleteResult', ...
             'Domain summary is incomplete in %s.',result_file);
     end
     measurement = {S.Domain.N2Oflx,S.Domain.LEAK_NO3, ...
         S.Domain.NO3_pool,S.Domain.PH_d};
+    if run_has_bulk_pore_ph
+        measurement = [measurement {S.Domain.PH_bulk_d,S.Domain.PH_pore_d}];
+    end
     if ~all(cellfun(@(x) isnumeric(x) && isvector(x),measurement))
         error('Plot_1D_Then_All_12:IncompleteResult', ...
             'Domain measurements must be numeric vectors in %s.',result_file);
@@ -415,10 +435,9 @@ for i = 1:n
             'Daily start date is missing or invalid in %s.',result_file);
     end
     run_date = datetime(S.Datam(1,1),S.Datam(1,2),S.Datam(1,3)) + ...
-        caldays((0:n_time(1)-1).');
+        caldays((0:n_time(1)-1).'-2);
     [run_nee,run_crop_harvest] = carbon_dynamics( ...
         S,n_time(1),result_file);
-    run_has_bulk_pore_ph = isfield(S.Domain,'PH_bulk_d') && isfield(S.Domain,'PH_pore_d');
     has_bulk_pore_ph = has_bulk_pore_ph && run_has_bulk_pore_ph;
     if i == 1
         Date_d = run_date;
@@ -438,37 +457,43 @@ for i = 1:n
     no3_leach_daily(:,i) = S.Domain.LEAK_NO3(:); %#ok<AGROW>
     no3_pool_daily(:,i) = S.Domain.NO3_pool(:); %#ok<AGROW>
     if run_has_bulk_pore_ph
-        ph_bulk_daily(:,i) = S.Domain.PH_bulk_d(:); %#ok<AGROW>
-        ph_pore_daily(:,i) = S.Domain.PH_pore_d(:); %#ok<AGROW>
+        ph_bulk_daily(:,i) = S.Domain.PH_bulk_d(:);
+        ph_pore_daily(:,i) = S.Domain.PH_pore_d(:);
     else
-        ph_bulk_daily(:,i) = S.Domain.PH_d(:); %#ok<AGROW>
-        ph_pore_daily(:,i) = S.Domain.PH_d(:); %#ok<AGROW>
+        ph_bulk_daily(:,i) = S.Domain.PH_d(:);
+        ph_pore_daily(:,i) = S.Domain.PH_d(:);
     end
     nee_daily(:,i) = run_nee; %#ok<AGROW>
     crop_harvest_daily(:,i) = run_crop_harvest; %#ok<AGROW>
     n2o(i) = sum(n2o_daily(:,i));
     no3_leach(i) = sum(no3_leach_daily(:,i));
     no3_final(i) = no3_pool_daily(end,i);
-    ph_final(i) = ph_pore_daily(end,i);
+    ph_final(i) = ph_bulk_daily(end,i);
     nee(i) = sum(nee_daily(:,i));
     crop_harvest(i) = sum(crop_harvest_daily(:,i));
 end
+check_uncertainty_axis(opt.Uncertainty,Date_d);
 
 summary = table([RM.id].',string({RM.layout}).',string({RM.treatment}).', ...
     n2o,no3_leach,no3_final,ph_final,nee,crop_harvest, ...
     'VariableNames',{'RunID','ScenarioGroup','Treatment', ...
     'CumulativeN2O_gN_m2','CumulativeNO3Leaching_gN_m2', ...
-    'FinalNO3Pool_gN_m2','FinalPoreWaterPH', ...
+    'FinalNO3Pool_gN_m2','FinalBulkPH', ...
     'CumulativeNEE_gC_m2','CumulativeCropYield_gC_m2'});
 
 %% Digitised Val Martin et al. chamber measurements for maize 2016-2018.
 %% The field data are reported in g N ha^-1 d^-1, so the modelled flux is
 %% carried in those units wherever the two are shown together.
-obs = n2o_observations(opt.Root);
-obs = clip_observations(obs,Date_d);
+n2o_obs = n2o_observations(opt.Root);
+n2o_obs = clip_observations(n2o_obs,Date_d);
+%% Beerling bulk-pH observations by year, no date component: these compare
+%% against the pH time-dynamics figure as a categorical points-and-years
+%% panel rather than against a specific day, so clip_observations (which
+%% keys on obs.date) does not apply.
+bulk_ph_obs = bulk_pH_observations(opt.Root);
 n2o_ha_daily = 1e4*n2o_daily;
-[n2o_obs_day_mean,obs_treatment_mean,n_obs_day] = ...
-    paired_n2o_means(Date_d,n2o_ha_daily,obs);
+[n2o_obs_day_mean,~,n_obs_day] = ...
+    paired_n2o_means(Date_d,n2o_ha_daily,n2o_obs);
 fprintf(['Crop-matched N2O observation days inside the run window: ' ...
     '%d\n'],n_obs_day);
 
@@ -477,231 +502,488 @@ all_group_labels = {'Whole field','Margin with crop', ...
 all_group_stems = {'Whole_Field','Margin_Crop','Margin_Prairie','Vertical_1D'};
 group_ids = unique(ceil(run_ids/3),'stable');
 group_labels = all_group_labels(group_ids);
-n_group = numel(group_labels);
-treatment_labels = {'Control','Basalt','Calcite'};
-treatment_colors = [0 0 0; 0 0.25 0.60; 0.35 0.70 0.90];
 if isequal(run_ids,1:12)
     output_stem = 'Subfield_12';
     summary_name = 'T&C-SMEW-N twelve-scenario summary';
     time_name = 'T&C-SMEW-N twelve-scenario time dynamics';
-    summary_title = 'Treatment response across four scenario groups';
-    time_title = 'Treatment dynamics across four scenario groups';
 elseif isequal(run_ids,1:9)
     output_stem = 'Subfield_2D';
     summary_name = 'T&C-SMEW-N 2-D scenario summary';
     time_name = 'T&C-SMEW-N 2-D scenario time dynamics';
-    summary_title = 'Treatment response across three 2-D scenario groups';
-    time_title = 'Treatment dynamics across three 2-D scenario groups';
-elseif n_group == 1
+elseif isscalar(group_ids)
     output_stem = all_group_stems{group_ids};
     summary_name = sprintf('T&C-SMEW-N %s summary',group_labels{1});
     time_name = sprintf('T&C-SMEW-N %s time dynamics',group_labels{1});
-    summary_title = sprintf('Treatment response: %s',group_labels{1});
-    time_title = sprintf('Treatment dynamics: %s',group_labels{1});
 else
     run_tag = sprintf('%02d_',run_ids);
     output_stem = ['Subfield_runs_' run_tag(1:end-1)];
     summary_name = 'T&C-SMEW-N selected-scenario summary';
     time_name = 'T&C-SMEW-N selected-scenario time dynamics';
-    summary_title = 'Treatment response across selected scenario groups';
-    time_title = 'Treatment dynamics across selected scenario groups';
 end
-fig = figure('Color','w','Visible',char(opt.Visible), ...
-    'Name',summary_name);
-fig.Position(3:4) = [1400 1050];
-tl = tiledlayout(fig,3,2,'TileSpacing','compact','Padding','compact');
-summary_axes = gobjects(6,1);
-summary_axes(1) = nexttile(tl);
-b = draw_panel(summary_axes(1),n2o,'Cumulative N_2O','g N m^{-2}', ...
-    group_labels,treatment_colors);
-summary_axes(2) = nexttile(tl);
-draw_panel(summary_axes(2),no3_leach,'Cumulative NO_3 leaching','g N m^{-2}', ...
-    group_labels,treatment_colors);
-summary_axes(3) = nexttile(tl);
-draw_panel(summary_axes(3),no3_final,'Final soil NO_3 pool','g N m^{-2}', ...
-    group_labels,treatment_colors);
-summary_axes(4) = nexttile(tl);
-draw_panel(summary_axes(4),ph_final,'Final pore-water pH','pH', ...
-    group_labels,treatment_colors);
-summary_axes(5) = nexttile(tl);
-draw_panel(summary_axes(5),nee,'Cumulative NEE (+ to atmosphere)', ...
-    'g C m^{-2} domain', ...
-    group_labels,treatment_colors);
-summary_axes(6) = nexttile(tl);
-b6 = draw_panel(summary_axes(6),n2o_obs_day_mean, ...
-    'Mean N_2O on observation days', ...
-    'g N ha^{-1} d^{-1}',group_labels,treatment_colors);
-obs_reference = draw_observed_points(summary_axes(6),b6, ...
-    obs_treatment_mean,treatment_colors);
-for iax = 1:6
-    summary_axes(iax).Tag = sprintf('SummaryRow%dColumn%d', ...
-        ceil(iax/2),mod(iax-1,2)+1);
-end
-set(summary_axes(1:4),'XTickLabel',[]);
-summary_handles = b;
-summary_labels = treatment_labels;
-for k = 1:numel(obs_reference)
-    summary_handles(end+1) = obs_reference(k).handle; %#ok<AGROW>
-    summary_labels{end+1} = obs_reference(k).label; %#ok<AGROW>
-end
-lgd = legend(summary_handles,summary_labels,'Orientation','horizontal', ...
-    'Box','off','TextColor','k','Color','w','EdgeColor','none');
-lgd.Layout.Tile = 'south';
-title(tl,summary_title,'Color','k');
+suffix = filename_suffix(opt);
+comparison = treatment_configurations(RM);
+uncertainty_range = summary_uncertainty_ranges(opt.Uncertainty,Date_d,n2o_obs);
 
-suffix = '';
-if ~isempty(opt.NDays); suffix = sprintf('__%dd',opt.NDays); end
-if isempty(opt.OutputFile)
-    plot_file = fullfile(opt.FigureDirectory, ...
-        [output_stem '_summary' suffix '.png']);
-else
-    plot_file = char(opt.OutputFile);
+summary_value = {n2o,no3_leach,no3_final, ...
+    ph_final,nee,n2o_obs_day_mean};
+summary_label = {'Cumulative N_2O','Cumulative NO_3 leaching', ...
+    'Final soil NO_3 pool','Final bulk pH', ...
+    'Cumulative NEE (+ to atmosphere)', ...
+    'Mean N_2O on observation days'};
+summary_units = {'g N m^{-2}','g N m^{-2}','g N m^{-2}', ...
+    'pH','g C m^{-2}','g N ha^{-1} d^{-1}'};
+summary_tag = {'CumulativeN2O','CumulativeNO3Leaching', ...
+    'NO3Pool','FinalBulkPH','CumulativeNEE', ...
+    'ObservationDayN2O'};
+summary_stem = {'cumulative_n2o','cumulative_no3_leaching', ...
+    'soil_no3_pool','final_bulk_ph','cumulative_nee', ...
+    'observation_day_n2o'};
+fig = gobjects(6,1);
+plot_file = cell(6,1);
+for measurement = 1:6
+    fig(measurement) = figure('Color','w','Visible',char(opt.Visible), ...
+        'Name',sprintf('%s: %s',summary_name,summary_label{measurement}));
+    fig(measurement).Position(3:4) = [1050 700];
+    ax = axes('Parent',fig(measurement));
+    value = summary_value{measurement}(comparison.columns);
+    b = draw_treatment_bars(ax,value,comparison.treatment_colors, ...
+        comparison.run_ids,summary_tag{measurement});
+    n_range = draw_uncertainty_ranges(ax,b,comparison.run_ids, ...
+        opt.Uncertainty,uncertainty_range{measurement});
+    format_configuration_axis(ax,comparison.configuration_labels);
+    title(ax,summary_label{measurement},'Color','k');
+    if n_range > 0; annotate_uncertainty(ax,opt.Uncertainty,'Range bars'); end
+    ylabel(ax,summary_units{measurement},'Color','k');
+    lgd = legend(ax,b,comparison.treatment_labels, ...
+        'Location','southoutside','Orientation','horizontal', ...
+        'Box','off','TextColor','k');
+    lgd.AutoUpdate = 'off';
+    plot_file{measurement} = metric_output_file(opt.OutputFile, ...
+        opt.FigureDirectory,[output_stem '_summary'], ...
+        summary_stem{measurement},suffix);
+    export_figure_pair(fig(measurement),plot_file{measurement});
 end
-exportgraphics(fig,plot_file,'Resolution',200);
-[plot_folder,plot_name] = fileparts(plot_file);
-fig_file = fullfile(plot_folder,[plot_name '.fig']);
-savefig(fig,fig_file);
-fprintf('Saved: %s\n',plot_file);
-fprintf('Saved: %s\n',fig_file);
 
-time_fig = figure('Color','w','Visible',char(opt.Visible), ...
-    'Name',time_name);
-time_fig.Position(3:4) = [max(1200,700*n_group) 1050];
-n_time_columns = 2*n_group;
-time_tl = tiledlayout(time_fig,3,n_time_columns, ...
-    'TileSpacing','compact','Padding','compact');
 time_value = {cumsum(n2o_daily,1),cumsum(no3_leach_daily,1), ...
-    no3_pool_daily,ph_pore_daily,nee_daily,n2o_ha_daily};
+    no3_pool_daily,ph_bulk_daily,nee_daily,n2o_ha_daily};
 time_label = {'Cumulative N_2O','Cumulative NO_3 leaching', ...
-    'Soil NO_3 pool','Pore-water pH','NEE (+ to atmosphere)', ...
-    'Daily N_2O against crop-matched observations'};
+    'Soil NO_3 pool','pH','NEE (+ to atmosphere)','N_2O'};
 time_units = {'g N m^{-2}','g N m^{-2}','g N m^{-2}','pH', ...
-    'g C m^{-2} domain d^{-1}','g N ha^{-1} d^{-1}'};
+    'g C m^{-2} d^{-1}','g N ha^{-1} d^{-1}'};
 time_tag = {'CumulativeN2O','CumulativeNO3Leaching','NO3Pool', ...
-    'PoreWaterPH','NEE','DailyN2O'};
+    'BulkPH','NEE','DailyN2O'};
+envelope_field = {'CumulativeN2O','CumulativeNO3Leaching','NO3Pool', ...
+    'BulkPH','NEE','DailyN2O_gN_ha_d'};
+time_stem = {'cumulative_n2o','cumulative_no3_leaching', ...
+    'soil_no3_pool','ph','nee','daily_n2o'};
+trace_colors = comparison.treatment_colors(comparison.trace_treatment,:);
 application_dates = datetime([2016 11 10; 2017 11 10; ...
     2018 11 10; 2019 11 10]);
 application_dates = application_dates( ...
     application_dates >= Date_d(1) & application_dates <= Date_d(end));
 management = kantola_management(Date_d);
 application_color = [0.45 0.45 0.45];
-time_axes = gobjects(6,n_group);
-legend_lines = gobjects(3,1);
-application_legend = gobjects(1);
-fertilizer_legend = gobjects(1);
-observation_legend = struct('handle',{},'label',{});
-for plot_row = 1:3
-    for group = 1:n_group
-        for pair_column = 1:2
-            measurement = 2*(plot_row-1)+pair_column;
-            tile_column = 2*(group-1)+pair_column;
-            tile_id = (plot_row-1)*n_time_columns+tile_column;
-            ax = nexttile(time_tl,tile_id);
-            time_axes(measurement,group) = ax;
-            ax.Tag = sprintf('TimeMetric%dGroup%d',measurement,group);
-            ids = (group-1)*3+(1:3);
-            ln = plot(ax,Date_d,time_value{measurement}(:,ids),'LineWidth',1.15);
-            for treatment = 1:3
-                ln(treatment).Color = treatment_colors(treatment,:);
-            end
-            set(ln,'Tag',time_tag{measurement});
-            %% Everything below draws on top of the treatment traces, so
-            %% the axes must hold rather than replace from here on.
-            hold(ax,'on');
-            if measurement == 6
-                obs_marks = draw_observation_points(ax,obs,treatment_colors);
-                if group == 1; observation_legend = obs_marks; end
-            end
-            if measurement == 4 && has_bulk_pore_ph
-                ln_bulk = plot(ax,Date_d,ph_bulk_daily(:,ids), ...
-                    'LineStyle','--','LineWidth',1.15);
-                for treatment = 1:3
-                    ln_bulk(treatment).Color = treatment_colors(treatment,:);
-                end
-                set(ln_bulk,'Tag','BulkPH');
-            end
-            if ~isempty(application_dates)
-                marker = xline(ax,application_dates,':','Color',application_color, ...
-                    'LineWidth',1.1,'Tag','FeedstockApplication');
-                if measurement == 1 && group == 1
-                    application_legend = marker(1);
-                end
-            end
-            if measurement == 4 || measurement == 6
-                fertilizer_marker = draw_kantola_management(ax,management);
-                if measurement == 4 && group == 1 && ...
-                        isgraphics(fertilizer_marker)
-                    fertilizer_legend = fertilizer_marker;
-                end
-            end
-            format_time_axis(ax);
-            if plot_row == 1
-                title(ax,group_labels{group},'Color','k');
-            end
-            if group == 1
-                ylabel(ax,time_units{measurement},'Color','k');
-            end
-            if plot_row == 3; xlabel(ax,'Date','Color','k'); end
-            text(ax,0.02,0.96,time_label{measurement},'Units','normalized', ...
-                'VerticalAlignment','top','Color','k','FontWeight','bold');
-            if measurement == 1 && group == 1; legend_lines = ln; end
-            hold(ax,'off');
-        end
-    end
-end
-linkaxes(time_axes(:),'x');
-set(time_axes(1:4,:),'XTickLabel',[]);
+time_fig = gobjects(6,1);
+time_plot_file = cell(6,1);
 for measurement = 1:6
-    measurement_axes = time_axes(measurement,:);
-    measurement_lim = vertcat(measurement_axes.YLim);
-    set(measurement_axes,'YLim', ...
-        [min(measurement_lim(:,1)) max(measurement_lim(:,2))]);
+    time_fig(measurement) = figure('Color','w', ...
+        'Visible',char(opt.Visible), ...
+        'Name',sprintf('%s: %s',time_name,time_label{measurement}));
+    time_fig(measurement).Position(3:4) = [1400 900];
+    %% The pH figure carries bulk and pore-water pH in two stacked panels,
+    %% each scaled to its own data range, so the 0.4-0.5 unit offset between
+    %% them no longer leaves half of a shared axis empty. pH and daily N2O
+    %% additionally carry a bottom panel comparing modelled years against
+    %% the digitised field observations: one point per year, never a line,
+    %% since a chamber campaign or a yearly Beerling sample is a
+    %% measurement, not a trend to interpolate through.
+    split_ph = (measurement == 4) && has_bulk_pore_ph;
+    show_ph_obs = (measurement == 4) && bulk_ph_obs.available;
+    %% The chamber N2O record is the exception: it is dated at sub-weekly
+    %% resolution against the same axis the model is drawn on, so it goes
+    %% straight onto the modelled traces rather than into a panel of its
+    %% own, and adds no row here.
+    show_n2o_obs = (measurement == 6) && ~isempty(n2o_obs.date);
+    n_rows = 1+double(split_ph)+double(show_ph_obs);
+    row = 0;
+    if split_ph
+        %% subplot, not tiledlayout: a tiledlayout's OuterPosition is not
+        %% honoured under 'Padding','compact' in this MATLAB release (the
+        %% child tiles keep rendering flush to the figure edge regardless
+        %% of the OuterPosition set on the layout), which left no real
+        %% room for the legend band added below. subplot axes are plain
+        %% axes with the ordinary auto-margin behaviour the legend
+        %% placement below relies on.
+        row = row+1; ax = subplot(n_rows,1,row,'Parent',time_fig(measurement));
+        row = row+1; ax_pore = subplot(n_rows,1,row,'Parent',time_fig(measurement));
+    elseif n_rows > 1
+        row = row+1; ax = subplot(n_rows,1,row,'Parent',time_fig(measurement));
+    else
+        row = row+1; ax = axes('Parent',time_fig(measurement));
+    end
+    n_band = draw_uncertainty_bands(ax,Date_d,opt.Uncertainty, ...
+        envelope_field{measurement},comparison.trace_ids,trace_colors);
+    ln = plot(ax,Date_d,time_value{measurement}(:,comparison.trace_columns), ...
+        'LineWidth',1.35);
+    hold(ax,'on');
+    for trace = 1:numel(comparison.trace_columns)
+        treatment = comparison.trace_treatment(trace);
+        configuration = comparison.trace_configuration(trace);
+        ln(trace).Color = comparison.treatment_colors(treatment,:);
+        ln(trace).LineStyle = comparison.configuration_styles{configuration};
+        ln(trace).Tag = time_tag{measurement};
+        ln(trace).UserData = comparison.trace_ids(trace);
+    end
+    panel_axes = ax;
+    if split_ph
+        draw_uncertainty_bands(ax_pore,Date_d,opt.Uncertainty, ...
+            'PoreWaterPH',comparison.trace_ids,trace_colors);
+        pore_lines = plot(ax_pore,Date_d, ...
+            ph_pore_daily(:,comparison.trace_columns), ...
+            'LineWidth',1.35,'Tag','PoreWaterPH');
+        hold(ax_pore,'on');
+        for trace = 1:numel(comparison.trace_columns)
+            treatment = comparison.trace_treatment(trace);
+            configuration = comparison.trace_configuration(trace);
+            pore_lines(trace).Color = comparison.treatment_colors(treatment,:);
+            pore_lines(trace).LineStyle = ...
+                comparison.configuration_styles{configuration};
+            pore_lines(trace).UserData = comparison.trace_ids(trace);
+        end
+        panel_axes = [ax ax_pore];
+        %% Tight y-limits from each panel's own data (bands included), set
+        %% before the management overlay adds its label headroom.
+        format_ph_axis(ax,with_uncertainty(ph_bulk_daily(:,comparison.trace_columns), ...
+            opt.Uncertainty,'BulkPH',comparison.trace_ids));
+        format_ph_axis(ax_pore,with_uncertainty(ph_pore_daily(:,comparison.trace_columns), ...
+            opt.Uncertainty,'PoreWaterPH',comparison.trace_ids));
+    elseif measurement == 4
+        format_ph_axis(ax,with_uncertainty(ph_bulk_daily(:,comparison.trace_columns), ...
+            opt.Uncertainty,'BulkPH',comparison.trace_ids));
+    end
+    for panel = panel_axes
+        if ~isempty(application_dates)
+            marker = xline(panel,application_dates,':', ...
+                'Color',application_color,'LineWidth',1.1, ...
+                'Tag','FeedstockApplication');
+            set(marker,'HandleVisibility','off');
+        end
+        fertilizer_marker = draw_kantola_management(panel,management);
+        if isgraphics(fertilizer_marker)
+            fertilizer_marker.HandleVisibility = 'off';
+        end
+        format_time_axis(panel);
+        ylabel(panel,time_units{measurement},'Color','k');
+    end
+    if split_ph
+        ax.XTickLabel = {};
+        title(ax,'Bulk pH','Color','k');
+        title(ax_pore,'Pore-water pH','Color','k');
+        xlabel(ax_pore,'Date','Color','k');
+        %% The two panels share Date_d but keep independent y-limits;
+        %% link only x so a zoom or pan on one follows through on the
+        %% other instead of leaving the blanked top ticks stale.
+        linkaxes(panel_axes,'x');
+    else
+        xlabel(ax,'Date','Color','k');
+        title(ax,time_label{measurement},'Color','k');
+    end
+    if n_band > 0; annotate_uncertainty(ax,opt.Uncertainty,'Shaded'); end
+    if show_n2o_obs
+        %% Overlaid on the modelled traces, not stacked beneath them: the
+        %% comparison being made is per-day, and two panels sharing an x
+        %% axis still leave the reader estimating vertical distance by eye
+        %% across a gap. On one axes an observed spike and the modelled
+        %% value for that day are read off the same gridline.
+        overlay_n2o_observations(ax,n2o_obs,comparison.treatment_colors);
+    end
+    if show_ph_obs
+        row = row+1; ax_obs = subplot(n_rows,1,row,'Parent',time_fig(measurement));
+        draw_pH_comparison(ax_obs,[],[],bulk_ph_obs,comparison.treatment_colors);
+    end
+    %% Panels in top-to-bottom order for the layout pass below.
+    all_panels = ax;
+    if split_ph; all_panels = [all_panels ax_pore]; end
+    if show_ph_obs; all_panels = [all_panels ax_obs]; end
+    %% A single legend spelling out all twelve "configuration treatment"
+    %% combinations rendered cleanly in local testing but overlapped
+    %% illegibly on Bouchet's MATLAB/Linux stack regardless of
+    %% Orientation, NumColumns or Location -- most likely a font-metrics
+    %% or legend-layout difference between MATLAB releases/platforms that
+    %% only shows up once the auto-column layout has to fit this many
+    %% long labels. Two short single-row legends -- colour for treatment,
+    %% line style for configuration -- convey the same mapping without
+    %% ever exercising that multi-column path, and are positioned
+    %% explicitly rather than via 'Location', which is what triggered the
+    %% original layout.
+    %% Legends are built first and the panels laid out afterwards. The band
+    %% the legends need is measured from their rendered row height rather
+    %% than reserved by a fixed guess, so the panels can then expand into
+    %% exactly the space left above it -- no empty strip, and no legend
+    %% crowded against the axis it sits under.
+    obs_labels = {}; obs_colors = zeros(0,3);
+    if show_n2o_obs
+        obs_labels = {'Observed control','Observed basalt'};
+        obs_colors = comparison.treatment_colors(1:2,:);
+    end
+    [lgd,lgd_configuration,lgd_observation,band_top] = add_split_legends( ...
+        time_fig(measurement),ax, ...
+        ln(1:numel(comparison.treatment_labels)),comparison.configuration_labels, ...
+        comparison.configuration_styles,comparison.treatment_labels, ...
+        comparison.treatment_colors,obs_labels,obs_colors);
+    lgd.AutoUpdate = 'off';
+    lgd_configuration.AutoUpdate = 'off';
+    if isgraphics(lgd_observation); lgd_observation.AutoUpdate = 'off'; end
+    layout_time_panels(all_panels,band_top);
+    if split_ph
+        hold(ax_pore,'off');
+    end
+    hold(ax,'off');
+    time_plot_file{measurement} = metric_output_file( ...
+        opt.TimeOutputFile,opt.FigureDirectory, ...
+        [output_stem '_time_dynamics'],time_stem{measurement},suffix);
+    export_figure_pair(time_fig(measurement),time_plot_file{measurement});
 end
-legend_handles = legend_lines;
-legend_labels = treatment_labels;
-if isgraphics(application_legend)
-    legend_handles(end+1) = application_legend;
-    legend_labels{end+1} = 'Feedstock application';
-end
-if isgraphics(fertilizer_legend)
-    legend_handles(end+1) = fertilizer_legend;
-    legend_labels{end+1} = 'Maize fertilizer, days 81-100';
-end
-for k = 1:numel(observation_legend)
-    legend_handles(end+1) = observation_legend(k).handle; %#ok<AGROW>
-    legend_labels{end+1} = observation_legend(k).label; %#ok<AGROW>
-end
-time_lgd = legend(legend_handles,legend_labels,'Orientation','horizontal', ...
-    'Box','off','TextColor','k','Color','w','EdgeColor','none');
-time_lgd.Layout.Tile = 'south';
-title(time_tl,time_title,'Color','k');
-
-if isempty(opt.TimeOutputFile)
-    time_plot_file = fullfile(opt.FigureDirectory, ...
-        [output_stem '_time_dynamics' suffix '.png']);
-else
-    time_plot_file = char(opt.TimeOutputFile);
-end
-exportgraphics(time_fig,time_plot_file,'Resolution',200);
-[time_plot_folder,time_plot_name] = fileparts(time_plot_file);
-time_fig_file = fullfile(time_plot_folder,[time_plot_name '.fig']);
-savefig(time_fig,time_fig_file);
-fprintf('Saved: %s\n',time_plot_file);
-fprintf('Saved: %s\n',time_fig_file);
 
 end
 
 %% =======================================================================
-function missing = missing_results(run_ids,opt)
-missing = zeros(0,1);
-RM = Run_Matrix_12();
-for id = run_ids
-    tag = RM(id).name;
-    if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
-    result_file = fullfile(opt.ResultDirectory, ...
-        sprintf('TC_2D_run%02d_%s.mat',id,tag));
-    if ~isfile(result_file); missing(end+1,1) = id; end %#ok<AGROW>
+function comparison = treatment_configurations(RM)
+wanted_ids = [10 11 12; 1 2 3; 4 5 6; 7 8 9];
+wanted_labels = {'1-D','2-D whole field','2-D buffer only', ...
+    '2-D native vegetation buffer'};
+wanted_styles = {'-','--',':','-.'};
+available = all(ismember(wanted_ids,[RM.id]),2);
+comparison.run_ids = wanted_ids(available,:);
+comparison.configuration_labels = wanted_labels(available);
+comparison.configuration_styles = wanted_styles(available);
+comparison.treatment_labels = {'Control','Basalt','Calcite'};
+comparison.treatment_colors = [0 0 0; 0 0.25 0.60; 0.35 0.70 0.90];
+comparison.columns = zeros(size(comparison.run_ids));
+for configuration = 1:size(comparison.run_ids,1)
+    for treatment = 1:3
+        comparison.columns(configuration,treatment) = find( ...
+            [RM.id] == comparison.run_ids(configuration,treatment),1);
+    end
 end
+
+n_trace = numel(comparison.run_ids);
+comparison.trace_columns = zeros(1,n_trace);
+comparison.trace_ids = zeros(1,n_trace);
+comparison.trace_labels = cell(1,n_trace);
+comparison.trace_configuration = zeros(1,n_trace);
+comparison.trace_treatment = zeros(1,n_trace);
+trace = 0;
+for configuration = 1:size(comparison.run_ids,1)
+    for treatment = 1:3
+        trace = trace+1;
+        comparison.trace_columns(trace) = ...
+            comparison.columns(configuration,treatment);
+        comparison.trace_ids(trace) = ...
+            comparison.run_ids(configuration,treatment);
+        comparison.trace_labels{trace} = sprintf('%s %s', ...
+            comparison.configuration_labels{configuration}, ...
+            lower(comparison.treatment_labels{treatment}));
+        comparison.trace_configuration(trace) = configuration;
+        comparison.trace_treatment(trace) = treatment;
+    end
+end
+end
+
+%% =======================================================================
+function b = draw_treatment_bars(ax,value,colors,run_ids,tag)
+if size(run_ids,1) == 1
+    b = gobjects(3,1);
+    position = 1+[-0.24 0 0.24];
+    hold(ax,'on');
+    for treatment = 1:3
+        b(treatment) = bar(ax,position(treatment),value(treatment),0.22, ...
+            'FaceColor',colors(treatment,:),'Tag',tag);
+        b(treatment).UserData = run_ids(:,treatment).';
+    end
+    hold(ax,'off');
+    xlim(ax,[0.5 1.5]);
+else
+    b = bar(ax,value,'grouped','Tag',tag);
+    for treatment = 1:3
+        b(treatment).FaceColor = colors(treatment,:);
+        b(treatment).UserData = run_ids(:,treatment).';
+    end
+end
+end
+
+%% =======================================================================
+function format_configuration_axis(ax,labels)
+ax.Color = 'w';
+ax.XColor = 'k';
+ax.YColor = 'k';
+ax.XTick = 1:numel(labels);
+ax.XTickLabel = labels;
+ax.XTickLabelRotation = 15;
+grid(ax,'off');
+end
+
+%% =======================================================================
+function output_file = metric_output_file(requested,output_dir,base,metric,suffix)
+if isempty(requested)
+    output_file = fullfile(output_dir, ...
+        sprintf('%s_%s%s.png',base,metric,suffix));
+    return
+end
+[folder,name] = fileparts(char(requested));
+output_file = fullfile(folder,sprintf('%s_%s.png',name,metric));
+end
+
+%% =======================================================================
+function export_figure_pair(fig,png_file)
+exportgraphics(fig,png_file,'Resolution',200);
+[folder,name] = fileparts(png_file);
+fig_file = fullfile(folder,[name '.fig']);
+savefig(fig,fig_file);
+fprintf('Saved: %s\n',png_file);
+fprintf('Saved: %s\n',fig_file);
+end
+
+%% =======================================================================
+function missing = missing_results(run_ids,opt)
+RM = Run_Matrix_12();
+absent = arrayfun(@(id) ~isfile(result_filename(opt,id,RM(id).name)),run_ids);
+missing = reshape(run_ids(absent),[],1);
+end
+
+%% =======================================================================
+function result_file = result_filename(opt,run_id,name)
+%% Results are TC_2D_run%02d_<name>[__<Scenario>][__%dd].mat, the tag
+%% order Run_One_Subfield writes them with.
+result_file = fullfile(opt.ResultDirectory, ...
+    sprintf('TC_2D_run%02d_%s%s.mat',run_id,name,filename_suffix(opt)));
+end
+
+%% =======================================================================
+function suffix = filename_suffix(opt)
+suffix = '';
+if ~isempty(opt.Scenario); suffix = sprintf('__%s',opt.Scenario); end
+if ~isempty(opt.NDays); suffix = sprintf('%s__%dd',suffix,opt.NDays); end
+end
+
+%% =======================================================================
+function U = load_uncertainty(file)
+%% The 1-D parameter ensemble summary Summarize_Uncertainty
+%% writes, or [] when none is requested.  Members are the second
+%% dimension of the daily arrays; run_ids map the third to Run_Matrix_12.
+U = [];
+if isempty(file); return; end
+U = load(char(file),'Date','run_ids','daily','envelope','summary_range','in_envelope');
+if ~all(isfield(U,{'Date','run_ids','daily','envelope','summary_range','in_envelope'})) || ...
+        ~isfield(U.daily,'DailyN2O_gN_ha_d') || ~islogical(U.in_envelope) || ...
+        numel(U.in_envelope) ~= size(U.daily.DailyN2O_gN_ha_d,2) || ~U.in_envelope(1)
+    error('Plot_1D_Then_All_12:BadUncertainty', ...
+        'Uncertainty summary is incomplete: %s',file);
+end
+%% The bands and range bars span the members flagged for the envelope; the
+%% sensitivity-only members are in the daily arrays but not in the spread.
+U.in_envelope = U.in_envelope(:).';
+U.n_members = nnz(U.in_envelope);
+U.file = char(file);
+end
+
+%% =======================================================================
+function check_uncertainty_axis(U,Date_d)
+%% The ensemble is summarised on its own daily axis; the bands are only
+%% meaningful under lines drawn on exactly the same days.
+if isempty(U); return; end
+ensemble_date = datetime(U.Date(:),'ConvertFrom','datenum');
+if numel(ensemble_date) ~= numel(Date_d) || ...
+        any(abs(days(ensemble_date-Date_d(:))) > 1e-6)
+    error('Plot_1D_Then_All_12:UncertaintyAxis', ...
+        'The uncertainty summary is not on the plotted daily axis: %s',U.file);
+end
+end
+
+%% =======================================================================
+function n_band = draw_uncertainty_bands(ax,Date_d,U,metric,run_ids,colors)
+%% Member min-max envelope of every run the ensemble holds, as a
+%% translucent band in the run's treatment colour, drawn before the lines
+%% so they stay on top.  Days whose envelope is NaN are left out.
+n_band = 0;
+if isempty(U) || ~isfield(U.envelope,metric); return; end
+env = U.envelope.(metric);
+for k = 1:numel(run_ids)
+    r = find(U.run_ids == run_ids(k),1);
+    if isempty(r); continue; end
+    low = env.min(:,r); high = env.max(:,r);
+    ok = isfinite(low) & isfinite(high);
+    if ~any(ok); continue; end
+    hold(ax,'on');
+    fill(ax,[Date_d(ok); flipud(Date_d(ok))],[low(ok); flipud(high(ok))], ...
+        colors(k,:),'FaceAlpha',0.18,'EdgeColor','none', ...
+        'Tag','UncertaintyBand','HandleVisibility','off');
+    n_band = n_band+1;
+end
+end
+
+%% =======================================================================
+function value = with_uncertainty(value,U,metric,run_ids)
+%% The envelope columns of the runs the ensemble holds appended to the
+%% plotted values, so an axis scaled from the data also covers the bands.
+if isempty(U) || ~isfield(U.envelope,metric); return; end
+r = find(ismember(U.run_ids,run_ids));
+value = [value U.envelope.(metric).min(:,r) U.envelope.(metric).max(:,r)];
+end
+
+%% =======================================================================
+function range = summary_uncertainty_ranges(U,Date_d,n2o_obs)
+%% Member min-max of the six summary quantities, in the summary figures'
+%% order.  Five are stored; the observation-day N2O mean is derived per
+%% member from the daily flux with the same day pairing as the bars.
+range = cell(6,1);
+if isempty(U); return; end
+stored = {'CumulativeN2O_gN_m2','CumulativeNO3Leaching_gN_m2', ...
+    'FinalNO3Pool_gN_m2','FinalBulkPH','CumulativeNEE_gC_m2'};
+for k = 1:numel(stored)
+    if isfield(U.summary_range,stored{k})
+        range{k} = U.summary_range.(stored{k});
+    end
+end
+n_runs = numel(U.run_ids);
+obs_day = nan(U.n_members,n_runs);
+for r = 1:n_runs
+    obs_day(:,r) = paired_n2o_means(Date_d, ...
+        U.daily.DailyN2O_gN_ha_d(:,U.in_envelope,r),n2o_obs);
+end
+range{6} = struct('min',min(obs_day,[],1),'max',max(obs_day,[],1));
+end
+
+%% =======================================================================
+function n_range = draw_uncertainty_ranges(ax,b,run_ids,U,range)
+%% Member min-max on the bars of the runs the ensemble holds, as a thin
+%% black bar spanning exactly that range whatever the plotted value is.
+n_range = 0;
+if isempty(U) || isempty(range); return; end
+was_held = ishold(ax);
+hold(ax,'on');
+for configuration = 1:size(run_ids,1)
+    for treatment = 1:size(run_ids,2)
+        r = find(U.run_ids == run_ids(configuration,treatment),1);
+        if isempty(r); continue; end
+        low = range.min(r); high = range.max(r);
+        if ~(isfinite(low) && isfinite(high)); continue; end
+        errorbar(ax,b(treatment).XEndPoints(configuration),(low+high)/2, ...
+            (high-low)/2,'LineStyle','none','Color','k','LineWidth',0.9, ...
+            'CapSize',6,'Tag','UncertaintyRange','HandleVisibility','off');
+        n_range = n_range+1;
+    end
+end
+if ~was_held; hold(ax,'off'); end
+end
+
+%% =======================================================================
+function annotate_uncertainty(target,U,what)
+%% One short note per figure that carries the ensemble: what is drawn
+%% ('Shaded' bands or 'Range bars') and how many members set the range.
+%% A subtitle, so it is neither a legend entry nor a panel label.
+subtitle(target,sprintf('%s: parameter-uncertainty range (%d members)', ...
+    what,U.n_members),'FontSize',8,'FontWeight','normal','Color',[0.3 0.3 0.3]);
 end
 
 %% =======================================================================
@@ -716,7 +998,6 @@ if ~all(isfield(S,required)) || ~isstruct(S.topo) || ...
 end
 
 A_cell = S.topo.cell_area_m2(:);
-[~,w_col] = Field_Aggregation_Areas(S.topo);
 n_col = numel(A_cell);
 if n_col < 1 || numel(S.ColCfg) ~= n_col || ...
         any(~isfinite(A_cell)) || any(A_cell <= 0)
@@ -805,44 +1086,59 @@ for c = 1:n_col
             crown.*fruit_removed;
     end
 end
+%% In-field (polygon-overlap) weights; equal to A_cell/sum(A_cell) when
+%% the topology carries no overlap areas.
+[~,w_col] = Field_Aggregation_Areas(S.topo);
+w_col = w_col(:);
 nee = nee_cell*w_col;
 crop_harvest = crop_harvest_cell*w_col;
 end
 
 %% =======================================================================
-function r = rN2O_fluxweighted(share_pct,n2_flux)
-%% Denitrification-weighted mean of the N2O fraction [%].
-%%
-%% The plain mean over days is not what the nitrogen actually experiences.
-%% Denitrification is concentrated on wet days, and those days do not carry
-%% the mean pH, so weighting by the flux changes the answer materially.
-%% Recover total denitrification from N2flx = (1-rN2O)*DENITflx.
-f = share_pct/100;
-den = n2_flux./max(1-f,eps);
-r = 100*sum(f.*den,'omitnan')/max(sum(den,'omitnan'),eps);
+function r = denitrification_n2o_share(n2o_total,n2o_nit,n2_flux)
+n2o_denit = n2o_total-n2o_nit;
+values = [n2o_total(:); n2o_nit(:); n2_flux(:)];
+if any(~isfinite(values))
+    error('Plot_1D_Then_All_12:NonfiniteNitrogenFlux', ...
+        'The saved N2O or N2 flux contains a nonfinite value.');
 end
-
-%% =======================================================================
-function v = daily(S,name,nd)
-%% Daily flux as a column, or zeros when the run did not save it.
-if isfield(S,name); v = S.(name); v = v(:); v = v(1:nd); else; v = zeros(nd,1); end
+tol = 100*eps(max([1; abs(values)]));
+if any(n2o_total < -tol) || any(n2o_nit < -tol) || ...
+        any(n2o_denit < -tol) || any(n2_flux < -tol)
+    error('Plot_1D_Then_All_12:InvalidNitrogenFlux', ...
+        'The saved fluxes imply a negative denitrification N2O or N2 flux.');
 end
-
-%% =======================================================================
-function w = water_filled_pore_space(S,nd)
-%% Depth-weighted WFPS of the biogeochemical layer [%], daily mean.
-p = S.p;
-O = S.O; if ndims(O) == 3; O = O(:,:,1); end
-sph = size(O,1)/nd;
-Osat = sum(p.Bio_Zs.*p.Soil_Param.Osat);
-w = zeros(nd,1);
-for j = 1:nd
-    rows = round((j-1)*sph)+1:round(j*sph);
-    w(j) = sum(p.Bio_Zs.*mean(O(rows,:),1))/Osat*100;
+n2o_denit(abs(n2o_denit) <= tol) = 0;
+n2_flux(abs(n2_flux) <= tol) = 0;
+denit = n2o_denit+n2_flux;
+denit_total = sum(denit);
+if denit_total <= tol
+    r = NaN;
+else
+    r = 100*sum(n2o_denit)/denit_total;
 end
 end
 
 %% =======================================================================
+function v = required_daily(S,name,nd)
+if ~isfield(S,name)
+    error('Plot_1D_Then_All_12:MissingDailyFlux', ...
+        'The saved result does not contain %s.',name);
+end
+v = S.(name);
+if ~isnumeric(v)
+    error('Plot_1D_Then_All_12:BadDailyFlux', ...
+        '%s must be numeric.',name);
+end
+v = v(:);
+if numel(v) < nd
+    error('Plot_1D_Then_All_12:ShortDailyFlux', ...
+        '%s has %d values, but the result contains %d saved days.', ...
+        name,numel(v),nd);
+end
+v = v(1:nd);
+end
+
 function obs = n2o_observations(root)
 %% Digitised Val Martin et al. chamber N2O measurements from the Energy
 %% Farm maize plots, 2016-2018, in g N ha^-1 d^-1.  The same file
@@ -882,6 +1178,76 @@ obs.treatment = treatment(order);
 end
 
 %% =======================================================================
+function obs = bulk_pH_observations(root)
+%% Beerling bulk-pH observations.  The 0-10 and 10-30 cm measurements stay
+%% separate because the model has one 0-30 cm bulk-pH state.
+obs = struct('available',false,'labels',strings(0,1));
+obs_file = fullfile(root,'Experimental observations', ...
+    'Web plot digitizer','Data_Beerling.mat');
+if ~isfile(obs_file)
+    warning('Plot_1D_Then_All_12:MissingObservations', ...
+        'Digitised bulk-pH observations not found: %s',obs_file);
+    return
+end
+S = load(obs_file,'pH_Exp');
+required = {'X','control_0','control_10','basalt_0','basalt_10'};
+if ~isfield(S,'pH_Exp') || ~isstruct(S.pH_Exp) || ...
+        ~all(isfield(S.pH_Exp,required))
+    error('Plot_1D_Then_All_12:BadPHObservations', ...
+        'Digitised bulk-pH structure is incomplete in %s.',obs_file);
+end
+obs.labels = strip(string(S.pH_Exp.X(:)));
+for k = 2:numel(required)
+    field_name = required{k};
+    value = S.pH_Exp.(field_name);
+    if ~isnumeric(value) || ~isvector(value) || ...
+            numel(value) ~= numel(obs.labels) || any(~isfinite(value(:)))
+        error('Plot_1D_Then_All_12:BadPHObservations', ...
+            'Digitised bulk-pH series %s is invalid in %s.', ...
+            field_name,obs_file);
+    end
+    obs.(field_name) = double(value(:));
+end
+obs.sem = bulk_pH_sem(root,obs.labels);
+obs.available = true;
+end
+
+%% =======================================================================
+function sem = bulk_pH_sem(root,labels)
+%% Standard errors of the Beerling block means, read from the vector
+%% extraction of Fig. 1E and aligned to the digitised labels by period
+%% ('pre', then the year).  An empty SEM in the file is a point whose bar
+%% the figure does not draw; it stays NaN and gets no bar here either.
+series = {'control_0','control','0-10'; 'control_10','control','10-30'; ...
+    'basalt_0','basalt','0-10'; 'basalt_10','basalt','10-30'};
+sem = struct();
+for k = 1:size(series,1); sem.(series{k,1}) = nan(numel(labels),1); end
+csv_file = fullfile(root,'Experimental observations', ...
+    'Web plot digitizer','Beerling2024_Fig1E_vector_extraction.csv');
+if ~isfile(csv_file)
+    warning('Plot_1D_Then_All_12:MissingObservations', ...
+        'Bulk-pH standard errors not found: %s',csv_file);
+    return
+end
+opts = detectImportOptions(csv_file,'CommentStyle','#','Delimiter',',');
+opts = setvartype(opts,{'treatment','depth_cm','period'},'string');
+opts = setvartype(opts,{'pH','SEM'},'double');
+T = readtable(csv_file,opts);
+for k = 1:size(series,1)
+    rows = T.treatment == series{k,2} & T.depth_cm == series{k,3};
+    for j = 1:numel(labels)
+        pick = find(rows & T.period == labels(j));
+        if ~isscalar(pick)
+            error('Plot_1D_Then_All_12:BadPHObservations', ...
+                '%s has %d rows for %s %s cm %s.',csv_file,numel(pick), ...
+                series{k,2},series{k,3},labels(j));
+        end
+        sem.(series{k,1})(j) = T.SEM(pick);
+    end
+end
+end
+
+%% =======================================================================
 function obs = clip_observations(obs,Date_d)
 %% Keep only the samples inside the simulated window.  The time panels
 %% share one x axis, so a point outside it would stretch every panel.
@@ -918,78 +1284,235 @@ end
 end
 
 %% =======================================================================
-function reference = draw_observed_points(ax,b,treatment_mean,colors)
-%% The field mean as a point over the bar it belongs to, once per scenario
-%% group.  Chamber data is a measurement and is drawn as measurements are
-%% drawn everywhere in these figures: points, never a line.  A white face
-%% inside a treatment-coloured ring is what keeps the point readable both
-%% against a dark bar and on the white of the legend.
-reference = struct('handle',{},'label',{});
-name = {'control','basalt'};
-label = {'Observed control (Val Martin et al.)', ...
-    'Observed basalt (Val Martin et al.)'};
+function draw_pH_comparison(ax,~,~,obs,colors)
+%% Show the observed bulk pH of both sampled depth intervals beneath the
+%% simulated time series. The model is one lumped 0-30 cm state, so the two
+%% intervals are drawn as measured -- filled 0-10 cm, open 10-30 cm -- and
+%% bracket where a lumped value can fall; they are not merged into a depth
+%% average.
+format_comparison_axis(ax);
+if ~obs.available
+    text(ax,0.5,0.5,'Bulk-pH observations unavailable', ...
+        'Units','normalized','HorizontalAlignment','center','Color','k');
+    return
+end
+labels = obs.labels;
+x = (1:numel(labels)).';
 hold(ax,'on');
-for k = 1:2
-    value = treatment_mean.(name{k});
-    if ~isfinite(value); continue; end
-    x = b(k).XEndPoints;
-    h = scatter(ax,x,repmat(value,size(x)),64,'o','filled', ...
-        'MarkerFaceColor','w','MarkerEdgeColor',colors(k,:), ...
-        'LineWidth',2,'Tag',sprintf('Observed_%s_mean',name{k}));
-    reference(end+1) = struct('handle',h,'label',label{k}); %#ok<AGROW>
+treatments = {'control','basalt'};
+depth = struct('field',{'_0','_10'},'tag',{'0_10','10_30'}, ...
+    'marker',{'o','s'},'offset',{-0.08,0.08});
+for treatment = 1:2
+    for d = 1:2
+        value = obs.([treatments{treatment} depth(d).field]);
+        if d == 1; face = colors(treatment,:); else; face = 'none'; end
+        %% SEM first, so the marker sits on top of its bar.
+        errorbar(ax,x+depth(d).offset,value, ...
+            obs.sem.([treatments{treatment} depth(d).field]), ...
+            'LineStyle','none','Color',colors(treatment,:), ...
+            'LineWidth',0.75,'CapSize',4,'HandleVisibility','off', ...
+            'Tag',sprintf('Observed_%s_pH_%s_SEM',treatments{treatment}, ...
+            depth(d).tag));
+        scatter(ax,x+depth(d).offset,value,36,colors(treatment,:), ...
+            depth(d).marker,'MarkerFaceColor',face, ...
+            'MarkerEdgeColor',colors(treatment,:),'LineWidth',0.75, ...
+            'Tag',sprintf('Observed_%s_pH_%s',treatments{treatment}, ...
+            depth(d).tag));
+    end
 end
 hold(ax,'off');
+ax.XLim = [0.5 numel(labels)+0.5];
+ax.XTick = x;
+ax.XTickLabel = labels;
+ylabel(ax,'pH','Color','k');
+title(ax,'Observed bulk pH: filled 0-10 cm, open 10-30 cm', ...
+    'Color','k','FontSize',8);
 end
 
 %% =======================================================================
-function marks = draw_observation_points(ax,obs,colors)
-%% Chamber measurements over the modelled daily flux.  Scatter, not line,
-%% keeps the treatment-colour line contract of the time panels intact.
-marks = struct('handle',{},'label',{});
-name = {'control','basalt'};
-label = {'Observed control (Val Martin et al.)', ...
-    'Observed basalt (Val Martin et al.)'};
-for k = 1:2
-    pick = obs.treatment == name{k};
+function overlay_n2o_observations(ax,obs,colors)
+%% Chamber N2O drawn onto the modelled series at the dates it was sampled.
+%% Markers only, never a connecting line: consecutive campaigns are days to
+%% weeks apart, and joining them would draw flux on days nobody measured --
+%% exactly the fabricated detail that makes a measurement look like a model.
+%% n2o_observations already restricts obs to the maize years (2017, 2018)
+%% and clip_observations to the model window, so every point has a modelled
+%% day beneath it.
+%%
+%% Each point takes its treatment's colour and a white edge. The colour is
+%% what makes the comparison readable -- an observation sits in the same
+%% hue as the traces it tests -- and the edge is what keeps it visible when
+%% it lands on top of one of them, which is precisely where the points that
+%% matter fall.
+if isempty(obs.date); return; end
+was_held = ishold(ax);
+hold(ax,'on');
+treatments = {'control','basalt'};
+for treatment = 1:2
+    pick = obs.treatment == treatments{treatment};
     if ~any(pick); continue; end
-    h = scatter(ax,obs.date(pick),obs.flux(pick),24,'o','filled', ...
-        'MarkerFaceColor',colors(k,:),'MarkerEdgeColor','k', ...
-        'MarkerFaceAlpha',0.85, ...
-        'Tag',sprintf('Observed_%s_N2O',name{k}));
-    marks(end+1) = struct('handle',h,'label',label{k}); %#ok<AGROW>
+    %% HandleVisibility off keeps these out of the treatment legend, which
+    %% is built from the modelled lines and already carries this colour key.
+    plot(ax,obs.date(pick),obs.flux(pick),'o', ...
+        'MarkerFaceColor',colors(treatment,:),'MarkerEdgeColor','w', ...
+        'MarkerSize',5,'LineWidth',0.5,'LineStyle','none', ...
+        'HandleVisibility','off', ...
+        'Tag',sprintf('Observed_%s_N2O_series',treatments{treatment}));
 end
+if ~was_held; hold(ax,'off'); end
 end
 
 %% =======================================================================
-function b = draw_panel(ax,value,panel_title,y_label,group_labels,colors)
-n_group = numel(group_labels);
-if n_group == 1
-    b = gobjects(3,1);
-    hold(ax,'on');
-    for treatment = 1:3
-        b(treatment) = bar(ax,treatment,value(treatment),0.8, ...
-            'FaceColor',colors(treatment,:));
-    end
-    hold(ax,'off');
-else
-    b = bar(ax,reshape(value,3,n_group).','grouped');
-    for treatment = 1:3
-        b(treatment).FaceColor = colors(treatment,:);
-    end
-end
+function format_comparison_axis(ax)
 ax.Color = 'w';
 ax.XColor = 'k';
 ax.YColor = 'k';
-if n_group == 1
-    ax.XTick = 2;
-else
-    ax.XTick = 1:n_group;
-end
-ax.XTickLabel = group_labels;
-ax.XTickLabelRotation = 18;
+ax.XTickLabelRotation = 0;
 grid(ax,'off');
-title(ax,panel_title,'Color','k');
-ylabel(ax,y_label,'Color','k');
+end
+
+%% =======================================================================
+function [lgd_treatment,lgd_configuration,lgd_observation,band_top] = ...
+    add_split_legends(fig,treatment_axes,treatment_lines, ...
+    configuration_labels,configuration_styles,treatment_labels, ...
+    treatment_colors,observation_labels,observation_colors)
+%% Two short single-row legends stacked at an explicit figure-normalized
+%% position: treatment_axes' own bottom margin must already have been
+%% shrunk by the caller to leave room for both rows below y_bottom plus
+%% their own height. A second, invisible full-figure axes hosts the
+%% configuration legend, since one axes can carry only one legend and
+%% treatment_axes already carries the treatment legend.
+PAD_BELOW = 0.015;   %% clear space beneath the bottom legend row
+GAP_ABOVE = 0.030;   %% clear space between the top legend row and the axes
+
+lgd_treatment = legend(treatment_axes,treatment_lines,treatment_labels, ...
+    'Orientation','horizontal','Box','off','TextColor','k');
+lgd_treatment.Units = 'normalized';
+
+overlay = axes('Parent',fig,'Position',[0 0 1 1],'Visible','off', ...
+    'HitTest','off','HandleVisibility','off');
+hold(overlay,'on');
+configuration_proxy = gobjects(numel(configuration_labels),1);
+for c = 1:numel(configuration_labels)
+    configuration_proxy(c) = plot(overlay,NaN,NaN,configuration_styles{c}, ...
+        'Color',[0.3 0.3 0.3],'LineWidth',1.35);
+end
+lgd_configuration = legend(overlay,configuration_proxy,configuration_labels, ...
+    'Orientation','horizontal','Box','off','TextColor','k');
+lgd_configuration.Units = 'normalized';
+
+%% Third row, only where measurements are overlaid: the marker proxies
+%% carry the same face colour and white edge as the plotted points, so the
+%% key matches what is actually on the axes rather than approximating it.
+lgd_observation = gobjects(1);
+if nargin >= 9 && ~isempty(observation_labels)
+    overlay_obs = axes('Parent',fig,'Position',[0 0 1 1],'Visible','off', ...
+        'HitTest','off','HandleVisibility','off');
+    hold(overlay_obs,'on');
+    observation_proxy = gobjects(numel(observation_labels),1);
+    for c = 1:numel(observation_labels)
+        observation_proxy(c) = plot(overlay_obs,NaN,NaN,'o', ...
+            'MarkerFaceColor',observation_colors(c,:),'MarkerEdgeColor','w', ...
+            'MarkerSize',5,'LineWidth',0.5,'LineStyle','none');
+    end
+    lgd_observation = legend(overlay_obs,observation_proxy,observation_labels, ...
+        'Orientation','horizontal','Box','off','TextColor','k');
+    lgd_observation.Units = 'normalized';
+end
+
+%% One drawnow for every legend, then stack them on a common row height so
+%% the rows sit evenly regardless of which happens to render tallest.
+drawnow;
+row_h = max([lgd_treatment.Position(4) lgd_configuration.Position(4)]);
+n_rows = 2;
+if isgraphics(lgd_observation)
+    row_h = max(row_h,lgd_observation.Position(4));
+    n_rows = 3;
+end
+place_legend_row(lgd_treatment,PAD_BELOW,0.26);
+place_legend_row(lgd_configuration,PAD_BELOW+row_h,0.60);
+if isgraphics(lgd_observation)
+    place_legend_row(lgd_observation,PAD_BELOW+2*row_h,0.40);
+end
+band_top = PAD_BELOW+n_rows*row_h+GAP_ABOVE;
+end
+
+%% =======================================================================
+function layout_time_panels(panels,band_top)
+%% Stack the panels between the legend band and the top of the figure,
+%% filling the space instead of leaving subplot's default margins. Panels
+%% arrive top-to-bottom.
+%%
+%% The gap below each panel is sized to what that panel actually renders:
+%% a panel whose tick labels have been blanked (the upper pH panels, which
+%% hand their date axis to the one below) needs only enough room for the
+%% next panel's title, while one still carrying rotated date labels and an
+%% axis label needs roughly half again as much. Using a single worst-case
+%% gap everywhere is what leaves the empty strips.
+LEFT = 0.10; WIDTH = 0.87;
+n = numel(panels);
+%% An axes' Position is its plot box only. Tick labels and the axis label
+%% render BELOW it and the title ABOVE it, so a layout built from Position
+%% alone prints those decorations across whatever sits next to the panel --
+%% the "Date" label over the legend rows, or over the title of the panel
+%% beneath. TightInset gives what those decorations actually occupy, in the
+%% same normalized units, so the spacing is measured rather than guessed.
+%%
+%% Two passes: the first uses rough spacing only to get the panels to a
+%% representative size, the second reads each panel's insets and sets the
+%% real layout. A single constant cannot serve, because within one figure
+%% the panels differ -- the pH figure's middle panel carries rotated dates
+%% and a "Date" label while the one above it has both suppressed.
+gaps = repmat(0.085,1,max(0,n-1));
+bottom_margin = 0.06;
+top = 0.945;
+for pass = 1:2
+    h = (top-band_top-bottom_margin-sum(gaps))/n;
+    if h <= 0; return; end   %% pathological figure size: keep subplot's layout
+    y = top;
+    for k = 1:n
+        y = y-h;
+        panels(k).Position = [LEFT y WIDTH h];
+        if k <= numel(gaps); y = y-gaps(k); end
+    end
+    if pass == 1
+        drawnow;
+        for k = 1:n-1
+            %% clear the upper panel's labels and the lower panel's title
+            gaps(k) = panels(k).TightInset(2)+panels(k+1).TightInset(4)+0.008;
+        end
+        bottom_margin = panels(end).TightInset(2)+0.012;
+        top = 0.995-panels(1).TightInset(4);
+    end
+end
+end
+
+%% =======================================================================
+function row_h = place_legend_row(lgd,y,min_width)
+%% Centre one horizontal legend row at an explicit figure-normalized height
+%% and return its height so the caller can stack the next row above it.
+%%
+%% The width is floored rather than taken as given. MATLAB's auto-computed
+%% legend width, read immediately after creation, is occasionally stale --
+%% narrower than its own entries need -- on Bouchet's MATLAB/Linux stack;
+%% freezing the position then locks that undersized box and the entries lay
+%% out overlapping inside it. This is why the four-entry configuration row
+%% rendered correctly on the pH figure, which does enough drawing beforehand
+%% for the width to settle, and illegibly on the single-panel figures.
+%%
+%% In practice the floor binds rather than merely rescuing: the auto width
+%% comes back below it locally too, so these values, not MATLAB's, set the
+%% row width in the normal case. They are sized from a correctly rendered
+%% Bouchet figure, where the configuration row spanned about 0.64 of the
+%% figure. That asymmetry is deliberate -- a row wider than its entries need
+%% only spreads them out, whereas one too narrow is what makes them
+%% unreadable -- but it does mean changing the label text warrants
+%% re-checking these numbers rather than trusting them to adapt.
+drawnow;
+w = max(lgd.Position(3),min_width);
+lgd.Position = [0.5-w/2, y, w, lgd.Position(4)];
+drawnow;
+row_h = lgd.Position(4);
 end
 
 %% =======================================================================
@@ -999,6 +1522,20 @@ ax.XColor = 'k';
 ax.YColor = 'k';
 ax.XTickLabelRotation = 20;
 grid(ax,'off');
+end
+
+%% =======================================================================
+function format_ph_axis(ax,value)
+limits = [min(value,[],'all') max(value,[],'all')];
+span = diff(limits);
+if span < 0.02
+    centre = mean(limits);
+    limits = centre+[-0.05 0.05];
+else
+    limits = limits+0.05*span*[-1 1];
+end
+ylim(ax,limits);
+ytickformat(ax,'%.2f');
 end
 
 %% =======================================================================
@@ -1048,6 +1585,11 @@ if ~isempty(management.fertilizer_start)
     fertilizer_legend = marker(1);
 end
 
+data_ylim = ylim(ax);
+data_span = diff(data_ylim);
+if all(isfinite(data_ylim)) && data_span > 0
+    ylim(ax,[data_ylim(1) data_ylim(2)+0.12*data_span]);
+end
 date_span = days(management.date_end-management.date_start);
 for k = 1:numel(management.crop_years)
     left = management.crop_start(k);
@@ -1059,10 +1601,11 @@ for k = 1:numel(management.crop_years)
     else
         x = 0.5;
     end
-    text(ax,x,0.88,sprintf('%d %s',management.crop_years(k), ...
+    text(ax,x,0.97,sprintf('%d %s',management.crop_years(k), ...
         management.crop_names{k}),'Units','normalized', ...
         'HorizontalAlignment','center','VerticalAlignment','top', ...
         'Color',[0.25 0.25 0.25],'FontSize',8, ...
+        'BackgroundColor','w','Margin',1, ...
         'Tag','KantolaCropLabel');
 end
 end

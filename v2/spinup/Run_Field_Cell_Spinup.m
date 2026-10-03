@@ -134,8 +134,16 @@ end
 run_cell_spinup = @(c) full_cell_spinup(output_directory,resolved.cell_id(c), ...
     opt.CaseNumber,CellInputs(c));
 
+cluster_step = ~isempty(opt.CellIndex) || opt.PlanOnly || opt.AssembleOnly;
 if strcmpi(opt.Method,'rf')
-    if exist('TreeBagger','file') ~= 2
+    if exist('TreeBagger','file') ~= 2 && cluster_step
+        %% An array step cannot switch method on its own: the plan and the
+        %% other tasks would still be running the RF path.
+        error('Run_Field_Cell_Spinup:NoRFToolbox', ...
+            ['Method=''rf'' needs TreeBagger (Statistics and Machine Learning ' ...
+             'Toolbox) on every node that runs a step; use Method=''per_cell'' ' ...
+             'for the whole array instead.']);
+    elseif exist('TreeBagger','file') ~= 2
         warning('Run_Field_Cell_Spinup:NoRFToolbox', ...
             ['TreeBagger unavailable; falling back to Method=''per_cell''. ' ...
              'Install the Statistics and Machine Learning Toolbox for the ' ...
@@ -172,6 +180,9 @@ if strcmpi(opt.Method,'rf')
     end
 end
 
+if cluster_step
+    check_plan_method(output_directory,opt.Method);
+end
 if opt.PlanOnly
     state_file = write_plan(output_directory,topo,resolved,opt.Method,sub_idx);
     return
@@ -207,8 +218,14 @@ if ~isempty(opt.CellIndex)
                  'cell; missing cell id(s) %s. Run the subsample array first.'], ...
                 k,mat2str(resolved.cell_id(sub_idx(~ready)).'));
         end
-        sub_states = repmat(run_cell_spinup(sub_idx(1)),numel(sub_idx),1);
-        for si = 2:numel(sub_idx); sub_states(si) = run_cell_spinup(sub_idx(si)); end
+        %% Read only: hundreds of RF tasks share these files, and none of
+        %% them may re-spin or delete a subsample cell.
+        sub_states = repmat(load_finished_state(output_directory,resolved, ...
+            CellInputs,sub_idx(1),opt.CaseNumber),numel(sub_idx),1);
+        for si = 2:numel(sub_idx)
+            sub_states(si) = load_finished_state(output_directory,resolved, ...
+                CellInputs,sub_idx(si),opt.CaseNumber);
+        end
         [st,rep] = Reconstruct_Cell_Pools_RF(topo,resolved,CellInputs, ...
             sub_states,sub_idx,'CaseNumber',opt.CaseNumber, ...
             'OutputDirectory',output_directory,'CellIndex',k, ...
@@ -220,6 +237,13 @@ if ~isempty(opt.CellIndex)
     end
     state_file = write_cell_state(output_directory,k,resolved.cell_id(k),st,method);
     fprintf('Saved cell %d (id %d, %s): %s\n',k,resolved.cell_id(k),method,state_file);
+    if method == "failed"
+        %% The file holds a flagged neighbour state for the record; the
+        %% task itself must fail so the array shows it.
+        error('Run_Field_Cell_Spinup:CellFailed', ...
+            ['Cell %d (id %d): the RF seed and the cold start both failed; see ' ...
+             'the warnings above.'],k,resolved.cell_id(k));
+    end
     return
 end
 
@@ -279,6 +303,7 @@ plan = table((1:N).',resolved.cell_id(:),is_sub, ...
     'VariableNames',{'cell_index','cell_id','is_subsample'});
 plan.method = repmat("full",N,1);
 if strcmpi(method,'rf'); plan.method(~is_sub) = "rf_seed"; end
+plan.spinup_method = repmat(string(lower(method)),N,1);
 plan_file = fullfile(output_directory,'spinup_plan.csv');
 writetable(plan,plan_file);
 write_index_list(fullfile(output_directory,'array_indices_all.txt'),1:N);
@@ -336,6 +361,21 @@ if ~isempty(missing)
         '%d of %d cell states are missing (cell id(s) %s); the array is not complete.', ...
         numel(missing),N,mat2str(missing(:).'));
 end
+%% A failed reconstruction is named as such before validation rejects it
+%% for the unconverged neighbour state it holds.
+failed_ids = [];
+for c = 1:N
+    S = load(cell_state_path(output_directory,resolved.cell_id(c)),'method');
+    if isfield(S,'method') && string(S.method) == "failed"
+        failed_ids(end+1) = resolved.cell_id(c); %#ok<AGROW>
+    end
+end
+if ~isempty(failed_ids)
+    error('Run_Field_Cell_Spinup:CellsFailed', ...
+        ['%d cell(s) could not be spun up (ids %s): their RF seed and cold ' ...
+         'start both failed. Rerun those array tasks after fixing the cause.'], ...
+        numel(failed_ids),mat2str(failed_ids));
+end
 for c = 1:N
     f = cell_state_path(output_directory,resolved.cell_id(c));
     S = load(f,'st','method','cell_id');
@@ -388,27 +428,25 @@ end
 %% =======================================================================
 function st = full_cell_spinup(output_directory, cell_id, case_number, cell_inputs)
 cell_file = spinup_state_path(output_directory,cell_id);
+%% What this run is: the cell, its inputs, the case and its rows (with the
+%% forcing, meteo and transient windows), from a cold start.  A finished
+%% state is reused, and a phase checkpoint resumed, only under the same key,
+%% so an interrupted array task resumes and any change starts afresh.
+provenance = Spinup_Provenance(cell_id,cell_inputs.agronomic_identity, ...
+    case_number,cell_inputs.MOD_PARAM,cell_inputs.ERW_PARAM,'cold');
 if isfile(cell_file)
-    %% A finished, validated state of this cell -- an earlier run, or a
-    %% cluster array task -- is reused: the spin-up is deterministic for
-    %% the same inputs, and this is what lets an array feed the RF step.
-    %% A state written for other inputs is discarded together with its
-    %% phase checkpoints, which would otherwise resume the stale run.
     try
         st = load_bg_state(cell_file);
         Validate_BG_State_For_Transient(st,cell_file);
-        if isfield(st,'cell_id') && isfield(st,'cell_agronomic_identity') && ...
+        if isfield(st,'cell_id') && isfield(st,'spinup_provenance') && ...
                 st.cell_id == cell_id && ...
-                strcmp(char(string(st.cell_agronomic_identity)),cell_inputs.agronomic_identity)
+                strcmp(char(string(st.spinup_provenance)),provenance)
             fprintf('  cell %d: reusing validated spin-up state %s\n',cell_id,cell_file);
             return
         end
-        fprintf('  cell %d: existing state was made for other inputs; spinning up afresh\n',cell_id);
+        fprintf('  cell %d: existing state was made for another run; spinning up afresh\n',cell_id);
     catch ME
         fprintf('  cell %d: existing state unusable (%s); spinning up afresh\n',cell_id,ME.message);
-    end
-    for tag = {'p1_avgs','p2_inprog','p2_standalone','p3_loop'}
-        delete_if_present(spinup_phase_checkpoint_filename(cell_file,tag{1}));
     end
     delete_if_present(cell_file);
 end
@@ -417,10 +455,47 @@ settings = struct('NN_case_study_ERW_MOD',case_number, ...
     'SAVE_RESULTS',0,'MOD_PARAM_override',cell_inputs.MOD_PARAM, ...
     'ERW_PARAM_override',cell_inputs.ERW_PARAM, ...
     'BG_OUTPUT_FILE',cell_file,'CELL_ID',cell_id, ...
-    'CELL_AGRONOMIC_IDENTITY',cell_inputs.agronomic_identity);
+    'CELL_AGRONOMIC_IDENTITY',cell_inputs.agronomic_identity, ...
+    'SPINUP_PROVENANCE',provenance);
 Run_Automatic_Site_Spinup(settings);
 st = load_bg_state(cell_file);
 Validate_BG_State_For_Transient(st,cell_file);
+end
+
+function st = load_finished_state(output_directory,resolved,CellInputs,c,case_number)
+%% A finished full spin-up of subsample cell c, read and checked, never
+%% written: it must be the cold-start run of this cell's current inputs.
+cell_id = resolved.cell_id(c);
+cell_file = spinup_state_path(output_directory,cell_id);
+provenance = Spinup_Provenance(cell_id,CellInputs(c).agronomic_identity, ...
+    case_number,CellInputs(c).MOD_PARAM,CellInputs(c).ERW_PARAM,'cold');
+st = load_bg_state(cell_file);
+Validate_BG_State_For_Transient(st,cell_file);
+if ~(isfield(st,'spinup_provenance') && ...
+        strcmp(char(string(st.spinup_provenance)),provenance))
+    error('Run_Field_Cell_Spinup:SubsampleStale', ...
+        ['%s was spun up for another run (inputs, case or windows); rerun the ' ...
+         'subsample array before the RF array.'],cell_file);
+end
+end
+
+function check_plan_method(output_directory,method)
+%% One method per output directory: per_cell and rf runs would otherwise
+%% overwrite each other's cellstate files and the assembly would mix them.
+plan_file = fullfile(output_directory,'spinup_plan.csv');
+if ~isfile(plan_file)
+    return
+end
+plan = readtable(plan_file,'TextType','string');
+if ~ismember('spinup_method',plan.Properties.VariableNames)
+    return
+end
+planned = plan.spinup_method(1);
+if ~strcmpi(planned,method)
+    error('Run_Field_Cell_Spinup:PlanMethodMismatch', ...
+        ['%s plans Method=%s; this step runs Method=%s. Give each method its ' ...
+         'own output directory (TC_OUTPUT_DIR).'],plan_file,planned,method);
+end
 end
 
 function delete_if_present(file_name)

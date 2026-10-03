@@ -92,6 +92,8 @@ soil_mass = 1295*300/1000;
         B(61) = fr(1)*8.6*soil_mass*0.01*(40.078/2);   % exchangeable Ca at this cell's measured target
         B(69) = fr(2)*8.6*soil_mass*0.01*(24.305/2);
         B(53) = fr(3)*8.6*soil_mass*0.01*39.098;
+        %% the handoff exchanger seed the transient starts from
+        st.spinup_erw_handoff_diagnostic = struct('f_CEC',[fr 0 0 1-sum(fr)]);
         st.B_out = B;                                   % one 79-pool row, as a real state
         st.O_out = 0.3*ones(1,20); st.NavlI_out = zeros(1,6);
         st.NupI_L_out = zeros(1,6); st.RexmyI_out = zeros(1,3);

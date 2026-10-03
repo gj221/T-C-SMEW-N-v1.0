@@ -1,5 +1,5 @@
 function [ERW, diag] = ERW_Lateral_Transport( ...
-    ERW, topo, Q_edge, theta_cell, Zlayer_m, active_fraction_cell, dt_h,CO2_atm)
+    ERW, topo, Q_edge, theta_cell, Zlayer_m, active_fraction_cell, dt_h)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Lateral advection of ERW-only aqueous stores and soil-gas CO2 diffusion.
 %% Transport amounts are umol. ERW stores aqueous Al in nmol units.
@@ -30,14 +30,6 @@ if ~(isscalar(dt_h) && isfinite(dt_h) && dt_h > 0) || ...
     error('ERW_Lateral_Transport:BadState', ...
         'Water state and active-layer fractions must be finite and physical.');
 end
-if isscalar(CO2_atm)
-    CO2_atm = repmat(CO2_atm,N_cells,1);
-end
-if ~isequal(size(CO2_atm),[N_cells 1]) || ...
-        any(~isfinite(CO2_atm)) || any(CO2_atm < 0)
-    error('ERW_Lateral_Transport:BadAtmosphere', ...
-        'Atmospheric CO2 must be a finite nonnegative value for each cell.');
-end
 
 diag.aqueous_names = names;
 diag.aqueous_edge_umol = zeros(N_edges,N_sp);
@@ -45,8 +37,6 @@ diag.CO2_edge_umol = zeros(N_edges,1);
 diag.buf_to_main.aqueous_umol = zeros(N_sp,1);
 diag.buf_to_main.CO2_umol = 0;
 diag.mass_residual_umol = zeros(N_sp,1);
-diag.CO2_atmosphere_umol_cell = zeros(N_cells,1);
-diag.IC_atmosphere_residual_umol = 0;
 if any(cellfun(@(x) ~isfield(x,'init') || ~x.init,ERW))
     error('ERW_Lateral_Transport:NotInitialized', ...
         'Every ERW column must be initialized before lateral transport.');
@@ -193,22 +183,22 @@ available_gas = zeros(N_cells,1);
 gas_mass_cell = zeros(N_cells,1);
 air_volume = zeros(N_cells,1);
 gas_concentration = zeros(N_cells,1);
-IC_initial = 0;
 for c = 1:N_cells
     E = ERW{c}; row = E.dm_end;
-    IC_initial = IC_initial+E.bg.IC_tot(row)*A_cell(c);
-    old_air_volume = pore_volume(c)-V_before(c);
     air_volume(c) = pore_volume(c)-V_after(c);
-    gas_mass = E.bg.CO2_air(row)*1000*old_air_volume;
+    if air_volume(c) < -1e-12*max(1,pore_volume(c))
+        error('ERW_Lateral_Transport:NegativeAirVolume', ...
+            'Soil-air volume cannot be negative.');
+    end
+    air_volume(c) = max(0,air_volume(c));
+    %% Air pushed out or drawn in by the lateral water is booked once, by
+    %% the ADV term of the next ERW step, which sees the same saturation
+    %% change; here the soil air keeps its concentration.
+    gas_mass = E.bg.CO2_air(row)*1000*air_volume(c);
     if ~(isfinite(gas_mass) && gas_mass >= 0)
         error('ERW_Lateral_Transport:NegativeGas', ...
             'Soil-gas CO2 inventory is negative in cell %d.',c);
     end
-    [gas_mass,atmosphere_exchange] = piston_gas_volume( ...
-        gas_mass,old_air_volume,air_volume(c),CO2_atm(c));
-    diag.CO2_atmosphere_umol_cell(c) = atmosphere_exchange;
-    ERW{c}.bg.IC_tot(row) = ERW{c}.bg.IC_tot(row)- ...
-        atmosphere_exchange/A_cell(c);
     gas_mass_cell(c) = gas_mass;
     if air_volume(c) > 0
         gas_concentration(c) = gas_mass/air_volume(c);
@@ -310,7 +300,6 @@ for c = 1:N_cells
         ERW{c}.bg.CO2_air(row) = 0;
     end
     ERW{c}.current_s = V_after(c)/pore_volume(c);
-    ERW{c}.hourly_gas_volume_active = true;
 end
 
 bm_sign = edge_sign_buffer_to_main(topo);
@@ -319,39 +308,7 @@ diag.buf_to_main.aqueous_umol = ...
 diag.buf_to_main.CO2_umol = bm_sign.'*diag.CO2_edge_umol;
 diag.mass_residual_umol = reshape(sum(dM_aq,[1 2]),N_sp,1);
 diag.mass_residual_umol(4) = diag.mass_residual_umol(4)+sum(dIC);
-IC_final = 0;
-for c = 1:N_cells
-    IC_final = IC_final+ERW{c}.bg.IC_tot(ERW{c}.dm_end)*A_cell(c);
-end
-diag.IC_atmosphere_residual_umol = IC_final-IC_initial+ ...
-    sum(diag.CO2_atmosphere_umol_cell);
 
-end
-
-function [gas_mass,atmosphere_exchange] = piston_gas_volume( ...
-    gas_mass,V_old,V_new,CO2_atm)
-volume_tol = 1e-12*max([1 V_old V_new]);
-if V_old < -volume_tol || V_new < -volume_tol
-    error('ERW_Lateral_Transport:NegativeAirVolume', ...
-        'Soil-air volume cannot be negative.');
-end
-V_old = max(0,V_old);
-V_new = max(0,V_new);
-if V_new < V_old
-    if V_old == 0
-        atmosphere_exchange = 0;
-    else
-        atmosphere_exchange = gas_mass*(V_old-V_new)/V_old;
-    end
-else
-    atmosphere_exchange = -CO2_atm*1000*(V_new-V_old);
-end
-gas_mass = gas_mass-atmosphere_exchange;
-gas_tol = 1e-12*max(1,abs(gas_mass));
-if gas_mass < -gas_tol
-    error('ERW_Lateral_Transport:NegativeGas', ...
-        'Piston exchange overdraws soil-gas CO2.');
-end
 end
 
 function bm_sign = edge_sign_buffer_to_main(topo)

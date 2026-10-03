@@ -47,12 +47,27 @@ if R1.NN ~= n_days*24
     error('test_2d_driver_equivalence:WrongBaselineDuration', ...
         'Baseline contains %d h; expected %d h.',R1.NN,n_days*24);
 end
-expected_fingerprint = equivalence_fingerprint(v2,code,n_days);
+expected_fingerprint = ERW_Equivalence_Fingerprint(v2,n_days);
 if ~isfield(R1,'equivalence_fingerprint') || ...
         ~strcmp(R1.equivalence_fingerprint,expected_fingerprint)
+    if isfield(R1,'equivalence_fingerprint')
+        report_fingerprint_difference(R1.equivalence_fingerprint, ...
+            expected_fingerprint);
+    else
+        fprintf('The saved baseline carries no equivalence fingerprint.\n');
+    end
     error('test_2d_driver_equivalence:StaleBaseline', ...
         ['The saved 1-D baseline does not match the current production code, ' ...
          'parameters, inputs and run entry points. Regenerate and fingerprint it.']);
+end
+%% The 2-D driver below reuses the baseline's ERW_PARAM_input, so a 1-D
+%% frame that rewrites a workbook flag would silently move the comparison
+%% off the branch production runs.
+wb = readtable(fullfile(code,'Inputs','ERW_MOD_PARAM_parameters.xlsx'),'Sheet','ERW_MOD');
+if ~isequal(unique(wb.keyword_add),R1.ERW_PARAM_input.keyword_add)
+    error('test_2d_driver_equivalence:BackgroundClosure', ...
+        'The 1-D baseline ran keyword_add = %g; production reads %s from the workbook.', ...
+        R1.ERW_PARAM_input.keyword_add,mat2str(unique(wb.keyword_add)'));
 end
 fprintf('Baseline loaded (%d h simulated)\n', R1.NN);
 
@@ -99,12 +114,34 @@ for k = 1:numel(exact_names)
 end
 
 fprintf('\nERW-coupled chemistry (relative tol = %.0e):\n',tol_chem);
-chem_names  = {'P','PH_d','N2Oflx','LEAK_NO3','LEAK_NH4','NavlI'};
-chem_labels = {'P   BG pools','PH_d pore pH','N2Oflx','LEAK_NO3','LEAK_NH4','NavlI'};
+chem_names  = {'P','PH_d','VOL','NITflx','DENITflx','N2Oflx_nit', ...
+    'N2flx','N2Oflx','LEAK_NO3','LEAK_NH4','NavlI'};
+chem_labels = {'P   BG pools','PH_d pore pH','VOL','NITflx', ...
+    'DENITflx','N2Oflx_nit','N2flx','N2Oflx','LEAK_NO3', ...
+    'LEAK_NH4','NavlI'};
 for k = 1:numel(chem_names)
     ok = compare_field(chem_labels{k},R1.(chem_names{k}),S2.(chem_names{k}),tol_chem);
     if ok; n_pass = n_pass + 1; else; n_fail = n_fail + 1; end
 end
+
+fprintf('\nERW mineral-N handoff at ordinary daily calls (relative tol = 1e-10):\n');
+BiogeoPar = Biogeochemistry_Parameter(1);
+handoff = { ...
+    '1-D NH4 boundary',R1.ERW_biogeochem.NH4_tot,R1.P,R1.Datam, ...
+        R1.MOD_PARAM_input.t_res,BiogeoPar.aNH4,31; ...
+    '1-D NO3 boundary',R1.ERW_biogeochem.NO3_tot,R1.P,R1.Datam, ...
+        R1.MOD_PARAM_input.t_res,BiogeoPar.aNO3,32; ...
+    '2-D NH4 boundary',S2.ERW{1}.bg.NH4_tot,S2.P,R1.Datam, ...
+        S2.ERW{1}.res,BiogeoPar.aNH4,31; ...
+    '2-D NO3 boundary',S2.ERW{1}.bg.NO3_tot,S2.P,R1.Datam, ...
+        S2.ERW{1}.res,BiogeoPar.aNO3,32};
+for k = 1:size(handoff,1)
+    ok = compare_handoff(handoff{k,:});
+    if ok; n_pass = n_pass + 1; else; n_fail = n_fail + 1; end
+end
+ok = compare_field('ERW IC_tot',R1.ERW_biogeochem.IC_tot, ...
+    S2.ERW{1}.bg.IC_tot,tol_chem);
+if ok; n_pass = n_pass + 1; else; n_fail = n_fail + 1; end
 
 fprintf('\n  ---------------------------------------\n');
 fprintf('  %d passed, %d failed\n\n', n_pass, n_fail);
@@ -116,14 +153,33 @@ fprintf('2-D driver reproduces the single-column frame at N_col = 1.\n\n');
 end
 
 %% =======================================================================
-function fp = equivalence_fingerprint(v2,code,n_days)
-fp = ERW_Checkpoint_Fingerprint(n_days*24,1, ...
-    'case=5;layout=vertical_1d;scenario=control', ...
-    fullfile(code,'*.m'), ...
-    fullfile(code,'Parameters','*.m'), ...
-    fullfile(code,'Inputs','*.mat'), ...
-    fullfile(code,'ERW_MOD_PARAM_parameters.xlsx'), ...
-    fullfile(v2,'run','*.m'));
+function ok = compare_handoff(name,total,P,Datam,res,fraction,pool_column)
+daily_i = find(Datam(:,4) == 1);
+if numel(daily_i) < 2
+    fprintf('  FAIL  %-18s fewer than two ordinary daily calls\n',name);
+    ok = false; return
+end
+anchor_rows = round(res*(daily_i(1:end-1)-1));
+pool_rows = (2:numel(daily_i)).';
+P = squeeze(P);
+if any(anchor_rows < 1) || max(anchor_rows) > size(total,1) || ...
+        max(pool_rows) > size(P,1)
+    fprintf('  FAIL  %-18s boundary indices are outside the saved state\n',name);
+    ok = false; return
+end
+actual = total(anchor_rows,1);
+expected = fraction*P(pool_rows,pool_column)/14*1e6;
+if any(~isfinite(actual)) || any(actual < 0) || any(~isfinite(expected))
+    fprintf('  FAIL  %-18s nonphysical boundary inventory\n',name);
+    ok = false; return
+end
+rel = max(abs(actual(:)-expected(:))./max(1,abs(expected(:))));
+ok = rel < 1e-10;
+if ok
+    fprintf('  PASS  %-18s max relative error %.3e\n',name,rel);
+else
+    fprintf('  FAIL  %-18s max relative error %.3e\n',name,rel);
+end
 end
 
 %% =======================================================================
@@ -133,11 +189,25 @@ if ~isequal(size(a), size(b))
     fprintf('  FAIL  %-18s shape %s vs %s\n', name, mat2str(size(a)), mat2str(size(b)));
     ok = false; return
 end
-d  = abs(a(:) - b(:));
-d(isnan(a(:)) & isnan(b(:))) = 0;          %% NaN in both is agreement
-sc = max(1, max(abs(b(:))));
+av = a(:); bv = b(:);
+%% One-sided NaN, and +Inf against -Inf, are genuine disagreements.  Reject
+%% them before any masking: abs(Inf-Inf) and abs(NaN-x) are both NaN, and
+%% forcing a NaN maximum to zero further down would report them as a pass.
+if any(xor(isnan(av),isnan(bv)))
+    fprintf('  FAIL  %-18s NaN in only one field\n', name);
+    ok = false; return
+end
+if any(isinf(av) & isinf(bv) & (sign(av) ~= sign(bv)))
+    fprintf('  FAIL  %-18s opposite infinities\n', name);
+    ok = false; return
+end
+d  = abs(av - bv);
+d(isnan(av) & isnan(bv)) = 0;              %% NaN in both is agreement
+d(isinf(av) & isinf(bv)) = 0;              %% same-signed Inf is agreement
+finite_b = bv(isfinite(bv));
+if isempty(finite_b); sc = 1; else; sc = max(1, max(abs(finite_b))); end
 md = max(d);
-if isempty(md) || isnan(md); md = 0; end
+if isempty(md); md = 0; end
 rel = md/sc;
 if rel <= tol
     fprintf('  PASS  %-18s max|d| = %.3e  (rel %.2e)\n', name, md, rel);
@@ -147,7 +217,7 @@ else
     first_bad = find(d/sc > tol,1);
     fprintf(['  FAIL  %-18s max|d| = %.3e  (rel %.2e) at linear index %d; ' ...
         'first crossing %d: 1-D %.12g, 2-D %.12g, |d| %.3e\n'], ...
-        name, md, rel, iw, first_bad, a(first_bad), b(first_bad), d(first_bad));
+        name, md, rel, iw, first_bad, av(first_bad), bv(first_bad), d(first_bad));
     ok = false;
 end
 end
@@ -184,6 +254,12 @@ topo = Build_Single_Cell_Topology(3600);                       %#ok<NASGU>
 ColCfg = struct( ...
     'PARAM_IC', fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM) '.m']), ...
     'PFT_OVERRIDE', '', ...
+    ... %% The single-column frame applies the field record, 2016-2019.
+    'last_application_year', 2019, ...
+    ... %% No replaced literals and the native saturation: the ensemble's
+    ... %% defaults, which must leave the frame bit-identical to the 1-D one.
+    'biogeo_overrides', [], ...
+    'saturation_exponent', 1, ...
     ... %% Mirror the single-column frame's own predicate, which applies rock
     ... %% when diss_f > 0. M_rock_in is the mesocosm's initial rock mass and
     ... %% is 0 for the Kantola field setup, which adds 5000 g/m2 on the
@@ -198,6 +274,30 @@ cleanup = onCleanup(@() cd(old));
 MAIN_FRAME_BG_ERW_2D;
 
 S2 = struct('O',O,'V',V,'Ts',Ts,'Tdp',Tdp,'Lk',Lk,'T_H',T_H,'T_L',T_L, ...
-    'EG',EG,'LAI_L',LAI_L,'B_L',B_L,'P',P,'PH_d',PH_d,'N2Oflx',N2Oflx, ...
-    'LEAK_NO3',LEAK_NO3,'LEAK_NH4',LEAK_NH4,'NavlI',NavlI);
+    'EG',EG,'LAI_L',LAI_L,'B_L',B_L,'P',P,'PH_d',PH_d,'VOL',VOL, ...
+    'NITflx',NITflx,'DENITflx',DENITflx,'N2Oflx_nit',N2Oflx_nit, ...
+    'N2flx',N2flx,'N2Oflx',N2Oflx,'LEAK_NO3',LEAK_NO3, ...
+    'LEAK_NH4',LEAK_NH4,'NavlI',NavlI,'ERW',{ERW});
+end
+
+function report_fingerprint_difference(saved,current)
+%% Name what moved between the baseline build and this checkout, so a
+%% stale baseline is traced to a file instead of rebuilt by guess.
+saved_parts = strsplit(char(saved),'|');
+current_parts = strsplit(char(current),'|');
+only_saved = setdiff(saved_parts,current_parts);
+only_current = setdiff(current_parts,saved_parts);
+fprintf('Equivalence fingerprint mismatch: %d baseline entries and %d checkout entries differ.\n', ...
+    numel(only_saved),numel(only_current));
+for k = 1:numel(only_saved)
+    fprintf('  baseline had : %s\n',shorten_hash(only_saved{k}));
+end
+for k = 1:numel(only_current)
+    fprintf('  checkout has : %s\n',shorten_hash(only_current{k}));
+end
+end
+
+function entry = shorten_hash(entry)
+%% Keep the path and the first 12 hex digits of a content hash.
+entry = regexprep(entry,'(:[0-9a-f]{12})[0-9a-f]{52}$','$1...');
 end

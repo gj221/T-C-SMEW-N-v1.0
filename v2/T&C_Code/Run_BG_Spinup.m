@@ -7,7 +7,7 @@
 %   Phase 2: Standalone BIOGEO_UNIT daily loop with constant Phase-1 fluxes.
 %            Iterate until all BG pools converge.
 %
-%   Phase 3: Coupled MAIN_FRAME (OPT_SoilBiogeochemistry=1, OPT_pH=0) looped
+%   Phase 3: Coupled MAIN_FRAME (OPT_SoilBiogeochemistry=1, OPT_ERW=0) looped
 %            over the transient period until dynamic equilibrium.
 %            One final cycle with OPT_pH forced on for ERW charge-balance check.
 %
@@ -19,6 +19,16 @@ p1_chk        = spinup_phase_checkpoint_filename(bg_file, 'p1_avgs');
 p2_inprog_chk = spinup_phase_checkpoint_filename(bg_file, 'p2_inprog');
 p2_chk        = spinup_phase_checkpoint_filename(bg_file, 'p2_standalone');
 p3_chk        = spinup_phase_checkpoint_filename(bg_file, 'p3_loop');
+%%% The run these checkpoints belong to (Spinup_Provenance: cell, inputs,
+%%% configuration and seed).  Every checkpoint and the final state carry it
+%%% and a checkpoint of another run is not resumed, so an interrupted task
+%%% resumes its own work and any change of inputs or seed starts clean.
+%%% Empty for a plain site spin-up, which keeps the earlier behaviour.
+spinup_provenance = '';
+if exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
+        isfield(RUN_SETTINGS,'SPINUP_PROVENANCE')
+    spinup_provenance = char(string(RUN_SETTINGS.SPINUP_PROVENANCE));
+end
 %%% Convergence is one drift limit stated per complete meteorological ring.
 %%% Each phase applies it over its own step: Phase 3 advances a whole ring and
 %%% uses the limit directly; Phase 2 advances one mean-forcing year and uses the
@@ -39,9 +49,13 @@ P3_POOL_NEG_TOL = 1e-6; % [g element m-2], below the resolved convergence scale
 P2_POOL_NEG_TOL = P3_POOL_NEG_TOL;
 P2_STREAK_REQ = n_spinup_years; % one complete meteorological ring of consecutive passing mean-forcing years
 P3_RING_STREAK_REQ = 1; % one complete meteorological ring
+%%% A cycle year of a vegetated case whose canopy never reaches this leaf
+%%% area is bare soil: Phases 2 and 3 would converge the soil of a bare
+%%% field (the pre-merge reserve limiter left LAI ~0.003 and passed).
+P1_MIN_PEAK_LAI = 0.5; % [m2 m-2]
 P3_NUTRIENT_BUDGET_ABS_TOL = 0.02; % [g element m-2] per meteorological year
 P3_NUTRIENT_BUDGET_REL_TOL = 1e-3; % [-]
-STANDING_NUTRIENT_STATE_VERS = 6; % v6: maize leaf Ca/Mg targets and grain Ca corrected
+STANDING_NUTRIENT_STATE_VERS = 7; % v7: v0.9 package u (legacy plant-reserve dilution; Phase 2 forced by the mean anaerobic fraction)
 P3_NUTRIENT_BUDGET_VERS = 12;
 %%% v12: maize leaf Ca/Mg targets and grain Ca corrected (see
 %%% Veg_Stoichiometric_Parameter.m).
@@ -66,6 +80,21 @@ BG_TRANSIENT_INITIAL_CONSTRAINT = BG_Spinup_Constraint(MOD_PARAM_input, true);
 [p1_done, p1_avgs] = load_compatible_p1_checkpoint(p1_chk, spinup_cycle_years, STANDING_NUTRIENT_STATE_VERS);
 [p2_done, p2_bg_state] = load_compatible_p2_checkpoint(p2_chk, spinup_cycle_years, BG_SPINUP_CONSTRAINT, STANDING_NUTRIENT_STATE_VERS);
 [p3_done, p3_resume_state] = load_compatible_bg_checkpoint(p3_chk, spinup_cycle_years, BG_SPINUP_CONSTRAINT, 'p3_observation_constraint');
+if p1_done && ~spinup_provenance_matches(p1_avgs, spinup_provenance)
+    fprintf('  Ignoring a Phase 1 checkpoint written for another run.\n');
+    p1_done = false;
+    p1_avgs = struct();
+end
+if p2_done && ~spinup_provenance_matches(p2_bg_state, spinup_provenance)
+    fprintf('  Ignoring a Phase 2 checkpoint written for another run.\n');
+    p2_done = false;
+    p2_bg_state = struct();
+end
+if p3_done && ~spinup_provenance_matches(p3_resume_state, spinup_provenance)
+    fprintf('  Ignoring a Phase 3 checkpoint written for another run.\n');
+    p3_done = false;
+    p3_resume_state = struct();
+end
 
 if p3_done && isfield(p3_resume_state, 'p3_P_boundary_constraint')
     fprintf('  Ignoring Phase 3 checkpoint: contains deprecated P boundary constraint.\n');
@@ -133,6 +162,8 @@ if ~p1_done && ~p2_done && ~p3_done
     p1_VSUM_acc   = 0;
     p1_VTSUM_acc  = 0;
     p1_WFPS_acc   = 0;
+    p1_fanaer_acc = 0;
+    p1_peak_LAI   = zeros(1,0);
     p1_Lk_acc     = 0;
     p1_T_H_acc      = zeros(1, cc);
     p1_T_L_acc      = zeros(1, cc);
@@ -158,7 +189,7 @@ if ~p1_done && ~p2_done && ~p3_done
     p1_keep = [who; { ...
         'p1_keep'; 'p1_yi'; 'p1_n'; 'p1_chk'; 'p2_inprog_chk'; 'p2_chk'; 'p3_chk'; ...
         'p1_Ta_acc'; 'p1_Tdp_acc'; 'p1_Se_acc'; 'p1_Psi_acc'; ...
-        'p1_VSUM_acc'; 'p1_VTSUM_acc'; 'p1_WFPS_acc'; 'p1_Lk_acc'; ...
+        'p1_VSUM_acc'; 'p1_VTSUM_acc'; 'p1_WFPS_acc'; 'p1_fanaer_acc'; 'p1_peak_LAI'; 'p1_Lk_acc'; ...
         'p1_T_H_acc'; 'p1_T_L_acc'; 'p1_LAI_H_acc'; 'p1_LAI_L_acc'; ...
         'p1_B_H_root_acc'; 'p1_B_L_root_acc'; ...
         'p1_SupN_H_acc'; 'p1_SupP_H_acc'; 'p1_SupK_H_acc'; ...
@@ -212,6 +243,9 @@ if ~p1_done && ~p2_done && ~p3_done
         PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']);
         ERW_PARAM_IC = fullfile(Parameter_Directory, 'ERW_MOD_PARAM_excel.m');
 
+        %% Series the driver creates only when absent (irrigation, wetland
+        %% level): one left from another year has that year's length.
+        clear IrD Wlev
         cd(Directory);
         MAIN_FRAME_BG_ERW_10mins;
         cd(current_directory);
@@ -234,6 +268,10 @@ if ~p1_done && ~p2_done && ~p3_done
         p1_VSUM_acc  = p1_VSUM_acc  + mean(VSUM_out(jrows),  'omitnan');
         p1_VTSUM_acc = p1_VTSUM_acc + mean(VTSUM_out(jrows),  'omitnan');
         p1_WFPS_acc  = p1_WFPS_acc  + mean(WFPS_bio_out(jrows),'omitnan');
+        p1_fanaer_acc = p1_fanaer_acc + mean(f_anaer_bio_out(jrows),'omitnan');
+        %% Peak leaf area of the year over every crown of both layers.
+        p1_peak_LAI(end+1) = max([reshape(LAI_H(jrows,:),1,[]), ...
+            reshape(LAI_L(jrows,:),1,[]), 0]);
         p1_Lk_acc    = p1_Lk_acc    + sum(Lk(1:NN)) / (NNd_y - 1);
 
         p1_T_H_acc      = p1_T_H_acc      + sum(T_H(1:NN,:), 1) / (NNd_y - 1);
@@ -300,6 +338,15 @@ if ~p1_done && ~p2_done && ~p3_done
         error('Run_BG_Spinup:InvalidPhase1State', ...
             'Phase 1 must complete its forcing ring with physically bounded soil moisture.');
     end
+    p1_bare = p1_peak_LAI < P1_MIN_PEAK_LAI;
+    if any(Ccrown > 0) && any(p1_bare)
+        error('Run_BG_Spinup:VegetationNotEstablished', ...
+            ['Phase 1 cycle year(s) %s reach a peak leaf area of only %s m2 m-2 ' ...
+             '(at least %.2g required): the vegetation did not establish.'], ...
+            mat2str(spinup_cycle_years(p1_bare)), mat2str(p1_peak_LAI(p1_bare),3), ...
+            P1_MIN_PEAK_LAI);
+    end
+    clear p1_bare
 
     p1_avgs.Ta       = p1_Ta_acc   / p1_n;
     p1_avgs.Tdp_bio  = p1_Tdp_acc  / p1_n;
@@ -308,6 +355,9 @@ if ~p1_done && ~p2_done && ~p3_done
     p1_avgs.VSUM     = p1_VSUM_acc  / p1_n;
     p1_avgs.VTSUM    = p1_VTSUM_acc / p1_n;
     p1_avgs.WFPS_bio = p1_WFPS_acc  / p1_n;
+    %% Mean anaerobic volume fraction of the active layer, the moisture-
+    %% dependent input BIOGEO_UNIT's denitrification reads (Biogeo_environment).
+    p1_avgs.f_anaer_bio = p1_fanaer_acc / p1_n;
     p1_avgs.Lk_day   = p1_Lk_acc    / p1_n;
     p1_avgs.T_H_day      = p1_T_H_acc      / p1_n;
     p1_avgs.T_L_day      = p1_T_L_acc      / p1_n;
@@ -330,13 +380,14 @@ if ~p1_done && ~p2_done && ~p3_done
     p1_avgs.IS           = p1_IS_acc    / p1_n;
     p1_avgs.REXMY        = p1_REXMY_acc / p1_n;
     p1_avgs.Se_fc        = Se_fc;  % constant soil parameter, preserved from MAIN_FRAME
-    p1_avgs.L_bio        = L_bio;  % pore-size distribution index of the active layer, constant, preserved from MAIN_FRAME
     p1_avgs.O_out        = O_out;
     p1_avgs.phase1_complete = p1_n == n_spinup_years;
     p1_avgs.phase1_water_state_physical = p1_water_state_physical;
 
     p1_avgs.spinup_cycle_years = spinup_cycle_years;
     p1_avgs.standing_nutrient_state_vers = STANDING_NUTRIENT_STATE_VERS;
+    p1_avgs.spinup_provenance = spinup_provenance;
+    p1_avgs.peak_LAI_by_year = p1_peak_LAI;
     save(p1_chk, 'p1_avgs', '-v7.3');
     fprintf('Phase 1 complete. Averages saved to: %s\n', p1_chk);
 end
@@ -440,7 +491,7 @@ if ~p2_done && ~p3_done
     p2_IS        = p1_avgs.IS;
     p2_REXMY     = p1_avgs.REXMY;
     p2_Se_fc     = p1_avgs.Se_fc;
-    p2_L_bio     = p1_avgs.L_bio;
+    p2_f_anaer_bio = p1_avgs.f_anaer_bio;
 
     % Initial BG state: resume in-progress or cold start
     p2ip_compatible = false;
@@ -453,7 +504,8 @@ if ~p2_done && ~p3_done
             isequaln(tmp.p2ip.observation_constraint, BG_SPINUP_CONSTRAINT) && ...
             isfield(tmp.p2ip, 'standing_nutrient_state_vers') && ...
             tmp.p2ip.standing_nutrient_state_vers == STANDING_NUTRIENT_STATE_VERS && ...
-            isfield(tmp.p2ip, 'P_prev');
+            isfield(tmp.p2ip, 'P_prev') && ...
+            spinup_provenance_matches(tmp.p2ip, spinup_provenance);
         if ~p2ip_compatible
             fprintf('  Ignoring incompatible Phase 2 in-progress checkpoint.\n');
         end
@@ -542,8 +594,9 @@ if ~p2_done && ~p3_done
                 p2_SupCa_H, p2_SupMg_H, p2_SupSi_H, p2_SupCa_L, p2_SupMg_L, p2_SupSi_L, ...
                 p2_REXMY, p2_RexmyI, ExEM, p2_NavlI, Pcla, Psan, ...
                 B_IO_day, Datam_day, 0, 0, ...
-                0, OPT_BfixN_p2, ...              % v1.0 tail: opt_ERW (off in Phase 2), opt_BfixN,
-                p2_L_bio, p2_WFPS_bio);           % pore-size index of the active layer, WFPS
+                0, OPT_BfixN_p2, ...              % opt_ERW (off in Phase 2), opt_BfixN,
+                p2_f_anaer_bio, p2_WFPS_bio, ...  % mean anaerobic fraction and WFPS of the active layer,
+                [], []);                          % exchange scheme (inert with ERW off), default KNmaxd as in Phase 3
             p2_R_het_day = p2_R_microbe + p2_R_litter + p2_R_ew - p2_R_litter_sur;
             if isfinite(p2_R_het_day)
                 p2_R_het_year_sum = p2_R_het_year_sum + p2_R_het_day;
@@ -617,6 +670,7 @@ if ~p2_done && ~p3_done
                 'p2_year', p2_yr, 'streak', p2_streak, 'P_prev', p2_P_prev, ...
                 'spinup_cycle_years', spinup_cycle_years, ...
                 'standing_nutrient_state_vers', STANDING_NUTRIENT_STATE_VERS, ...
+                'spinup_provenance', spinup_provenance, ...
                 'observation_constraint', BG_SPINUP_CONSTRAINT, ...
                 'constraint_diag', p2_constraint_diag, ...
                 'constraint_cumulative_delta', p2_constraint_cumulative_delta);
@@ -664,6 +718,7 @@ if ~p2_done && ~p3_done
     p2_bg_state.phase2_pool_negative_tolerance_g_element_m2 = P2_POOL_NEG_TOL;
     p2_bg_state.phase2_streak_required = P2_STREAK_REQ;
     p2_bg_state.spinup_cycle_years = spinup_cycle_years;
+    p2_bg_state.spinup_provenance = spinup_provenance;
     save_bg_state(p2_chk, p2_bg_state);
     fprintf('Phase 2 state saved to: %s\n', p2_chk);
     if isfile(p2_inprog_chk); delete(p2_inprog_chk); end
@@ -713,7 +768,6 @@ if isfield(p2_bg_state,'Sireserve_H_out'); Sireserve_H_out = p2_bg_state.Sireser
 % Resume from Phase 3 checkpoint if present
 p3_loop_start = 1;
 P3_SLOW_ANNUAL_REL_TOL_YR = P3_SLOW_RING_REL_TOL/n_spinup_years; % [yr^-1]
-P3_RESP_HANDOFF_DAYS = 30;
 p3_converged  = false;
 p3_B_prev     = [];
 p3_B_prev_by_ring = cell(1, n_spinup_years);
@@ -727,22 +781,6 @@ p3_slow_max_by_ring = nan(1, n_spinup_years);
 %%% flux. If the other P pools are periodic while B45 remains positive, pool 46
 %%% still grows. Report full total-P drift per ring, but do not require it.
 p3_total_P_rel_by_ring = nan(1, n_spinup_years);
-% Converged-year soil-CO2 respiration for the transient handoff [umol C m-2 d-1],
-% captured from the coupled Phase 3 loop below.  Total soil CO2 = heterotrophic
-% (earthworm + microbial [bacteria+fungi] + litter) plus autotrophic root
-% respiration; r_aut is only available here because Phase 2 has no live roots.
-p3_r_het_mean_umol_m2_d = [];
-p3_r_aut_mean_umol_m2_d = [];
-% Trailing daily water loss [L m-2 d-1] for the steady-state solute seeds.
-% A seed of the form (deposition flux / water loss) is an annual-scale quantity,
-% so the denominator is averaged over one complete annual cycle: a shorter window
-% aliases the seasonal cycle, and the deposition term is only exact over a whole
-% year (every day-of-year occurs once).  Accumulated across every Phase 3
-% MAIN_FRAME pass, so it spans the ring loop and the handoff extension without
-% needing to know which produced which day.  Declared before p3_keep so clearvars
-% preserves it, as for the respiration handoff above.
-ERW_SEED_WINDOW_DAYS = 365;
-p3_water_loss_daily = zeros(0,1);
 p3_nutrient_budgets = struct();
 
 if p3_done
@@ -759,15 +797,7 @@ if p3_done
     if isfield(tmp,'p3_dynamic_max_by_ring'); p3_dynamic_max_by_ring = tmp.p3_dynamic_max_by_ring; end
     if isfield(tmp,'p3_slow_max_by_ring'); p3_slow_max_by_ring = tmp.p3_slow_max_by_ring; end
     if isfield(tmp,'p3_total_P_rel_by_ring'); p3_total_P_rel_by_ring = tmp.p3_total_P_rel_by_ring; end
-    if isfield(tmp,'p3_r_het_mean_umol_m2_d'); p3_r_het_mean_umol_m2_d = tmp.p3_r_het_mean_umol_m2_d; end
-    if isfield(tmp,'p3_r_aut_mean_umol_m2_d'); p3_r_aut_mean_umol_m2_d = tmp.p3_r_aut_mean_umol_m2_d; end
     if isfield(tmp,'p3_nutrient_budgets'); p3_nutrient_budgets = tmp.p3_nutrient_budgets; end
-    % The ring loop is skipped on a resume, so the trailing water-loss window
-    % has to come back with the checkpoint: the handoff extension alone is a
-    % partial year and cannot fill a complete annual cycle on its own.
-    if isfield(tmp,'p3_water_loss_daily')
-        p3_water_loss_daily = tmp.p3_water_loss_daily(:);
-    end
     B_out         = tmp.B_out;
     O_out         = tmp.O_out;
     NavlI_out     = tmp.NavlI_out;
@@ -802,6 +832,12 @@ clear ring_index
 OPT_SoilBiogeochemistry_saved = OPT_SoilBiogeochemistry;
 OPT_SoilBiogeochemistry = 1;
 OPT_pH                  = 0;
+%%% The v0.9 driver gates its ERW chemistry on OPT_ERW (OPT_pH is a Model-repo
+%%% switch it does not read), so the no-ERW loop clears OPT_ERW itself: with it
+%%% set, every Phase-3 year would solve the daily ERW chemistry and reseed the
+%%% cation pools from it.  The final handoff diagnostic switches it back on.
+OPT_ERW_saved_p3        = OPT_ERW;
+OPT_ERW                 = 0;
 PH                      = PHs;
 
 p3_keep = [who; { ...
@@ -809,8 +845,8 @@ p3_keep = [who; { ...
     'p3_pool_ring_scale'; 'p3_pass_by_ring'; 'p3_ring_streak'; 'p3_last_convergence_diag'; ...
     'p3_met'; 'p3_chk'; 'p1_chk'; 'p2_chk'; 'p2_inprog_chk'; ...
     'P3_RING_REL_TOL'; 'P3_SLOW_ANNUAL_REL_TOL_YR'; 'P3_POOL_SCALE_FLOOR'; ...
-    'P3_POOL_NEG_TOL'; 'P3_RING_STREAK_REQ'; 'P3_RESP_HANDOFF_DAYS'; ...
-    'OPT_SoilBiogeochemistry_saved'; ...
+    'P3_POOL_NEG_TOL'; 'P3_RING_STREAK_REQ'; ...
+    'OPT_SoilBiogeochemistry_saved'; 'OPT_ERW_saved_p3'; ...
     'B_out'; 'O_out'; 'NavlI_out'; 'RexmyI_out'; 'NupI_L_out'; ...
     'Nreserve_L_out'; 'Preserve_L_out'; 'Kreserve_L_out'; 'Careserve_L_out'; ...
     'Mgreserve_L_out'; 'Sireserve_L_out'; ...
@@ -865,6 +901,9 @@ while ~p3_converged
     ERW_PARAM_IC = fullfile(Parameter_Directory, 'ERW_MOD_PARAM_excel.m');
 
     clear Mpar_L Mpar_H ParEx_L ParEx_H VegH_Param_Dyn VegL_Param_Dyn
+    %% Series the driver creates only when absent (irrigation, wetland
+    %% level): one left from another year has that year's length.
+    clear IrD Wlev
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
@@ -952,37 +991,21 @@ while ~p3_converged
             p3_loop, p3_p_budget.residual, p3_p_budget.tolerance);
     end
 
-    % Capture a phase-aligned trailing mean for the transient soil-CO2 boundary.
-    % The final coupled pass supplies the handoff values; using its last month
-    % avoids mixing seasonally remote respiration into the initial CO2 profile.
-    if exist('ERW_TC','var') && isstruct(ERW_TC) && ...
-            isfield(ERW_TC,'r_het') && isfield(ERW_TC,'r_aut')
-        rhet_handoff = Spinup_Trailing_Mean(ERW_TC.r_het, j, P3_RESP_HANDOFF_DAYS);
-        raut_handoff = Spinup_Trailing_Mean(ERW_TC.r_aut, j, P3_RESP_HANDOFF_DAYS);
-        if isscalar(rhet_handoff) && isfinite(rhet_handoff)
-            p3_r_het_mean_umol_m2_d = rhet_handoff;
-        end
-        if isscalar(raut_handoff) && isfinite(raut_handoff)
-            p3_r_aut_mean_umol_m2_d = raut_handoff;
-        end
-    end
-    if exist('ERW_TC','var') && isstruct(ERW_TC) && isfield(ERW_TC,'water_loss_l_m2_d')
-        p3_water_loss_daily = Spinup_Append_Water_Loss( ...
-            p3_water_loss_daily, ERW_TC.water_loss_l_m2_d, j, ERW_SEED_WINDOW_DAYS);
-    end
-
     bg_state = build_bg_state(P, O, RexmyI, NavlI, NupI_L, ...
         Nreserve_L, Preserve_L, Kreserve_L, Careserve_L, Mgreserve_L, Sireserve_L, ...
         Nreserve_H, Preserve_H, Kreserve_H, Careserve_H, Mgreserve_H, Sireserve_H, id_location);
 
-    % Average over last year instead of using last timestep (Zhang et al. 2025):
-    % "average values of each pool in the last-year simulation result were used
-    % as initial conditions in soil biogeochemistry module for further simulations"
+    % The next year restarts from this year's END state, so a year boundary
+    % moves no mass and the converged ring is a periodic orbit of the model.
+    % The last year's mean (Zhang et al. 2025 hand the transient the annual
+    % mean) is the ring-position convergence metric only; the handoff
+    % extension below hands over its own end state.
     ok = any(isfinite(P) & abs(P) > 0, 2);
     daily_idx = find(ok, 1, 'last');
     window_start = max(1, daily_idx - 364);
     P_avg = mean(P(window_start:daily_idx, :), 1, 'omitnan');
-    bg_state.B_out = P_avg;
+    p3_B_metric = Project_Small_Negative_BG_Pools(P_avg, P3_POOL_NEG_TOL);
+    bg_state.B_out = P(daily_idx, :);
 
     B_out = Project_Small_Negative_BG_Pools(bg_state.B_out, P3_POOL_NEG_TOL);
     bg_state.B_out = B_out;
@@ -1007,7 +1030,7 @@ while ~p3_converged
     p3_pass = false;
     p3_B_prev = p3_B_prev_by_ring{ring_pos};
     if ~isempty(p3_B_prev)
-        p3_diag = spinup_pool_group_diagnostics(B_out, p3_B_prev, n_spinup_years, ...
+        p3_diag = spinup_pool_group_diagnostics(p3_B_metric, p3_B_prev, n_spinup_years, ...
             P3_POOL_SCALE_FLOOR, p3_pool_ring_scale);
         p3_diag.pool_pass = p3_diag.pool_ring_rel < P3_RING_REL_TOL;
         p3_diag.pool_pass(p3_diag.slow_pool_idx) = ...
@@ -1025,7 +1048,7 @@ while ~p3_converged
         %%% above so a growing pool can't pass by a shrinking relative
         %%% denominator (see the p3_total_P_rel_by_ring init comment for why
         %%% this stays a diagnostic rather than a gate).
-        p3_total_P_ring_abs = abs(sum(B_out(35:47)) - sum(p3_B_prev(35:47)));
+        p3_total_P_ring_abs = abs(sum(p3_B_metric(35:47)) - sum(p3_B_prev(35:47)));
         p3_total_P_ring_rel = p3_total_P_ring_abs / sum(p3_diag.pool_scale(35:47));
         p3_total_P_pass = p3_total_P_ring_rel < P3_RING_REL_TOL;
         p3_total_P_rel_by_ring(ring_pos) = p3_total_P_ring_rel;
@@ -1085,7 +1108,7 @@ while ~p3_converged
     else
         p3_converged = false;
     end
-    p3_B_prev_by_ring{ring_pos} = B_out;
+    p3_B_prev_by_ring{ring_pos} = p3_B_metric;
 
     p3_loop_last = p3_loop;
     bg_state.p3_loop   = p3_loop;
@@ -1110,14 +1133,11 @@ while ~p3_converged
     %%% constraint this loop actually ran under.
     bg_state.p3_observation_constraint = BG_SPINUP_CONSTRAINT;
     bg_state.p3_transient_observation_constraint = BG_TRANSIENT_INITIAL_CONSTRAINT;
-    bg_state.p3_r_het_mean_umol_m2_d = p3_r_het_mean_umol_m2_d;
     bg_state.p3_phosphorus_budget = p3_p_budget;
     bg_state.p3_nutrient_budget_vers = P3_NUTRIENT_BUDGET_VERS;
     bg_state.p3_nutrient_budgets = p3_nutrient_budgets;
     bg_state.p3_p_budget_abs_tol_gP_m2 = P3_NUTRIENT_BUDGET_ABS_TOL;
     bg_state.p3_p_budget_rel_tol = P3_NUTRIENT_BUDGET_REL_TOL;
-    bg_state.p3_r_aut_mean_umol_m2_d = p3_r_aut_mean_umol_m2_d;
-    bg_state.p3_water_loss_daily = p3_water_loss_daily;
     if exist('p3_last_convergence_diag', 'var')
         bg_state.p3_last_convergence_diag = p3_last_convergence_diag;
     end
@@ -1127,6 +1147,7 @@ while ~p3_converged
     %%% mass here so the resumed state can feed the gate from the checkpoint.
     bg_state.spinup_biogeochemical_soil_mass_kg_m2 = ...
         sum(Bio_Zs.*rsd)*Zbio/1000;
+    bg_state.spinup_provenance = spinup_provenance;
     save_bg_state(p3_chk, bg_state);
 
     clearvars('-except', p3_keep{:});
@@ -1188,25 +1209,12 @@ if is_handoff_extension
     ERW_PARAM_IC = fullfile(Parameter_Directory, 'ERW_MOD_PARAM_excel.m');
 
     clear Mpar_L Mpar_H ParEx_L ParEx_H VegH_Param_Dyn VegL_Param_Dyn
+    %% Series the driver creates only when absent (irrigation, wetland
+    %% level): one left from another year has that year's length.
+    clear IrD Wlev
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
-
-    if exist('ERW_TC','var') && isstruct(ERW_TC) && ...
-            isfield(ERW_TC,'r_het') && isfield(ERW_TC,'r_aut')
-        rhet_handoff = Spinup_Trailing_Mean(ERW_TC.r_het, j, P3_RESP_HANDOFF_DAYS);
-        raut_handoff = Spinup_Trailing_Mean(ERW_TC.r_aut, j, P3_RESP_HANDOFF_DAYS);
-        if isscalar(rhet_handoff) && isfinite(rhet_handoff)
-            p3_r_het_mean_umol_m2_d = rhet_handoff;
-        end
-        if isscalar(raut_handoff) && isfinite(raut_handoff)
-            p3_r_aut_mean_umol_m2_d = raut_handoff;
-        end
-    end
-    if exist('ERW_TC','var') && isstruct(ERW_TC) && isfield(ERW_TC,'water_loss_l_m2_d')
-        p3_water_loss_daily = Spinup_Append_Water_Loss( ...
-            p3_water_loss_daily, ERW_TC.water_loss_l_m2_d, j, ERW_SEED_WINDOW_DAYS);
-    end
 
     bg_state = build_bg_state(P, O, RexmyI, NavlI, NupI_L, ...
         Nreserve_L, Preserve_L, Kreserve_L, Careserve_L, Mgreserve_L, Sireserve_L, ...
@@ -1267,41 +1275,33 @@ O_no_erw = bg_state_no_erw.O_out;
 %% Phase 3 final: ERW charge-balance diagnostic
 %% =========================================================================
 fprintf('\n=== Phase 3 final: ERW charge-balance diagnostic ===\n');
-% The repeated phases converge the unamended background with OPT_pH off,
-% even when the run is configured as erw.  Turn chemistry on here for the
-% charge-balance check before handoff.
+% The repeated phases converge the unamended background with the ERW
+% chemistry off, even when the run is configured as erw.  Turn it on here for
+% the charge-balance check of the seed the transient will build.
 OPT_pH = 1;
+OPT_ERW = 1;
 % The biogeochemistry module and inversion target both use observed bulk pH;
 % pore-water pH remains an ERW equilibrium diagnostic.
 PH = PHs;
-OPT_ERW_HANDOFF_DIAGNOSTIC_ONLY = true;
 spinup_erw_readiness = ERW_Handoff_Readiness();
 clear erw_readiness_diag
-% The seeds are annual-scale, so this pass reads the water loss Phase 3
-% accumulated over a complete annual cycle rather than re-deriving it from the
-% two days it simulates itself.  A short window is an error, not a fallback:
-% seeding a steady state from a partial year silently mis-scales every solute.
-if numel(p3_water_loss_daily) < ERW_SEED_WINDOW_DAYS
-    error('Run_BG_Spinup:IncompleteSeedWindow', ...
-        ['The steady-state solute seeds need %d days of simulated water ' ...
-        'balance; Phase 3 accumulated %d.  Re-run Phase 3 from a fresh ' ...
-        'checkpoint so a complete annual cycle is simulated.'], ...
-        ERW_SEED_WINDOW_DAYS, numel(p3_water_loss_daily));
+% The driver seeds the ERW state on its second day (the first daily
+% boundary) from the first two days of forcing and the handoff pools, exactly
+% as the transient will, so those two days are all this pass needs.
+ERW_SEED_HOURS = 48;
+if numel(p3_met.Date) < ERW_SEED_HOURS
+    error('Run_BG_Spinup:ShortSeedWindow', ...
+        'The transient window holds %d forcing hours; the ERW seed needs %d.', ...
+        numel(p3_met.Date), ERW_SEED_HOURS);
 end
-spinup_water_loss_mean_l_m2_d = mean(p3_water_loss_daily);
-if ~(isfinite(spinup_water_loss_mean_l_m2_d) && spinup_water_loss_mean_l_m2_d > 0)
-    error('Run_BG_Spinup:NoWaterLossForSeed', ...
-        ['Mean water loss over the seed window is %.3g L m-2 d-1.  A profile ' ...
-        'with no drainage or transpiration has no steady-state solute ' ...
-        'concentration.'], spinup_water_loss_mean_l_m2_d);
-end
-
-Date = p3_met.Date;  Pr = p3_met.Pr;    Ta = p3_met.Ta;
-Ws   = p3_met.Ws;    ea = p3_met.ea;    Pre = p3_met.Pre;
-SAD1 = p3_met.SAD1;  SAD2 = p3_met.SAD2;
-SAB1 = p3_met.SAB1;  SAB2 = p3_met.SAB2;
-N    = p3_met.N;     Tdew = p3_met.Tdew;  esat = p3_met.esat;
-PARB = p3_met.PARB;  PARD = p3_met.PARD;
+seed = 1:ERW_SEED_HOURS;
+Date = p3_met.Date(seed);  Pr = p3_met.Pr(seed);    Ta = p3_met.Ta(seed);
+Ws   = p3_met.Ws(seed);    ea = p3_met.ea(seed);    Pre = p3_met.Pre(seed);
+SAD1 = p3_met.SAD1(seed);  SAD2 = p3_met.SAD2(seed);
+SAB1 = p3_met.SAB1(seed);  SAB2 = p3_met.SAB2(seed);
+N    = p3_met.N(seed);     Tdew = p3_met.Tdew(seed);  esat = p3_met.esat(seed);
+PARB = p3_met.PARB(seed);  PARD = p3_met.PARD(seed);
+clear seed
 NN   = numel(Date);
 Ws(Ws <= 0) = 0.01;
 Ds   = max(esat - ea, 0);
@@ -1314,17 +1314,46 @@ PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '
 ERW_PARAM_IC = fullfile(Parameter_Directory, 'ERW_MOD_PARAM_excel.m');
 
 clear Mpar_L Mpar_H ParEx_L ParEx_H VegH_Param_Dyn VegL_Param_Dyn
+clear ERW_biogeochem ERW_weathering ERW_const ERW_TC ERW_TC_const
 try
+    %% Series the driver creates only when absent (irrigation, wetland
+    %% level): one left from another year has that year's length.
+    clear IrD Wlev
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
+    %%% Readiness of the seed the driver built: its initial ERW state, the
+    %%% handoff pools it was seeded from, and the dissolved-inventory water of
+    %%% the seeding day (the driver's own cov_moll at j = 2).
+    if ~(exist('ERW_biogeochem','var') && isstruct(ERW_biogeochem) && ...
+            exist('ERW_TC','var') && isstruct(ERW_TC) && isfield(ERW_TC,'s') && ...
+            size(ERW_TC.s,1) >= 2)
+        error('Run_BG_Spinup:NoERWSeed', ...
+            'The two-day pass did not build an ERW seed (is OPT_ERW honoured?).');
+    end
+    cov_moll_seed = ERW_TC_const.n * Zbio / 1000 * ERW_TC.s(2,:) * 1000;
+    erw_readiness_diag = ERW_Handoff_Diagnostic(P(1,:), ERW_biogeochem, ...
+        ERW_weathering, ERW_const, cov_moll_seed);
+    fprintf(['  ERW handoff diagnostic: pH_pore=%.2f, pH_bulk=%.2f ' ...
+        '(forward %.2f, observed %.2f), base_sat=%.3f, Al=%.3g umol/L, ' ...
+        'charge=%.3e umolc/L (rel %.3e), f_CEC sum=%.6f\n'], ...
+        erw_readiness_diag.pH_pore_initial, erw_readiness_diag.pH_bulk_initial, ...
+        erw_readiness_diag.pH_bulk_predicted, erw_readiness_diag.pH_bulk_observed, ...
+        erw_readiness_diag.base_saturation, erw_readiness_diag.dissolved_Al_umol_L, ...
+        erw_readiness_diag.charge_residual_umolc_L, ...
+        erw_readiness_diag.relative_charge_residual, erw_readiness_diag.f_CEC_sum);
+    if erw_readiness_diag.status == "warning"
+        warning('Run_BG_Spinup:ERWHandoffDiagnostic', ...
+            'ERW handoff diagnostic warnings: %s', ...
+            char(strjoin(erw_readiness_diag.warnings, '; ')));
+    end
 catch ME
     cd(current_directory);
     diagnostic_error = MException('Run_BG_Spinup:ERWHandoffDiagnostic', ...
         'Final ERW handoff diagnostic failed.');
     throwAsCaller(addCause(diagnostic_error, ME));
 end
-clear OPT_ERW_HANDOFF_DIAGNOSTIC_ONLY
+OPT_ERW = OPT_ERW_saved_p3;
 if exist('erw_readiness_diag','var')
     spinup_erw_readiness = ERW_Handoff_Readiness(erw_readiness_diag);
     fprintf('  ERW handoff readiness: %s - %s\n', ...
@@ -1378,32 +1407,6 @@ else
 end
 bg_state.spinup_biogeochemical_soil_mass_kg_m2 = ...
     spinup_biogeochemical_soil_mass_kg_m2;
-% Hand the spin-up steady-state soil respiration [umol C m-2 d-1] to the
-% transient's soil-air CO2 boundary (Kanzaki et al. 2024, Sect. 4): total soil
-% CO2 = heterotrophic r_het (earthworm + microbial [bacteria + fungi] + litter)
-% PLUS autotrophic r_aut (root).  MAIN_FRAME reads both spinup_r_het_mean_umol_m2_d
-% and spinup_r_aut_mean_umol_m2_d.  Both come from the final coupled pass's
-% phase-aligned trailing window.  r_het must be > 0 because it is always positive,
-% so a non-positive capture is treated as a failure and falls back to the Phase 2
-% standalone value; r_aut must be >= 0 (a bare-soil scenario has no roots) and
-% has no Phase 2 counterpart because Phase 2 has no live roots.
-if isscalar(p3_r_het_mean_umol_m2_d) && isfinite(p3_r_het_mean_umol_m2_d) && ...
-        p3_r_het_mean_umol_m2_d > 0
-    bg_state.spinup_r_het_mean_umol_m2_d = p3_r_het_mean_umol_m2_d;
-elseif exist('p2_bg_state','var') && isstruct(p2_bg_state) && ...
-        isfield(p2_bg_state,'phase2_handoff_r_het_umol_m2_d') && ...
-        isscalar(p2_bg_state.phase2_handoff_r_het_umol_m2_d) && ...
-        isfinite(p2_bg_state.phase2_handoff_r_het_umol_m2_d) && ...
-        p2_bg_state.phase2_handoff_r_het_umol_m2_d > 0
-    bg_state.spinup_r_het_mean_umol_m2_d = p2_bg_state.phase2_handoff_r_het_umol_m2_d;
-end
-if isscalar(p3_r_aut_mean_umol_m2_d) && isfinite(p3_r_aut_mean_umol_m2_d) && ...
-        p3_r_aut_mean_umol_m2_d >= 0
-    bg_state.spinup_r_aut_mean_umol_m2_d = p3_r_aut_mean_umol_m2_d;
-end
-bg_state.spinup_respiration_handoff_days = P3_RESP_HANDOFF_DAYS;
-bg_state.spinup_water_loss_mean_l_m2_d = spinup_water_loss_mean_l_m2_d;
-bg_state.spinup_seed_window_days = ERW_SEED_WINDOW_DAYS;
 % Read the P budget off the nutrient-budget struct, not the loop-local
 % p3_p_budget: the ring loop's clearvars keeps p3_nutrient_budgets (it is in
 % p3_keep) and drops p3_p_budget, and a converged resume never runs the loop
@@ -1411,30 +1414,23 @@ bg_state.spinup_seed_window_days = ERW_SEED_WINDOW_DAYS;
 bg_state.spinup_phosphorus_budget = p3_nutrient_budgets.P;
 bg_state.spinup_nutrient_budget_vers = P3_NUTRIENT_BUDGET_VERS;
 bg_state.spinup_nutrient_budgets = p3_nutrient_budgets;
-have_rhet_handoff = isfield(bg_state,'spinup_r_het_mean_umol_m2_d');
-have_raut_handoff = isfield(bg_state,'spinup_r_aut_mean_umol_m2_d');
-rhet_ho = NaN;
-if have_rhet_handoff; rhet_ho = bg_state.spinup_r_het_mean_umol_m2_d; end
-raut_ho = NaN;
-if have_raut_handoff; raut_ho = bg_state.spinup_r_aut_mean_umol_m2_d; end
-fprintf(['  Soil-CO2 respiration handoff [umol C m-2 d-1]: ' ...
-    'r_het=%.4g (earthworm+microbes+litter), r_aut=%.4g (root)\n'], rhet_ho, raut_ho);
-if ~have_rhet_handoff || ~have_raut_handoff
-    % Every scenario with a transient runs the coupled handoff-extension year,
-    % which captures both; a missing component only arises in a misconfigured
-    % run (transient year outside the spin-up range, already warned above) or a
-    % resume of an old converged checkpoint that predates this capture.  Flag it
-    % rather than fail silently -- MAIN_FRAME falls back to its own dynamic
-    % respiration for the missing term.
-    fprintf(['[warning] Incomplete soil-CO2 respiration handoff ' ...
-        '(r_het present: %d, r_aut present: %d); delete the p3_loop checkpoint ' ...
-        'to force a fresh capture. The transient uses dynamic respiration for ' ...
-        'the missing component.\n'], have_rhet_handoff, have_raut_handoff);
-end
 prev_total_P_warn = warning('off', 'TC_SMEW_N_run:TotalPExceedsScreen');
 restore_total_P_warn = onCleanup(@() warning(prev_total_P_warn));
 Validate_BG_State_For_Transient(bg_state, bg_file);
 clear restore_total_P_warn
+bg_state.spinup_provenance = spinup_provenance;
+%%% The instant this state hands off at: the first hour of the transient
+%%% it seeds.  Load_Field_Spinup_States refuses it for a run that starts
+%%% at any other instant.
+bg_state.spinup_handoff_dn = transient_start;
+%%% A cell's identity is stamped here, before the one atomic write, so no
+%%% reader ever sees this cell's state without it.
+if exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
+        isfield(RUN_SETTINGS,'CELL_ID')
+    bg_state.cell_id = double(RUN_SETTINGS.CELL_ID);
+    bg_state.cell_agronomic_identity = ...
+        char(string(RUN_SETTINGS.CELL_AGRONOMIC_IDENTITY));
+end
 save_bg_state(bg_file, bg_state);
 fprintf('Spin-up complete. Final state: %s\n', bg_file);
 
@@ -1657,7 +1653,9 @@ if isfield(checkpoint, 'p1_avgs')
         isequal(p1_avgs.spinup_cycle_years, cycle_years) && ...
         isfield(p1_avgs, 'standing_nutrient_state_vers') && ...
         isequal(p1_avgs.standing_nutrient_state_vers, expected_version) && ...
-        isfield(p1_avgs, 'L_bio') && ...
+        isfield(p1_avgs, 'f_anaer_bio') && ...
+        isscalar(p1_avgs.f_anaer_bio) && isfinite(p1_avgs.f_anaer_bio) && ...
+        p1_avgs.f_anaer_bio >= 0 && p1_avgs.f_anaer_bio <= 1 && ...
         isfield(p1_avgs, 'O_out') && ...
         isnumeric(p1_avgs.O_out) && isreal(p1_avgs.O_out) && ...
         isvector(p1_avgs.O_out) && ~isempty(p1_avgs.O_out) && ...
@@ -1730,53 +1728,12 @@ if ~ok
 end
 end
 
-function buffer = Spinup_Append_Water_Loss(buffer, series, last_row, window_days)
-%%% Append the days this pass simulated to the trailing water-loss window and
-%%% keep only the most recent window_days.  Appending (rather than reading one
-%%% pass's array) is what lets the window span the ring loop and the handoff
-%%% extension: the passes are chronological, so the tail is the final
-%%% window_days of record whatever produced them, and no day is counted twice.
-if ~(isnumeric(series) && isreal(series) && isscalar(last_row) && ...
-        isfinite(last_row) && last_row >= 2)
-    return
-end
-last_row = min(last_row, size(series,1));
-new_days = series(2:last_row);
-new_days = new_days(isfinite(new_days) & new_days >= 0);
-buffer = [buffer; new_days(:)];
-if numel(buffer) > window_days
-    buffer = buffer(end-window_days+1:end);
-end
-end
-
-function value = Spinup_Trailing_Mean(series, last_row, window_days)
-valid_index = isscalar(last_row) && isfinite(last_row) && ...
-    last_row == floor(last_row) && last_row >= 1;
-valid_window = isscalar(window_days) && isfinite(window_days) && ...
-    window_days == floor(window_days) && window_days >= 1;
-if ~(isnumeric(series) && isreal(series) && valid_index && valid_window)
-    error('Run_BG_Spinup:InvalidRespirationHandoff', ...
-        'Respiration handoff needs a real numeric series and positive integer indices.');
-end
-if isempty(series)
-    error('Run_BG_Spinup:MissingRespirationHandoff', ...
-        'Respiration handoff series is empty.');
-end
-
-last_row = min(last_row, size(series,1));
-first_row = max(2, last_row - window_days + 1);
-if last_row < first_row
-    error('Run_BG_Spinup:MissingRespirationHandoff', ...
-        'Respiration handoff has no populated daily rows.');
-end
-
-trailing = series(first_row:last_row,:);
-trailing = trailing(isfinite(trailing));
-if isempty(trailing)
-    error('Run_BG_Spinup:MissingRespirationHandoff', ...
-        'Respiration handoff trailing window has no finite values.');
-end
-value = mean(trailing);
+function ok = spinup_provenance_matches(state, provenance)
+%%% Without a requested provenance every checkpoint that passes the other
+%%% gates is resumed, as before.
+ok = isempty(provenance) || ...
+    (isstruct(state) && isfield(state,'spinup_provenance') && ...
+    strcmp(char(string(state.spinup_provenance)), provenance));
 end
 
 function B = Project_Small_Negative_BG_Pools(B, tolerance)

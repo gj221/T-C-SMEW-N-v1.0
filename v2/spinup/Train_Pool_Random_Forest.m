@@ -37,7 +37,17 @@ if exist('TreeBagger','file') ~= 2
          'Method=''per_cell'' instead.']);
 end
 opt = struct('NumTrees',200,'KFold',5,'MinLeaf',3,'Seed',42);
-for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
+if mod(numel(varargin),2) ~= 0
+    error('Train_Pool_Random_Forest:BadOptions','Options must be name/value pairs.');
+end
+for k = 1:2:numel(varargin)
+    name = char(varargin{k});
+    if ~isfield(opt,name)
+        error('Train_Pool_Random_Forest:UnknownOption', ...
+            'Unknown option %s (NumTrees, KFold, MinLeaf, Seed).',name);
+    end
+    opt.(name) = varargin{k+1};
+end
 
 X = double(X); Y = double(Y);
 [n, n_feat] = size(X);

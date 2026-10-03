@@ -1,7 +1,20 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %   Subfunction Biogeochemistry_Parameter     %%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function[BiogeoPar]=Biogeochemistry_Parameter(opt_cons_CUE)
+function[BiogeoPar]=Biogeochemistry_Parameter(opt_cons_CUE,KNmaxd_override,overrides)
+if nargin < 2
+    KNmaxd_override = [];
+end
+if nargin < 3
+    overrides = [];
+end
+if ~isempty(KNmaxd_override) && ...
+        ~(isnumeric(KNmaxd_override) && isreal(KNmaxd_override) && ...
+          isscalar(KNmaxd_override) && isfinite(KNmaxd_override) && ...
+          KNmaxd_override >= 0)
+    error('Biogeochemistry_Parameter:InvalidKNmaxd', ...
+        'KNmaxd must be a finite nonnegative scalar in d^-1.');
+end
 %%%%%%%%%%%%%%
 %%%% Decay Constant on a 40�C basis (Kirschbaum 2002)
 BiogeoPar.k_met_sur = 1/12.5; %%[1/day]
@@ -34,6 +47,8 @@ BiogeoPar.Vdb = 0.04; %0.120; %0.010;  % [0.0024-0.060] maximum specific uptake 
 BiogeoPar.Vdf = 0.02; %0.025;% 0.012;  % 
 BiogeoPar.Kdb = 0.00026; % [0.00014 - 0.00038] half-saturation constant of uptake of DOC for growth of B [ g C/g soil]
 BiogeoPar.Kdf = 0.00026;
+%% Legacy T&C-SMEW values, under which Data_Kantola_BG.mat was spun up. Its
+%% SI Table S2 lists 0.005 and 0.002 as the originals.
 BiogeoPar.mrb =  10.0*1e-3; % 15.0*1e-3; % [ 1.20*1e-3 - 30*1e-3] specific maintenance factor or rate of B [ g C /g C day]
 BiogeoPar.mrf =  5.0*1e-3; % 5.0*1e-3;
 BiogeoPar.mram = 1.5*1e-3; % 1.5*1e-3; specific maintenance factor of AM 
@@ -102,9 +117,39 @@ BiogeoPar.kv = 8.6*1e-5; %% [1/d]
 %%%%%%% Nitrification (Aerobic)
 BiogeoPar.KNmaxn = 0.086; %% [1/d] % Dickinson et al., 2002
 %%%%%%% Denitrification (Anaerobic)
-BiogeoPar.Kc = 17.5; %% [gC/m2] %% Li et al., 1992
-BiogeoPar.Kn = 82.5; %% [gN/m2] % Li et al., 1992
-BiogeoPar.KNmaxd= 0.217; %% [1/d] % Dickinson et al., 2002
+BiogeoPar.Kc = 17.5; %% [gC/m3] DOC half-saturation, Li et al., 1992
+BiogeoPar.Kn = 82.5; %% [gN/m3] inactive NOx half-saturation, Li et al., 1992
+%%%%%% Historical denitrification rate constant, not the literature value.
+%% Dickinson et al. (2002) give 2.5e-6 s^-1 = 0.217 d^-1. That value was never
+%% fitted to this site and overestimates Energy Farm N2O by 5.4x against the
+%% chamber record digitised from Val Martin et al. (2023), figure 3a.
+%% Calibrated on the 2017 and 2018 maize seasons over the chamber sampling
+%% windows (DOY 114-263 and 117-243), the two years the model rotation and the
+%% field trial share as maize: 8601 gN/ha observed against 9023 modelled,
+%% a ratio of 1.05.
+%% That aggregate conceals two compensating per-year errors: 2017 modelled
+%% 3774 against 1561 observed (2.4x over) and 2018 modelled 5249 against 7040
+%% (0.75x under). The model damps interannual amplitude, giving a 2018/2017
+%% ratio of 1.39 against 4.51 observed and 2.23 for CLM5. The calibration is
+%% therefore sound for multi-year cumulative fluxes and unreliable for any
+%% single year.
+%% Cost of the calibration: NO3 leaching rises from 42 to 68 kg N/ha/yr, the
+%% upper end for tile-drained Midwest maize-soy. That is the binding
+%% constraint if drain nitrate data become available.
+%% The basalt and calcite N2O reductions are insensitive to this constant
+%% (44% at 0.217; 39% and 43% at 0.0271), so the treatment comparison does
+%% not rest on the calibration.
+%% Re-checked 2026-09-03 after the CEC_tot_in correction 8.6 -> 19.5 (USDA SSURGO,
+%% Dana Ap CEC7): the same windows give a ratio of 1.01 to observed, so the
+%% constant stands. The basalt reduction moves to 27% at CEC 19.5; that is the
+%% CEC effect on soil pH, not a KNmaxd effect.
+%% Those checks used the earlier Se^(1/L) moisture response. The default is
+%% retained as the old reference only; it is not calibrated for Se^2. The
+%% corrected-moisture sweep supplies KNmaxd explicitly for each run.
+BiogeoPar.KNmaxd= 0.0048; %% [1/d] calibrated to N2O/obs=1 (knscore, 2026-09-08); Dickinson et al. 2002 default is 0.217
+if ~isempty(KNmaxd_override)
+    BiogeoPar.KNmaxd = KNmaxd_override;
+end
 %%%%%% N2O pathway - pH effects
 %%%%%% Parton et al 1997
 %%%%%%
@@ -154,8 +199,13 @@ BiogeoPar.aDOC = 0.04;
 BiogeoPar.aDON= 1;
 BiogeoPar.aDOP= 1;
 
-BiogeoPar.aCa = 0.4;
-BiogeoPar.aMg = 0.4;
+%%% P(60) and P(68) hold only dissolved Ca and Mg since the ERW module took
+%%% over the exchange partition (ERW_Daily_Step_2D writes them back from the
+%%% pore water), so they leach and are taken up at their concentration like
+%%% NO3 and K. The legacy 0.4 belonged to a lumped pool and kept 60 % of the
+%%% weathered cations in the box (budget of package m, 1 October 2026).
+BiogeoPar.aCa = 1;
+BiogeoPar.aMg = 1;
 BiogeoPar.aSi = 0.001;
 
 %%%%%%%%%%%%%%% Uptake coefficients 
@@ -200,6 +250,38 @@ BiogeoPar.vam =  2.3e-7; %BiogeoPar.g_am*BiogeoPar.mrm/kn3 ; %% [m^2/day]
 %BiogeoPar.KnK=0.1;
 
 %%%%%% Shape of the nitrification pH response used in BIOGEOCHEMISTRY_DYNAMIC3.
+
+%% Run-local replacement of the twelve decomposition literals the T&C-SMEW
+%% uncertainty analysis varied (Table S2 of its supplement): applied last,
+%% because nothing above derives another field from them. KNmaxd has its
+%% own argument; any other name, or a value outside [0, Inf), is an error.
+overridable = {'Vm','Vpc','Km','rem','rep','pepf','mrb','mrf','fd', ...
+    'Vpl','Vdb','Vdf'};
+if ~isempty(overrides)
+    if ~(isstruct(overrides) && isscalar(overrides))
+        error('Biogeochemistry_Parameter:InvalidOverride', ...
+            'Overrides must be a scalar struct of parameter names.');
+    end
+    names = fieldnames(overrides);
+    for k = 1:numel(names)
+        if strcmp(names{k},'KNmaxd')
+            error('Biogeochemistry_Parameter:InvalidOverride', ...
+                'KNmaxd is set through its own argument, not the override struct.');
+        end
+        if ~ismember(names{k},overridable)
+            error('Biogeochemistry_Parameter:UnknownOverride', ...
+                '%s is not one of the overridable literals (%s).', ...
+                names{k},strjoin(overridable,', '));
+        end
+        value = overrides.(names{k});
+        if ~(isnumeric(value) && isreal(value) && isscalar(value) && ...
+                isfinite(value) && value >= 0)
+            error('Biogeochemistry_Parameter:InvalidOverride', ...
+                '%s must be a finite nonnegative scalar.',names{k});
+        end
+        BiogeoPar.(names{k}) = value;
+    end
+end
 return
 
 

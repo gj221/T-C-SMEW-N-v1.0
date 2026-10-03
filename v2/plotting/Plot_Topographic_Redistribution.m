@@ -74,10 +74,10 @@ end
 featz = (feat - mean(feat,1)) ./ max(feat_sd,eps);
 featz(:,~varying) = 0;
 feature_names = {'elevation','TWI','aspect','curvature'};
-if ~all(varying)
+if ~all(varying | undefined)
     fprintf(['Plot_Topographic_Redistribution: %s constant across the ' ...
         'domain; importance reported as NaN\n'], ...
-        strjoin(feature_names(~varying),', '));
+        strjoin(feature_names(~varying & ~undefined),', '));
 end
 importance = nan(V,4);
 for v = 1:V

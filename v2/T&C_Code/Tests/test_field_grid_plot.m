@@ -1,16 +1,18 @@
 function test_field_grid_plot()
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Each retained whole-site polygon has its own grid subplot and summary.
+%% Without samples the interpolation figure is the plain grid figure: one
+%% subplot and one summary row per retained whole-site polygon.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 test_directory = fileparts(mfilename('fullpath'));
 code_directory = fileparts(test_directory);
 v2_directory = fileparts(code_directory);
-addpath(code_directory,fullfile(v2_directory,'plotting'));
+addpath(code_directory,fullfile(v2_directory,'interpolation'));
 
 shape_file = fullfile(v2_directory,'Spatial inputs','Bruce Farm Virginia', ...
     'Whole farm','AdamWilbourne_Control_Fields.shp');
-[setups,summary,figure_handle] = Plot_Field_Grid(shape_file,[],[1 2]);
+[setups,summary,figure_handle] = ...
+    Plot_Field_Grid_Interpolation(shape_file,[],[1 2]);
 figure_cleanup = onCleanup(@() close(figure_handle));
 
 assert(numel(setups) == 2);
@@ -47,7 +49,8 @@ for k = 1:numel(setups)
 end
 
 figure_directory = fullfile(v2_directory,'figures');
-base_name = 'Field_Grid_AdamWilbourne_Control_Fields_features1_2_geometry';
+base_name = ['Field_Grid_Interpolation_' ...
+    'AdamWilbourne_Control_Fields_features1_2_geometry'];
 assert(isfile(fullfile(figure_directory,[base_name '.png'])));
 assert(isfile(fullfile(figure_directory,[base_name '.fig'])));
 assert(isfile(fullfile(figure_directory,[base_name '_summary.csv'])));

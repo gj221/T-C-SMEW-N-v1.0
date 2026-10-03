@@ -31,9 +31,9 @@ function out = Run_Topographic_Grid_Convergence(shape_file, dem_source, varargin
 %%
 %% Optionally ('RedistributionDays' > 0) a short topographic 2-D run is
 %% made at each buildable width through Run_One_Subfield and two
-%% redistribution metrics are added: lateral water moved per m2 of field
-%% per day, and the spatial coefficient of variation of end-of-run
-%% root-zone water.  Expensive; off by default.
+%% redistribution metrics are added: lateral water moved per m2 of the
+%% simulated grid per day, and the spatial coefficient of variation of
+%% end-of-run water over the whole soil profile.  Expensive; off by default.
 %%
 %% INPUTS
 %%   shape_file   field-boundary shapefile
@@ -83,7 +83,7 @@ poly_y = ref.field_boundary_projected_y_m(:);
 
 names = {'width_m','slope_mean','slope_std','twi_mean','twi_std', ...
     'plan_curv_abs_mean','relief_m','n_pixels','n_cells','n_outlets', ...
-    'drained_area_fraction','lateral_water_m3_per_m2_day','rootzone_water_cv','wall_s'};
+    'drained_area_fraction','lateral_water_m3_per_m2_day','profile_water_cv','wall_s'};
 rows = nan(numel(widths),numel(names));
 
 for i = 1:numel(widths)
@@ -244,25 +244,27 @@ frac = sum(w(reaches));
 end
 
 %% =======================================================================
-function [lat_per_area_day,rz_cv] = redistribution_metrics(shape_file,dem_source,opt,h,topo)
+function [lat_per_area_day,profile_cv] = redistribution_metrics(shape_file,dem_source,opt,h,topo)
 %% A short topographic 2-D run at this width; the caller's Run_Matrix
 %% id selects the parameter case.  Reads the lateral ledger the driver
-%% keeps (Domain.lateral) and the end-of-run root-zone water per cell.
+%% keeps (Domain.lateral) and the end-of-run profile water per cell.
 result_file = Run_One_Subfield(opt.RunId,'FieldShapefile',shape_file, ...
     'FieldFeatureIndices',opt.FeatureIndices,'FieldPolygonIndex',opt.PolygonIndex, ...
     'GridCellSizeM',h,'FieldDEM',dem_source,'DEMResolutionM',h, ...
     'NDays',opt.RedistributionDays,'SaveResults',true);
 S = load(result_file,'Domain','V');
-%% total subsurface lateral throughput: the sum over faces and hours of
-%% |Q_edge| (the buffer/main ledger is zero on a polygon grid, which has
-%% no buffer)
-lat = sum(S.Domain.lateral.water_edge_abs_m3,'omitnan');          % m3 moved
-lat_per_area_day = lat/max(S.Domain.area_m2,eps)/opt.RedistributionDays;
-Vend = squeeze(sum(S.V(end,:,:),2));                          % mm per cell
+%% net subsurface lateral redistribution: the water that changed cells,
+%% counted once (the |Q_edge| throughput would also count exchange back
+%% and forth; the buffer/main ledger is zero on a polygon grid)
+lat = sum(S.Domain.lateral.water_net_m3,'omitnan');               % m3 moved
+%% the throughput is over every simulated cell, so it is per m2 of the
+%% simulated grid, not of the field inside it
+lat_per_area_day = lat/max(S.Domain.simulated_area_m2,eps)/opt.RedistributionDays;
+Vend = squeeze(sum(S.V(end,:,:),2));       % mm per cell, all layers (whole profile)
 [~,~,ff] = Field_Aggregation_Areas(topo);
 w = ff(:).*topo.cell_area_m2(:); w = w/sum(w);
 mu = sum(w.*Vend(:)); sd = sqrt(max(0,sum(w.*Vend(:).^2)-mu^2));
-rz_cv = sd/max(mu,eps);
+profile_cv = sd/max(mu,eps);
 end
 
 %% =======================================================================

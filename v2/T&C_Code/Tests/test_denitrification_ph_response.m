@@ -1,29 +1,36 @@
 function test_denitrification_ph_response
-% Gross denitrification and N2:N2O partition use published pH functions.
+% Gross denitrification and N2:N2O partition use the Energy Farm pH functions.
 
 test_dir = fileparts(mfilename('fullpath'));
 addpath(fileparts(test_dir));
 
-pH = [3.5 4 5.5 7 8];
+pH = [3.5 4 5.5 7 7.5 8];
 [gross_factor,n2_to_n2o] = Biogeo_Denitrification_PH_Response(pH);
-expected_gross = 0.0016*exp(1.006*pH);
-expected_ratio = [0.001 0.001 0.501 1 1];
+pH_opt = 7.5;
+expected_gross = min(1,max(0.001,(pH-4)/(pH_opt-4)));
+expected_ratio = 0.0016*exp(1.006*pH);
 
 assert(max(abs(gross_factor-expected_gross)) < 1e-12, ...
-    'Gross denitrification pH response does not match Val Martin et al. (2023).');
+    'Gross denitrification pH response does not use the pH 7.5 breakpoint.');
 assert(max(abs(n2_to_n2o-expected_ratio)) < 1e-12, ...
-    'N2:N2O pH response does not match Val Martin et al. (2023).');
-assert(all(diff(gross_factor) > 0) && all(diff(n2_to_n2o) >= 0), ...
+    'N2:N2O pH response does not match Blanc-Betes et al. (2021).');
+assert(all(diff(gross_factor) >= 0) && all(diff(n2_to_n2o) > 0), ...
     'Higher pH must not reduce gross denitrification or the N2:N2O ratio.');
-assert(all(gross_factor > 0), ...
-    'The gross denitrification pH factor must remain positive.');
+assert(all(gross_factor >= 0.001 & gross_factor <= 1), ...
+    'The gross denitrification pH factor must remain within its configured bounds.');
+assert(all(gross_factor(pH <= 4) == 0.001), ...
+    'Gross denitrification must use its lower floor at and below pH 4.');
+assert(all(abs(gross_factor(pH >= pH_opt)-1) < 1e-12), ...
+    'Gross denitrification must plateau at and above pH 7.5.');
+assert(all(n2_to_n2o > 0), ...
+    'The N2:N2O pH factor must remain positive.');
 
 assert_throws(@() Biogeo_Denitrification_PH_Response(0), ...
     'Biogeo_Denitrification_PH_Response:InvalidPH');
 assert_throws(@() Biogeo_Denitrification_PH_Response(NaN), ...
     'Biogeo_Denitrification_PH_Response:InvalidPH');
 
-fprintf('PASS: denitrification pH functions match Val Martin et al. (2023).\n');
+fprintf('PASS: denitrification pH functions use the literature-constrained pH 7.5 breakpoint.\n');
 end
 
 function assert_throws(fun,identifier)

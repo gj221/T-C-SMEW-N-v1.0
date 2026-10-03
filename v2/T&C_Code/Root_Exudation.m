@@ -50,8 +50,8 @@ else
         if NPP>0
             %%%%%%%%%%%%%%%%%%%%%%%%%%
             %%% Biological N-fixation
-            a= -3.62; b=0.27; c=25.14;
-            s=-30;
+            a= -3.62; b=0.27; c=25.15;
+            s=-6.25;
             Costfix = s*(exp(a + b*Tdp*(1 - 0.5*Tdp/c))-2); %% [gC/gN]
             %%%%%%%%%%%%%%%%%%%%%%%%%%
             %Nsoil = NavlI(1)*365.25; %% [gN/m2 yr] N-available last year
@@ -145,9 +145,22 @@ else
                     Nui_am = (1-EM).*Rexmy./CostactAM_si ;
             end
             Nui_tot = Nui_bnf + Nui_ex +  Nui_em +  Nui_am;
-            RexmyT(1) = Rexmy*Nui_ex/Nui_tot ;   %% [gC / m^2 d]
-            RexmyT(2) = Rexmy*(Nui_em+Nui_am)/Nui_tot; %% [gC / m^2 d]
-            RexmyT(3) = Rexmy*Nui_bnf/Nui_tot; %% [gC / m^2 d]
+            %%% An exhausted carbohydrate reserve clamps Rexmy to zero at the
+            %%% min above, zeroing every Nui term and leaving Nui_tot at zero,
+            %%% so this partitioning is 0/0 and returns NaN. That NaN reaches
+            %%% the carbohydrate reserve through VEGETATION_DYNAMIC and from
+            %%% there every plant pool. There is no exudation
+            %%% to divide when Rexmy is zero, so each pathway takes none: the
+            %%% safe_fraction guard from BIOGEOCHEMISTRY_DYNAMIC3.
+            if Nui_tot > 0
+                RexmyT(1) = Rexmy*Nui_ex/Nui_tot ;   %% [gC / m^2 d]
+                RexmyT(2) = Rexmy*(Nui_em+Nui_am)/Nui_tot; %% [gC / m^2 d]
+                RexmyT(3) = Rexmy*Nui_bnf/Nui_tot; %% [gC / m^2 d]
+            else
+                RexmyT(1) = 0;
+                RexmyT(2) = 0;
+                RexmyT(3) = 0;
+            end
         else
             RexmyT(1) = 0;
             RexmyT(2) = 0;
@@ -159,8 +172,8 @@ else
         if NPP>0
             %%%%%%%%%%%%%%%%%%%%%%%%%%
             %%% Biological N-fixation
-            a= -3.62; b=0.27; c=25.14;
-            s=-30;
+            a= -3.62; b=0.27; c=25.15;
+            s=-6.25;
             Costfix = s*(exp(a + b*Tdp*(1 - 0.5*Tdp/c))-2); %% [gC/gN]
             %%%%%%%%%%%%%%%%%%%%%%%%%%
             Nsoil = min(NavlI(1),NupIm(1)); %% [gN/m2] N-available last year
@@ -248,9 +261,22 @@ else
                     Nui_am = (1-EM).*Rexmy./CostactAM_si ;
             end
             Nui_tot = Nui_bnf + Nui_ex +  Nui_em +  Nui_am;
-            RexmyT(1) = Rexmy*Nui_ex/Nui_tot ;   %% [gC / m^2 d]
-            RexmyT(2) = Rexmy*(Nui_em+Nui_am)/Nui_tot; %% [gC / m^2 d]
-            RexmyT(3) = Rexmy*Nui_bnf/Nui_tot; %% [gC / m^2 d]
+            %%% An exhausted carbohydrate reserve clamps Rexmy to zero at the
+            %%% min above, zeroing every Nui term and leaving Nui_tot at zero,
+            %%% so this partitioning is 0/0 and returns NaN. That NaN reaches
+            %%% the carbohydrate reserve through VEGETATION_DYNAMIC and from
+            %%% there every plant pool. There is no exudation
+            %%% to divide when Rexmy is zero, so each pathway takes none: the
+            %%% safe_fraction guard from BIOGEOCHEMISTRY_DYNAMIC3.
+            if Nui_tot > 0
+                RexmyT(1) = Rexmy*Nui_ex/Nui_tot ;   %% [gC / m^2 d]
+                RexmyT(2) = Rexmy*(Nui_em+Nui_am)/Nui_tot; %% [gC / m^2 d]
+                RexmyT(3) = Rexmy*Nui_bnf/Nui_tot; %% [gC / m^2 d]
+            else
+                RexmyT(1) = 0;
+                RexmyT(2) = 0;
+                RexmyT(3) = 0;
+            end
         else
             RexmyT(1) = 0;
             RexmyT(2) = 0;

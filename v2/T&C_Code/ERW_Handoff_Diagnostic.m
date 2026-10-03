@@ -170,7 +170,7 @@ for ii = 1:numel(names)
     C.(field) = pool_g_m2 / mw(ii) * 1e6 / Vw;
 end
 
-vals = struct2array(C);
+vals = cell2mat(struct2cell(C));   %% struct2array is gone from recent releases
 if any(~isfinite(vals)) || any(vals < 0)
     warnings = add_warning(warnings, 'source-derived solution concentrations must be finite and non-negative');
 end

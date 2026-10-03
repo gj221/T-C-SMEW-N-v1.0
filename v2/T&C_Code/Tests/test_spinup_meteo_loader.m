@@ -12,6 +12,10 @@ function test_spinup_meteo_loader()
 %%   7  a site mismatch (Lat) is warned about, the data still returned
 %%   8  a non-.mat name is handed to Load_Daily_Meteo (missing file error
 %%      comes from there)
+%%   9  a file whose first and last days are partial (UTC boundaries in
+%%      local time, as the real forcing files are): a window touching a
+%%      partial day is an error, a window of whole days loads, and NaN
+%%      bounds still resolve to the complete years
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 here = fileparts(mfilename('fullpath'));
 addpath(fileparts(here));
@@ -90,6 +94,25 @@ ok = false;
 try; Load_Spinup_Meteo(fullfile(tmp,'station.txt'),NaN,NaN,40.06,-88.20,-6);
 catch ME; ok = strcmp(ME.identifier,'Load_Daily_Meteo:MissingFile'); end
 check(ok,'a non-.mat name is dispatched to Load_Daily_Meteo');
+
+%% 9 partial first and last days, as Data_Kantola.mat (18:00 .. 17:00)
+S9 = S; D9 = (datenum(2013,12,31,18,0,0):1/24:datenum(2016,12,31,17,0,0))';
+S9.Date = D9;
+for k = 1:numel(vars); S9.(vars{k}) = (1:numel(D9))' + k; end
+f9 = fullfile(tmp,'partial_edges.mat'); save(f9,'-struct','S9');
+ok_last = false; ok_first = false;
+try; Load_Spinup_Meteo(f9,datenum(2016,12,1),datenum(2016,12,31),40.06,-88.20,-6);
+catch ME; ok_last = strcmp(ME.identifier,'Load_Spinup_Meteo:PartialDays') && contains(ME.message,'2016-12-31'); end
+try; Load_Spinup_Meteo(f9,datenum(2013,12,31),datenum(2014,1,5),40.06,-88.20,-6);
+catch ME; ok_first = strcmp(ME.identifier,'Load_Spinup_Meteo:PartialDays'); end
+check(ok_last && ok_first,'a window touching a partial first or last day is an error naming the day');
+[met9,~] = Load_Spinup_Meteo(f9,datenum(2016,12,1),datenum(2016,12,30),40.06,-88.20,-6);
+check(numel(met9.Date) == 30*24 && abs(met9.Date(end) - (datenum(2016,12,31) - 1/24)) < 1e-9, ...
+    'a window ending on the last whole day loads every hour of it');
+[met9b,~] = Load_Spinup_Meteo(f9,NaN,NaN,40.06,-88.20,-6);
+[y9,~,~] = datevec(met9b.Date);
+check(min(y9) == 2014 && max(y9) == 2015 && numel(met9b.Date) == (365+365)*24, ...
+    'NaN bounds skip the partial edge years');
 
 rmdir(tmp,'s');
 fprintf('  %d passed, %d failed\n',n_pass,n_fail);

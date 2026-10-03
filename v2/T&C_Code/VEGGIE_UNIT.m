@@ -192,6 +192,11 @@ sol=ode45(@VEGETATION_DYNAMIC,T_SPAN,Btm1,OPT_VD,...
     soCrop,TBio,GirdOpt,OPT_EnvLimitGrowth,OPT_VCA);
 %%%%%%%%%%%%%%%%%%
 B = deval(sol,dtd);
+%%% Observe the accepted state before anything consumes it. This records a
+%%% carbohydrate reserve the integrator drove below zero and changes nothing:
+%%% legacy carried such a state forward and the clamped ratio in
+%%% Plant_Exports absorbed it silently, so the carbon was never counted.
+Plant_Carbon_Deficit('record',B);
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 [LAI,NPP,Rg,RA,Rms,Rmr,Rmc,ANPP,LAIdead,Sr,Slf,Sfr,Swm,Sll,NLeaf,NLeafdead,NBLeaf,Nreserve,Preserve,Kreserve,...
     Careserve,Mgreserve,Sireserve]= VEG_DYN_RES(B,dtd,Btm1,Tam,Tsm,An,Rdark,...

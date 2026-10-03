@@ -1,7 +1,7 @@
 function E = ERW_Daily_Step_2D(E, cfg, p, i, j, NN, NNd, Datam, ~, Ca, ...
     O_c, Lk_c, f_c, T_H_c, T_L_c, Tdp_bio, VSUM, VTSUM, ...
     R_microbe_c, R_litter_c, R_ew_c, R_litter_sur_c, Rmr_H_c, Rmr_L_c, Ccrown, ...
-    P_c, MOD_PARAM_input, ERW_PARAM_input, conv_mol, conv_Al)
+    P_c, MOD_PARAM_input, ERW_PARAM_input, conv_mol, conv_Al, N_col)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% ERW_Daily_Step_2D
 %%
@@ -66,12 +66,6 @@ if ~E.init
     if isfield(p,'Pcla');   C.Pcla  = p.Pcla;   end
     if isfield(p,'rain_pH_vwm'); C.rain_pH_vwm = p.rain_pH_vwm; end
     if isfield(p,'bulk_pH_params'); C.bulk_pH_params = p.bulk_pH_params; end
-    if isfield(p,'spinup_water_loss_mean_l_m2_d') && ...
-            isscalar(p.spinup_water_loss_mean_l_m2_d) && ...
-            isfinite(p.spinup_water_loss_mean_l_m2_d) && ...
-            p.spinup_water_loss_mean_l_m2_d >= 0
-        C.seed_water_loss_l_m2_d = p.spinup_water_loss_mean_l_m2_d;
-    end
     E.TC_const = C;
 
     %% Per-column series, filled in as the run proceeds
@@ -146,22 +140,12 @@ r_het_now = (R_microbe_c(j) + R_litter_c(j) + R_ew_c(j) - R_litter_sur_c(j))/12*
 r_aut_now = (Rmr_H_c(j,:) + Rmr_L_c(j,:))*Ccrown'/12*conv_mol;
 
 if ~E.init_done_j2
-    E.TC.s(1:2,:)         = sum(p.Bio_Zs.*mean(O_c(pdind,:)))/C.n;
+    E.TC.s(1:2,:)         = erw_pore_saturation(p,O_c,pdind,C.n,cfg.saturation_exponent);
     E.TC.temp_soil(1:2,:) = Tdp_bio;
     E.TC.r_het(1:2,:)     = (R_microbe_c(2) + R_litter_c(2) + R_ew_c(2) - R_litter_sur_c(2))/12*conv_mol;
     E.TC.r_aut(1:2,:)     = (Rmr_H_c(2,:) + Rmr_L_c(2,:))*Ccrown'/12*conv_mol;
-    if isfield(p,'spinup_r_het_mean_umol_m2_d') && ...
-            isscalar(p.spinup_r_het_mean_umol_m2_d) && ...
-            isfinite(p.spinup_r_het_mean_umol_m2_d)
-        E.TC.r_het(1:2,:) = p.spinup_r_het_mean_umol_m2_d;
-    end
-    if isfield(p,'spinup_r_aut_mean_umol_m2_d') && ...
-            isscalar(p.spinup_r_aut_mean_umol_m2_d) && ...
-            isfinite(p.spinup_r_aut_mean_umol_m2_d)
-        E.TC.r_aut(1:2,:) = p.spinup_r_aut_mean_umol_m2_d;
-    end
 else
-    E.TC.s(j,:)         = sum(p.Bio_Zs.*mean(O_c(pdind,:)))/C.n;
+    E.TC.s(j,:)         = erw_pore_saturation(p,O_c,pdind,C.n,cfg.saturation_exponent);
     E.TC.temp_soil(j,:) = Tdp_bio;
     E.TC.r_het(j,:)     = r_het_now;
     E.TC.r_aut(j,:)     = r_aut_now;
@@ -177,10 +161,7 @@ E.TC_const.cov_moll = cov_moll;
 %% labile MINERAL pools; only the dissolved part carries pore-water
 %% charge, and these are the model's own solubility coefficients, the
 %% same ones Biogeo_Leakage and Biogeo_uptake apply to those pools.
-persistent BiogeoPar_erw_handoff
-if isempty(BiogeoPar_erw_handoff)
-    BiogeoPar_erw_handoff = Biogeochemistry_Parameter(1);
-end
+BiogeoPar_erw_handoff = Biogeochemistry_Parameter(1);
 erw_PO4_fraction = BiogeoPar_erw_handoff.aP;
 erw_NO3_fraction = BiogeoPar_erw_handoff.aNO3;
 erw_NH4_fraction = BiogeoPar_erw_handoff.aNH4;
@@ -210,24 +191,22 @@ dtw = E.dtw;
 [kinetic_mass_fraction, direct_carbonate_mass_fraction, rock_f_in_erw] = ...
     ERW_Feedstock_Pathway(ERW_PARAM_input.mineral, ERW_PARAM_input.rock_f_in);
 if ERW_PARAM_input.diss_f > 0 && cfg.apply_rock
-    ta1 = days(datetime([2016 11 10 0 0 0])-datetime([Datam(1,:) 0 0]));
-    ta2 = days(datetime([2017 11 10 0 0 0])-datetime([Datam(1,:) 0 0]));
-    ta3 = days(datetime([2018 11 10 0 0 0])-datetime([Datam(1,:) 0 0]));
-    ta4 = days(datetime([2019 11 10 0 0 0])-datetime([Datam(1,:) 0 0]));
-    time_application = [ta1 ta2 ta3 ta4];
+    %% Every 10 November from the first field application (2016) to the
+    %% column's last application year: 2019 is the field record, a
+    %% projection extends it. Dates outside the run are dropped by
+    %% ERW_Application_Indices.
+    application_years = 2016:cfg.last_application_year;
+    time_application = days(datetime(application_years,11,10) - ...
+        datetime([Datam(1,:) 0 0]));
     M_rock_add = zeros(length(t),1);
     M_rock_add_CaCO3 = zeros(length(t),1);
     M_rock_add(1) = ERW_PARAM_input.M_rock_in*kinetic_mass_fraction;
     M_rock_add_CaCO3(1) = ERW_PARAM_input.M_rock_in*direct_carbonate_mass_fraction/100.087*1e6;
-    idx = time_application/dtw;
-    if any(abs(idx-round(idx)) > 1e-10)
-        error('ERW:applicationGrid', ...
-            'Rock-application times must lie on the ERW timestep grid.');
-    end
-    idx = round(idx);
-    idx = idx(idx >= 1 & idx <= length(t));
-    M_rock_add(idx) = 5000*kinetic_mass_fraction;
-    M_rock_add_CaCO3(idx) = 5000*direct_carbonate_mass_fraction/100.087*1e6;
+    idx = ERW_Application_Indices(time_application,dtw,length(t));
+    M_rock_add(idx) = M_rock_add(idx) + ...
+        ERW_PARAM_input.M_rock_event*kinetic_mass_fraction;
+    M_rock_add_CaCO3(idx) = M_rock_add_CaCO3(idx) + ...
+        ERW_PARAM_input.M_rock_event*direct_carbonate_mass_fraction/100.087*1e6;
 else
     M_rock_add = zeros(length(t),1);
     M_rock_add_CaCO3 = zeros(length(t),1);
@@ -351,7 +330,8 @@ end
 %% Change in the biogeochemical totals since yesterday.  ERW Ca_tot,
 %% Mg_tot, and K_tot include the CEC inventory, so internal transfer between
 %% the legacy solution and exchange pools must cancel here.
-if ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam)
+apply_tc_daily_delta = ERW_Should_Apply_TC_Daily_Delta(j,i,NN,Datam);
+if apply_tc_daily_delta
     dCa  = ((P_c(j,60) + P_c(j,61)) - (P_prev_for_erw_delta(60) + P_prev_for_erw_delta(61)))/40  *1e6;
     dMg  = ((P_c(j,68) + P_c(j,69)) - (P_prev_for_erw_delta(68) + P_prev_for_erw_delta(69)))/24.3*1e6;
     dK   = ((P_c(j,52) + P_c(j,53)) - (P_prev_for_erw_delta(52) + P_prev_for_erw_delta(53)))/39.1*1e6;
@@ -366,18 +346,33 @@ end
 %% Background input
 if ERW_PARAM_input.keyword_add == 1
     if j == 2
-        E.const.I_Na = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.Na_tot(1);
-        E.const.I_An = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.An_tot(1);
+        bg_row = 1;
     else
-        E.const.I_Na = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.Na_tot(E.dm_end);
-        E.const.I_An = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.An_tot(E.dm_end);
+        bg_row = E.dm_end;
     end
+    E.const.I_Na = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.Na_tot(bg_row);
+    E.const.I_An = mean(E.TC.f_Lw_bio(j)+E.TC.f_T_bio(j)) * E.bg.An_tot(bg_row);
+    %% The leached part of that closure returns as the salt it left as, so
+    %% the bare anion does not acidify the box (ERW_Leached_Salt_Resupply).
+    [E.const.I_Ca,E.const.I_Mg] = ERW_Leached_Salt_Resupply(E.TC.f_Lw_bio(j), ...
+        E.bg.An_tot(bg_row),E.bg.Na_tot(bg_row),E.bg.Ca(bg_row),E.bg.Mg(bg_row));
 end
 
 %% ---------------------------------------------------------------------
 %% Sub-daily ERW integration over this day's window
 %% ---------------------------------------------------------------------
 bg = E.bg; weath = E.weath; cst = E.const; var_ = E.var;
+%% The particle-class histories (rows x classes x applications) of an
+%% amended column are each about 3.6 GB over 35 years. Written in place
+%% here they would be copied whole on every daily call, since the frame
+%% still holds the column state, so their rows collect in daily blocks and
+%% the frame assembles them after the run (ERW_Particle_History).
+%% ERW_function reads exactly the rows it read from the full arrays.
+if ~isfield(E,'hist')
+    [E.hist,weath] = ERW_Particle_History('start',weath,E.weath_names);
+end
+hist = E.hist;
+day = ERW_Particle_History('open',hist,max(dm_start,2),max(0,dm_end-max(dm_start,2)+1));
 bulk_pH_params_2d = cst.bulk_pH_params;
 bulk_pH_params_2d.suppress_no_converge_warning = true;
 erw_window_days = (dm_end-max(dm_start,2)+1)*dtw;
@@ -385,9 +380,81 @@ d_erw = ERW_Normalize_TC_Daily_Deltas( ...
     [dCa; dMg; dK; dSi; dPO4; dNO3; dNH4],erw_window_days);
 dCa=d_erw(1,:); dMg=d_erw(2,:); dK=d_erw(3,:); dSi=d_erw(4,:);
 dPO4=d_erw(5,:); dNO3=d_erw(6,:); dNH4=d_erw(7,:);
+
+%% NH4, NO3 and dissolved PO4 are biogeochemical boundary conditions. The
+%% PO4 partition follows the same daily equilibrium fraction used by T&C
+%% uptake and leakage. The final flush reuses P(j) without its delta again.
+if j >= 2
+    anchor_row = max(dm_start,2) - 1;
+    anchor_state_row = j - double(apply_tc_daily_delta);
+    bg.PO4_tot(anchor_row,:) = ...
+        erw_PO4_fraction * P_c(anchor_state_row,43)/31 * 1e6;
+    bg.NH4_tot(anchor_row,:) = ...
+        erw_NH4_fraction * P_c(anchor_state_row,31)/14 * 1e6;
+    bg.NO3_tot(anchor_row,:) = ...
+        erw_NO3_fraction * P_c(anchor_state_row,32)/14 * 1e6;
+    %% Ca/Mg/K/Si_tot must be re-anchored the same way, but ONLY when
+    %% lateral transport can actually move mass into or out of this column
+    %% (N_col > 1). In the 2-D driver, lateral transport (Biogeo_Lateral_
+    %% Pools, called every hour) keeps writing into
+    %% P(j,60/61/68/69/52/53/76,:) for all 24 hours of a day, but this
+    %% function only runs once, at hour 1. Relying on P_c(j-1,:) as the
+    %% delta baseline (below) captures only hour 1's lateral change:
+    %% P_c(j-1,:) is exactly the value BIOGEO_UNIT copied forward into
+    %% P_c(j,:) before hour 1's lateral step ran, so it cancels out of
+    %% (P_c(j,:) - P_c(j-1,:)) and hours 2-24 of the PREVIOUS day's lateral
+    %% transport -- already folded into that same P_c(j-1,:) snapshot --
+    %% disappear from the signal entirely. Anchoring the absolute total to
+    %% P_c(anchor_state_row,:) every day, exactly as PO4/NH4/NO3 do above,
+    %% discards no history: each day's ERW state starts from T&C's true
+    %% accumulated total instead of ERW's own dCa-integrated total.
+    %%
+    %% Unlike the PO4/NH4/NO3 anchors, this one is not a bit-exact
+    %% round-trip: it reads back TWO independently-rounded stored columns
+    %% (e.g. P_c(60)+P_c(61)) and rescales them, where PO4/NH4/NO3 read a
+    %% single column with no addition. At N_col = 1 nothing external ever
+    %% touches these pools between ERW calls -- the lateral block above is
+    %% itself gated on N_col > 1 -- so re-deriving Ca_tot from P_c there is
+    %% a mathematical no-op that still costs a few ULPs relative to ERW's
+    %% own already-exact running total, which then amplifies through the
+    %% same nonlinear-solver sensitivity already documented above for pH
+    %% (confirmed against the 1-D frame: unconditional, this broke
+    %% test_2d_driver_equivalence's bit-exact fields by day 6). Gating on
+    %% N_col > 1 keeps the fix exactly where the 23/24-hour loss actually
+    %% happens and leaves the N_col = 1 case, which has no loss to fix,
+    %% bit-identical to before.
+    if N_col > 1
+        bg.Ca_tot(anchor_row,:) = ...
+            (P_c(anchor_state_row,60) + P_c(anchor_state_row,61))/40 * 1e6;
+        bg.Mg_tot(anchor_row,:) = ...
+            (P_c(anchor_state_row,68) + P_c(anchor_state_row,69))/24.3 * 1e6;
+        bg.K_tot(anchor_row,:) = ...
+            (P_c(anchor_state_row,52) + P_c(anchor_state_row,53))/39.1 * 1e6;
+        bg.Si_tot(anchor_row,:) = ...
+            P_c(anchor_state_row,76)/28.1 * 1e6;
+    end
+end
 for dt_m = max(dm_start,2):dm_end
     cst.s_pre = W.s(row_of(dt_m-1));
     rock_app  = sum(M_rock_add(1:dt_m) > 0);
+    prev = struct();
+    for nm = {'psd','d','lamb','SSA'}
+        if any(strcmp(hist.names,nm{1}))
+            prev.(nm{1}) = ERW_Particle_History('row',hist,day,weath,nm{1},dt_m-1);
+        else
+            prev.(nm{1}) = weath.(nm{1})(dt_m-1,:,:);
+        end
+    end
+    if any(strcmp(hist.names,'psd'))
+        psd_0 = ERW_Particle_History('first',hist,day,'psd');
+    else
+        psd_0 = weath.psd;
+    end
+    if any(strcmp(hist.names,'lamb'))
+        lamb_0 = ERW_Particle_History('first',hist,day,'lamb');
+    else
+        lamb_0 = weath.lamb;
+    end
 
     [~, ~, bg_it, weath_it, ~, ~, cst_it] = ERW_function( ...
         cst.n, cst.s_pre, W.s(row_of(dt_m)), W.Lw(row_of(dt_m-1)), W.Tw(row_of(dt_m-1)), W.Iw(row_of(dt_m)), ...
@@ -406,7 +473,7 @@ for dt_m = max(dm_start,2):dm_end
         bg.Al(dt_m-1,:), bg.AlOH4(dt_m-1,:), bg.Si(dt_m-1,:), ...
         bg.R_alk(dt_m-1,:), bg.H(dt_m-1,:), ...
         weath.EW(dt_m-1,:), bg.IC_tot(dt_m-1,:), weath.Wr(dt_m-1,:), ...
-        weath.psd(dt_m-1,:,:), weath.d(dt_m-1,:,:), weath.lamb(dt_m-1,:,:), weath.SSA(dt_m-1,:,:), ...
+        prev.psd, prev.d, prev.lamb, prev.SSA, ...
         bg.Fs(dt_m-1,:), bg.DIC(dt_m-1,:), ...
         cst.I_Ca, cst.I_Mg, cst.I_Na, cst.I_K, cst.I_An, cst.I_Si, ...
         weath.W_CaCO3(dt_m-1), weath.W_MgCO3(dt_m-1), 1, ...
@@ -414,7 +481,7 @@ for dt_m = max(dm_start,2):dm_end
         bg.f_CEC(dt_m-1,:), bg.f_Ca(dt_m-1,:), bg.f_Mg(dt_m-1,:), bg.f_K(dt_m-1,:), ...
         bg.f_Na(dt_m-1,:), bg.f_Al(dt_m-1,:), bg.f_H(dt_m-1,:), ...
         cst.r_CaCO3, cst.r_MgCO3, cst.tau_CaCO3, cst.tau_MgCO3, ...
-        bg.M_min(dt_m-1,:), cst.M_iner, cst.a, weath.psd, cst.d_in, weath.lamb, ...
+        bg.M_min(dt_m-1,:), cst.M_iner, cst.a, psd_0, cst.d_in, lamb_0, ...
         dt_m, var_.mineral, cst.K_sp, cst.diss_f, cst.n_H, cst.n_OH, ...
         E.opt_TC_biochem, ...
         dCa, dMg, dK, dSi, ...
@@ -436,7 +503,7 @@ for dt_m = max(dm_start,2):dm_end
     end
     for v = 1:size(E.weath_names,1)
         nm = cell2mat(E.weath_names(v));
-        if isfield(weath_it, nm)
+        if isfield(weath_it, nm) && ~any(strcmp(hist.names,nm))
             if size(weath.(nm),3) > 1
                 weath.(nm)(dt_m,:,:) = weath_it.(nm);
             else
@@ -444,8 +511,14 @@ for dt_m = max(dm_start,2):dm_end
             end
         end
     end
+    if ~isempty(hist.names)
+        day = ERW_Particle_History('write',hist,day,weath_it,dt_m);
+        hist = ERW_Particle_History('track',hist,day,weath_it,dt_m,weath);
+    end
     cst.M_iner = cst_it.M_iner;
 end
+hist = ERW_Particle_History('close',hist,day);
+E.hist = hist;
 
 %% Forward extraction of the solved pore-water state to the air-dried
 %% bulk extract pH (Porewater_to_Bulk_pH), as in the 1-D frame.
@@ -455,7 +528,22 @@ for col = 1:numel(bg.pH(dm_end,:))
     s_col = W.s(row_of(dm_end));
     bulk_pH_params_now.field_water_L_m2 = cst.n * s_col * cst.Zrw * 1000;
     bulk_pH_params_now.DIC_field_umol_L = bg.DIC(dm_end,col);
-    bulk_pH_params_now.solid_CaCO3_umol_m2 = 0;
+    %% The paste is made from the plot's soil, so it carries the plot's
+    %% solid calcite: applied grains not yet dissolved plus the pedogenic
+    %% pool. M_min is g m-2 and MM_min g per umol, so the sum is umol m-2.
+    solid_calcite_now = max(bg.CaCO3(dm_end,col),0);
+    calcite_names = strtrim(string(var_.mineral));
+    is_calcite = strcmpi(calcite_names(:).',"calcite");
+    if any(is_calcite)
+        M_min_now = reshape(bg.M_min(dm_end,:),1,[]);
+        MM_min_now = reshape(cst.MM_min,1,[]);
+        solid_calcite_now = solid_calcite_now + ...
+            sum(M_min_now(is_calcite)./MM_min_now(is_calcite));
+    end
+    bulk_pH_params_now.solid_CaCO3_umol_m2 = solid_calcite_now;
+    %% It carries the plot's solid Mg carbonate, the nesquehonite pool
+    %% (umol m-2), on the same terms.
+    bulk_pH_params_now.solid_MgCO3_umol_m2 = max(bg.MgCO3(dm_end,col),0);
     [pH_bulk_now(col),bulk_pH_diag_now] = Porewater_to_Bulk_pH( ...
         bg.H(dm_end, col), ...
         bg.Ca(dm_end, col), bg.Mg(dm_end, col), ...
@@ -496,12 +584,22 @@ E.P69 = bg.f_Mg(dm_end,:) .* bg.CEC_tot(dm_end,:) / 2 * 24.3 / 1e6;
 E.P52 = bg.K(dm_end,:)  * 39.1 * cov_moll_end / 1e6;
 E.P53 = bg.f_K(dm_end,:) .* bg.CEC_tot(dm_end,:) * 39.1 / 1e6;
 E.P76 = bg.Si(dm_end,:) * 28.1 * cov_moll_end / 1e6;
-% Only write phosphate back when ERW was handed the whole pool; with a
-% solution fraction < 1 the solver carries the dissolved subset and this
-% would destroy the sorbed remainder.
-if erw_PO4_fraction >= 1
-    E.P43 = bg.PO4(dm_end,:)* 31   * cov_moll_end / 1e6;
-end
+[E.P43,P_weathering_release_umol] = ERW_Return_Weathered_Phosphorus( ...
+    P_c(j,43),bg.PO4_tot(dm_end,:),erw_PO4_fraction, ...
+    weath.P_weathering_release(max(dm_start,2):dm_end,:));
+E.P_weathering_release_umol = P_weathering_release_umol;
 E.has_update = true;
 
+end
+
+function s = erw_pore_saturation(p,O_c,pdind,n,exponent)
+%% Active-layer water content over its porosity: the saturation the ERW
+%% module weathers, breathes and dilutes with. The uncertainty ensemble
+%% raises it to an exponent (sqrt(s) to s^2, the legacy T&C-SMEW range,
+%% which perturbed the module's whole s input the same way). Exponent 1
+%% leaves the value untouched, bit for bit.
+s = sum(p.Bio_Zs.*mean(O_c(pdind,:)))/n;
+if exponent ~= 1
+    s = s.^exponent;
+end
 end
