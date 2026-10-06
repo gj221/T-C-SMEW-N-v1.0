@@ -7,12 +7,16 @@ function Build_TC_Forcing_From_NLDAS2(nldas_source,output_file,Lat,Lon,Zbas,Delt
 %     DISC (direct, OPeNDAP or the subsetter, any window around the site)
 %     or per-variable point time series; the grid cell containing Lat/Lon
 %     is read, its time axis from the CF units ("<unit> since <origin>"); or
-%   - text files (.txt, .asc, .csv), one variable each: point time series
-%     (GES DISC Data Rods ASCII, Giovanni CSV).  A line is data when it
-%     begins with an ISO time (yyyy-mm-ddTHH[:MM[:SS]], Z optional, or
-%     "yyyy-mm-dd HHZ") followed by a value; the variable is named by a
-%     header key (param_short_name=, variable=) or the file name, its units
-%     by a header key (unit=, units=) when there is one.
+%   - text files (.txt, .asc, .csv), one variable each: point time series,
+%     such as the Giovanni time-series service's CSV (through NASA Harmony:
+%     a POINT request on the collection, one file per variable) or Data
+%     Rods ASCII.  A file may hold any stretch of the record; a variable's
+%     files are joined.  A line is data when it begins with an ISO time
+%     (yyyy-mm-ddTHH[:MM[:SS]], Z optional, or "yyyy-mm-dd HHZ") followed
+%     by a value; the header's keys (key=value, key: value or key,value)
+%     name the variable (param_short_name, variable) -- else the file name
+%     does -- its units (unit, units) and the grid cell (lat, lon) when
+%     they are there.
 % Variables (v2.0 names; the GRIB short names of v002 are accepted):
 % Tair [K], Qair [kg/kg], PSurf [Pa], Wind_E and Wind_N [m/s], SWdown
 % [W/m2], Rainf [kg/m2].  Times are UTC.  Lat and Lon are degrees, Zbas is
@@ -314,7 +318,7 @@ end
 function v = header_value(header,names)
 v = '';
 for n = 1:numel(names)
-    hit = regexp(header,['^' names{n} '\s*[=:]\s*(.+)$'],'tokens','once','ignorecase');
+    hit = regexp(header,['^' names{n} '\s*[=:,]\s*(.+)$'],'tokens','once','ignorecase');
     hit = hit(~cellfun(@isempty,hit));
     if ~isempty(hit)
         v = regexprep(char(hit{1}{1}),'^[\s,;"]+|[\s,;"]+$','');   % "Unit:,K," -> K

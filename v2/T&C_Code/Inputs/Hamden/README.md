@@ -45,24 +45,27 @@ The same files are kept in two places:
   for checking. Hours in UTC. Suggested period: 2014-01-01 00 UTC to the
   latest available, giving ten complete years for the spin-up cycle plus
   the recent years.
-- **Downloading.** GES DISC, `NLDAS_FORA0125_H` v2.0, 2014-12-31 to
-  2026-01-01 (UTC), box West -72.85, South 41.40, East -72.78, North
-  41.47 (inside the one 0.125 degree cell centred on 41.4375 N, 72.8125 W
-  that holds the parcel), variables Tair, Qair, PSurf, Wind_E, Wind_N,
-  SWdown, Rainf, NetCDF. Use **Transform Data** (spatial and variable
-  subsetting): every hourly file then holds that one cell
-  (`..._subsetted.nc4`, 77 KB, about 7.4 GB in all). "Get Original Files"
-  and its generated download script (`download_files_NLDAS_FORA0125_H_2.0.py`,
-  kept here) fetch the whole-continent granules instead, 96,480 files and
-  ~156 GB, because the box only selects granules; run it, if at all,
-  outside OneDrive. A one-text-series-per-variable download (Data Rods,
-  Giovanni) is read too. Put the files of one route, unzipped, in one
-  folder.
-- **Converting**, in MATLAB from `v2/T&C_Code`:
-  `Build_TC_Forcing_From_NLDAS2('<folder of the files>','Inputs/Data_Hamden.mat',41.437,-72.866,97,-5)`.
-  Checked on a sample of the subsetted files: the cell, the units and the
-  hour stamps (hours since 1979, `time: point` for the state variables
-  and shortwave, `time: sum` for Rainf) are read as they come.
+- **Downloaded** (6 October 2026) as one hourly point time series per
+  variable -- Tair, Qair, PSurf, Wind_E, Wind_N, SWdown, Rainf -- for the
+  0.125 degree cell holding the parcel (centre 41.4375 N, 72.8125 W),
+  2014-12-31 00:00 to 2026-09-30 12:00 UTC (the latest available), through
+  NASA Harmony's Giovanni time-series service:
+  `Meteo/download_nldas2_point_series.py` (Earthdata Login from
+  `~/.netrc`; the Giovanni application must be authorised once in the
+  Earthdata profile). Fourteen CSVs (the record to 2026-01-01 and the 2026
+  extension) are kept in the documentation copy (`Meteo/NLDAS-2/point_series`).
+  Their hour stamps equal the native NLDAS files' to rounding, checked
+  against five native `..._subsetted.nc4` hours (a one-hour shift would
+  differ by 0.15-0.4 m/s in wind and 0.2 K in air temperature). The bulk
+  alternatives -- "Get Original Files" (whole-continent granules, ~156 GB
+  for these dates) and the per-hour subsetter (Transform Data, ~96,000
+  one-cell files) -- are read by the converter too.
+- **Converted**, in MATLAB from `v2/T&C_Code`:
+  `Build_TC_Forcing_From_NLDAS2('<folder of the CSVs>','Inputs/Data_Hamden.mat',41.437,-72.866,97,-5)`
+  -> `Inputs/Data_Hamden.mat`, 102,996 hours, 2014-12-30 20:00 to
+  2026-09-30 07:00 local standard time, no gaps; 2015-2025 means
+  10.9-12.1 C, 764-1,442 mm/yr precipitation (mean 1,111; 2015-16 the
+  drought years), ~180 W m-2 shortwave, 4.1-4.7 m/s wind.
   It follows the repository's ERA5 route
   (`Build_TC_Forcing_From_ERA5_Land_Timeseries`) and NLDAS-2's own time
   convention (NLDAS-2 README, Table 8): temperature, humidity, pressure,
@@ -77,8 +80,9 @@ The same files are kept in two places:
   longwave. Hours are converted to local standard time (UTC-5). Zbas 97 m
   is the USGS 3DEP 1 m elevation at the parcel centre. Each grid cell's
   own slope and aspect from the DEM then project the radiation onto the
-  terrain. The spin-up and the 2020-2025 runs need 2015-01-01 to
-  2025-12-31 (local).
+  terrain. The spin-up reads 2015-01-01 to 2019-12-31 and the simulation
+  and validation runs 2020-01-01 to 2026-09-29 (the last whole local
+  day), both checked complete with the spin-up's own loader.
 
 ## Atmospheric deposition
 
@@ -220,8 +224,8 @@ The same files are kept in two places:
   `Hamden_MOD_columns.csv` (location, the 2 m soil column, the vegetation
   file `PFT_Hamden_Deciduous_Grass`, the CO2 and deposition records, the
   forcing and windows: ring 2015–2018, the 2019 handoff extension,
-  handoff at 2020-01-01 for the 2020–2025 simulation and
-  validation runs) and
+  handoff at 2020-01-01 for the simulation and validation runs,
+  2020-01-01 to 2026-09-29) and
   `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
   base saturation, pH by a 1:1 extract).
 - The vegetation file sets the forcing reference height 2 m above the
@@ -235,7 +239,10 @@ The same files are kept in two places:
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
   output folder and submit again; every cell re-converges from its own
   converged state (Phase 3 only).
-- Open decisions: whether the 2-D transient takes its Na and
-  strong-anion inputs from CT15 rather than the steady closure
+- Open decisions: whether the wet deposition should be CT15's
+  concentrations times the site's own precipitation (NLDAS mean 1,111
+  mm/yr) rather than CT15's gauge (1,415 mm/yr); whether the 2-D
+  transient takes its Na and strong-anion inputs from CT15 rather than
+  the steady closure
   (`keyword_add`); the base parameter file's exchange constants are the
   Energy Farm's calibration.

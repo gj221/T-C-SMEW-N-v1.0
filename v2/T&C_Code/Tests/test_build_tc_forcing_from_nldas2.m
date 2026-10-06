@@ -104,6 +104,36 @@ for k = 1:numel(required)
 end
 check('text series give the forcing the NetCDF files give',same);
 
+%% --- Giovanni time-series CSV (NASA Harmony point request), each variable in
+%% two files that are joined --------------------------------------------------
+gio_dir = fullfile(work_dir,'giovanni'); mkdir(gio_dir);
+first = 1:15; rest = 16:n;
+for k = 1:numel(names)
+    write_giovanni(fullfile(gio_dir,sprintf('NLDAS_FORA0125_H_2.0_%s.csv',names{k})), ...
+        names{k},units{k},t(first),site(first,k),[41.4375 -72.8125]);
+    write_giovanni(fullfile(gio_dir,sprintf('NLDAS_FORA0125_H_2.0_%s_2026.csv',names{k})), ...
+        names{k},units{k},t(rest),site(rest,k),[41.4375 -72.8125]);
+end
+out_gio = fullfile(work_dir,'Data_gio.mat');
+Build_TC_Forcing_From_NLDAS2(gio_dir,out_gio,Lat,Lon,Zbas,DeltaGMT);
+H = load(out_gio);
+same = true;
+for k = 1:numel(required)
+    same = same && isequal(size(F.(required{k})),size(H.(required{k}))) && ...
+        max(abs(F.(required{k})(:) - H.(required{k})(:))) < 1e-9;
+end
+check('Giovanni CSV series, joined across files, give the NetCDF files'' forcing',same);
+gio_far = fullfile(work_dir,'giovanni_far'); copyfile(gio_dir,gio_far);
+write_giovanni(fullfile(gio_far,'NLDAS_FORA0125_H_2.0_Qair.csv'),'Qair','kg kg-1', ...
+    t(first),Qair(first),[40.0625 -88.1875]);
+check('a Giovanni series of another grid cell is refused', raises(@() Build_TC_Forcing_From_NLDAS2( ...
+    gio_far,fullfile(work_dir,'x.mat'),Lat,Lon,Zbas,DeltaGMT),'Build_TC_Forcing_From_NLDAS2:SiteOutsideGrid'));
+gio_units = fullfile(work_dir,'giovanni_units'); copyfile(gio_dir,gio_units);
+write_giovanni(fullfile(gio_units,'NLDAS_FORA0125_H_2.0_PSurf.csv'),'PSurf','hPa', ...
+    t(first),PSurf(first)/100,[41.4375 -72.8125]);
+check('a Giovanni series in other units is refused', raises(@() Build_TC_Forcing_From_NLDAS2( ...
+    gio_units,fullfile(work_dir,'x.mat'),Lat,Lon,Zbas,DeltaGMT),'Build_TC_Forcing_From_NLDAS2:UnexpectedUnits'));
+
 %% --- refusals ---------------------------------------------------------------
 gap_dir = fullfile(work_dir,'gap'); copyfile(txt_dir,gap_dir);
 write_series(fullfile(gap_dir,'NLDAS_FORA0125_H_v2.0_Rainf.txt'),'Rainf','kg m-2', ...
@@ -128,6 +158,25 @@ end
 
 function Rsw = SAD1_SAD2(F)
 Rsw = F.SAD1 + F.SAD2 + F.SAB1 + F.SAB2;
+end
+
+function write_giovanni(file,name,unit,t,x,latlon)
+%% The Giovanni time-series CSV as NASA Harmony serves it: key,value header,
+%% a blank line, "Timestamp (UTC),Data", then yyyy-mm-dd HH:MM,value.
+fid = fopen(file,'w');
+fprintf(fid,'prod_name,NLDAS_FORA0125_H.2.0\n');
+fprintf(fid,'param_short_name,%s\n',name);
+fprintf(fid,'param_name,%s\n',name);
+fprintf(fid,'unit,%s\n',unit);
+fprintf(fid,'undef,-9999\n');
+fprintf(fid,'begin_time,%s\n',datestr(t(1),'yyyy-mm-dd HH:MM:SS'));
+fprintf(fid,'end_time,%s\n',datestr(t(end),'yyyy-mm-dd HH:MM:SS'));
+fprintf(fid,'lat,%.4f\nlon,%.4f\nlat_resolution,0.125\nlon_resolution,0.125\n',latlon(1),latlon(2));
+fprintf(fid,'\nTimestamp (UTC),Data\n');
+for h = 1:numel(t)
+    fprintf(fid,'%s,%.17g\n',datestr(t(h),'yyyy-mm-dd HH:MM'),x(h));
+end
+fclose(fid);
 end
 
 function write_series(file,name,unit,t,x,extra)

@@ -9,6 +9,9 @@
 #SBATCH --mem=16G
 #SBATCH --output=logs/spinup_%x_%j.out
 #SBATCH --error=logs/spinup_%x_%j.err
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@900
+#SBATCH --open-mode=append
 # The serial steps around the cell array: plan | assemble | validate.
 # Submitted by submit_field_spinup.sh; by hand, first export the
 # environment with `set -a; source field_spinup.env; set +a`, then:
@@ -21,4 +24,5 @@ set -euo pipefail
 module load "${MATLAB_MODULE:-MATLAB/2025a}"
 cd "$TC_ROOT/v2/cluster"
 mkdir -p logs
-matlab -batch "Cluster_Field_Spinup_Task('${TC_TASK}')"
+source ./requeue_on_timeout.sh     # near the time limit the job requeues itself
+run_requeueable matlab -batch "Cluster_Field_Spinup_Task('${TC_TASK}')"
