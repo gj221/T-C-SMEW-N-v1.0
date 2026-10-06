@@ -45,15 +45,24 @@ The same files are kept in two places:
   for checking. Hours in UTC. Suggested period: 2014-01-01 00 UTC to the
   latest available, giving ten complete years for the spin-up cycle plus
   the recent years.
-- **Downloading.** Either route works with the converter:
-  - GES DISC *Hydrology Data Rods* (one text time series per variable for
-    the point 41.437 N, 72.866 W, the quickest for a single cell), or
-    Giovanni's area-averaged time series (CSV); or
-  - the hourly `NLDAS_FORA0125_H.A<date>.<HH>00.020.nc` files from the GES
-    DISC subsetter or OPeNDAP, any small window around the site.
-  Put the files of one route in `Meteo/NLDAS-2` (one format per folder).
+- **Downloading.** GES DISC, `NLDAS_FORA0125_H` v2.0, 2014-12-31 to
+  2026-01-01 (UTC), box West -72.85, South 41.40, East -72.78, North
+  41.47 (inside the one 0.125 degree cell centred on 41.4375 N, 72.8125 W
+  that holds the parcel), variables Tair, Qair, PSurf, Wind_E, Wind_N,
+  SWdown, Rainf, NetCDF. Use **Transform Data** (spatial and variable
+  subsetting): every hourly file then holds that one cell
+  (`..._subsetted.nc4`, 77 KB, about 7.4 GB in all). "Get Original Files"
+  and its generated download script (`download_files_NLDAS_FORA0125_H_2.0.py`,
+  kept here) fetch the whole-continent granules instead, 96,480 files and
+  ~156 GB, because the box only selects granules; run it, if at all,
+  outside OneDrive. A one-text-series-per-variable download (Data Rods,
+  Giovanni) is read too. Put the files of one route, unzipped, in one
+  folder.
 - **Converting**, in MATLAB from `v2/T&C_Code`:
-  `Build_TC_Forcing_From_NLDAS2('Inputs/Hamden/Meteo/NLDAS-2','Inputs/Data_Hamden.mat',41.437,-72.866,97,-5)`.
+  `Build_TC_Forcing_From_NLDAS2('<folder of the files>','Inputs/Data_Hamden.mat',41.437,-72.866,97,-5)`.
+  Checked on a sample of the subsetted files: the cell, the units and the
+  hour stamps (hours since 1979, `time: point` for the state variables
+  and shortwave, `time: sum` for Rainf) are read as they come.
   It follows the repository's ERA5 route
   (`Build_TC_Forcing_From_ERA5_Land_Timeseries`) and NLDAS-2's own time
   convention (NLDAS-2 README, Table 8): temperature, humidity, pressure,
@@ -68,7 +77,8 @@ The same files are kept in two places:
   longwave. Hours are converted to local standard time (UTC-5). Zbas 97 m
   is the USGS 3DEP 1 m elevation at the parcel centre. Each grid cell's
   own slope and aspect from the DEM then project the radiation onto the
-  terrain. The spin-up needs 2015-01-01 to 2025-12-31 (local).
+  terrain. The spin-up and the 2020-2025 runs need 2015-01-01 to
+  2025-12-31 (local).
 
 ## Atmospheric deposition
 
@@ -121,18 +131,35 @@ The same files are kept in two places:
   above 165 cm; the official series description puts bedrock below 6 ft
   and calls every horizon strongly acid). The soil column is 2 m in 14
   layers with free drainage.
-- CEC, base saturation and initial pH are every cell's baselines from one
-  **representative set**, `Soils/Representative_soil_chemistry.csv`, to be
-  replaced by the sub-plot data. pH is Cheshire's 5.3 (1:1 water, so the
-  model's extraction ratio is 1). **CEC and base saturation are still to
-  be chosen**: SSURGO gives Cheshire no CEC7 and an ECEC of 1.6 cmolc/kg
-  that is below its own sum of bases (10), so neither can be taken from
-  it. CEC is the exchanger's capacity at the soil's own pH (the model's
-  `CEC_tot_in`); base saturation is Ca, Mg and K as fractions of it. Once
-  set, `Run_Hamden_Field_Inputs` (v2/interpolation) rewrites the per-cell
-  file. The spin-up refuses the grid until every cell has a base
-  saturation: the site seeds its exchanger from it, and the borrowed
-  Kantola row would otherwise impose its Mollisol's 80 %.
+- **pH and OM per cell** from each cell's own map unit (dominant
+  component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (854 cells); Wilbraham
+  pH 5.5, OM 4.5 % (370 cells). pH is 1:1 water, so the model's
+  extraction ratio is 1.
+- **Exchanger (CEC and base saturation)**, one representative set for
+  every cell, `Soils/Representative_soil_chemistry.csv`, derived by
+  `Representative_Soil_Chemistry` (v2/interpolation): SSURGO gives
+  Cheshire no CEC7 and an ECEC of 1.6 cmolc/kg below its own sum of bases
+  (10), and SoilGrids has no base saturation, so it comes from the NRCS
+  Kellogg laboratory data of the eight characterised Cheshire pedons
+  (`Soils/KSSL_Cheshire_pedons_0-30cm.csv`, Soil Data Access lab tables;
+  six within 13 km). The 0-30 cm layers within 0.3 of the cells' mean pH
+  (5.36) that carry an effective CEC (bases + KCl Al) are pooled: three
+  layers at pH 5.2-5.3 (85P0055, 97P0102). Effective CEC (at the soil's
+  own pH, the model's `CEC_tot_in`) 6.8 cmolc/kg; Ca 0.709, Mg 0.216,
+  K 0.019 of it.
+- **SoilGrids** at the parcel (`Soils/SoilGrids_parcel_centre.csv`,
+  v2.0 REST, 0-5/5-15/15-30 cm): pH 5.0/5.2/5.3, agreeing with SSURGO;
+  CEC at pH 7 38.7/12.2/10.4 cmolc/kg (0-30 cm median 12.9, which at the
+  pooled layers' effective/pH-7 ratio of 0.63 gives 8.1, the cross-check);
+  organic carbon 269/50/22 g/kg, a forest-floor value at 0-5 cm (90 %
+  range 27-528), so OM is SSURGO's, not SoilGrids'.
+- The exchanger follows pH: the one forested Cheshire pedon (40A1239,
+  7.9 km, pH 4.6) holds Al on 67-83 % of its sites and bases on 22 % of
+  its 3.0 cmolc/kg. Were the site's pH revised to that, the set would
+  change with it (`Representative_Soil_Chemistry` at the new pH).
+- `Run_Hamden_Field_Inputs` (v2/interpolation) rebuilds the per-cell file
+  from all of this; sub-plot data later fill its `measured_*` columns. The
+  set passes the model's ERW handoff gate at both map units' pH.
 
 ## Vegetation and management
 
@@ -170,36 +197,45 @@ The same files are kept in two places:
 - `DEM/USGS 1 Meter 18 x67y459 CT_Statewide_C16.csv` — the National Map
   product record for the 1 m 3DEP tile covering the parcel (UTM 18N NAD83,
   easting 670–680 km, northing 4580–4590 km; CT statewide 2016 lidar).
-- **Still needed: the tile itself**, `USGS_1M_18_x67y459_CT_Statewide_C16.tif`
-  (444.8 MB), from the URL in the record; it goes in
-  `v2/Spatial inputs/Hamden Blue Trail/DEM/` (not versioned in git).
+- `DEM/USGS_1M_18_x67y459_CT_Statewide_C16.tif` — the tile (406 MB as
+  served now; NAD83 / UTM 18N, 1 m, 10012 x 10012), documentation copy.
+- `DEM/USGS_1M_18_x67y459_CT_Statewide_C16_parcel_window.tif` — the
+  parcel and 200 m around it (584 x 609 m, 1.4 MB), also in
+  `v2/Spatial inputs/Hamden Blue Trail/DEM/` (not versioned in git). It
+  gives the cells exactly the tile's terrain (elevation 82.7-101.5 m,
+  slope to 0.49, median 0.11); the margin only lets the edge cells'
+  slope and wetness index see real terrain. The simulation is the whole
+  field, with no buffer region.
 
 ## Model configuration (Bouchet)
 
 - Grid: the calibrated grid (95 % coverage rule), 4.48 m, 1,224 cells.
 - Per-cell file:
   `Inputs/Field_Spinup/Hamden_calibrated_grid/Cell_Agronomic_Hamden_Blue_Trail_Parcel_polygon_01.csv`
-  (Cheshire texture and OM, the representative chemistry, NLCD cover), with
+  (Cheshire texture, each map unit's pH and OM, the representative
+  exchanger, NLCD cover), with
   `Cell_Review_SSURGO_and_NLCD.csv` beside it (every cell's own SSURGO map
   unit and NLCD class areas); both written by `Run_Hamden_Field_Inputs`.
 - Site rows over the borrowed workbook case 5, in the same folder:
   `Hamden_MOD_columns.csv` (location, the 2 m soil column, the vegetation
   file `PFT_Hamden_Deciduous_Grass`, the CO2 and deposition records, the
-  forcing and windows: ring 2015–2023, the 2024 handoff extension, handoff
-  at 2025-01-01, a placeholder until the study period is fixed) and
+  forcing and windows: ring 2015–2018, the 2019 handoff extension,
+  handoff at 2020-01-01 for the 2020–2025 simulation and
+  validation runs) and
   `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
   base saturation, pH by a 1:1 extract).
 - The vegetation file sets the forcing reference height 2 m above the
   24 m canopy (26 m).
 - `v2/cluster/field_spinup_hamden.env.example` submits the flux-tracking
-  spin-up; its header lists what must exist first (the forcing, the DEM
-  tile, the representative chemistry).
+  spin-up (one class seed, 122 tracked and replayed cells, 1,102 from the
+  forest); its header lists what must exist first (the forcing and the
+  DEM window).
 - **Warm start** once the site observations arrive: put them in the
   per-cell file's `measured_*` columns (or a new representative set), set
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
   output folder and submit again; every cell re-converges from its own
   converged state (Phase 3 only).
-- Open decisions: the representative CEC and base saturation; whether the
-  2-D transient takes its Na and strong-anion inputs from CT15 rather than
-  the steady closure (`keyword_add`); the base parameter file's exchange
-  constants are the Energy Farm's calibration.
+- Open decisions: whether the 2-D transient takes its Na and
+  strong-anion inputs from CT15 rather than the steady closure
+  (`keyword_add`); the base parameter file's exchange constants are the
+  Energy Farm's calibration.

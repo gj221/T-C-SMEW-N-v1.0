@@ -1,2 +1,2 @@
-bulk_pH_1to1_water,CEC_cmolc_kg,bs_Ca_fraction,bs_Mg_fraction,bs_K_fraction,status,notes
-5.3,NaN,NaN,NaN,NaN,to be set,"Every cell's baseline until sub-plot data replace it. pH: SSURGO Cheshire 0-30 cm (1:1 water; OSD strongly acid). CEC: the exchanger's capacity at the soil's own pH (effective CEC, cmolc/kg; SSURGO has no CEC7 for Cheshire and its ECEC 1.6 is below its own sum of bases, 10). Base saturation: Ca, Mg and K as fractions of that CEC (each in (0,1), sum below 1)."
+CEC_cmolc_kg,bs_Ca_fraction,bs_Mg_fraction,bs_K_fraction,target_pH,n_layers,layers,ecec_to_cec7,soilgrids_cec7_cmolc_kg,soilgrids_cec_eff_cmolc_kg
+6.76666666666667,0.708866995073892,0.216256157635468,0.0192118226600985,5.36131927724536,3,85P0055 25-48 cm pH 5.3; 97P0102 0-25 cm pH 5.2; 97P0102 25-35 cm pH 5.2,0.626543209876543,12.9,8.08240740740741
