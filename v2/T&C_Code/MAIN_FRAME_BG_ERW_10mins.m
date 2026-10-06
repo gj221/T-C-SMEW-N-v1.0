@@ -254,6 +254,15 @@ OPT_EnvLimitGrowth = 1; % limit plant growth based on available nutrient concnet
 
 %%%%%%%%% CALL PARAMETERS AND INITIAL CONDITION
 run(PARAM_IC);
+%%% v1.0: a vegetation override named by the row's optional pft_override
+%%% column, run after the base parameter file as Load_Cell_Parameters does
+%%% for a field column, so it replaces only the vegetation.  A row without
+%%% the column runs exactly as before.
+if exist('MOD_PARAM_input','var') && istable(MOD_PARAM_input) && ...
+        ismember('pft_override',MOD_PARAM_input.Properties.VariableNames) && ...
+        strlength(strtrim(string(MOD_PARAM_input.pft_override))) > 0
+    run(fullfile(fileparts(PARAM_IC),[char(strtrim(string(MOD_PARAM_input.pft_override))) '.m']));
+end
 Restating_parameters;
 biogeo_exchange_scheme = 'TC_GT';
 if exist('bulk_pH_params','var') && isstruct(bulk_pH_params) && ...
@@ -793,6 +802,18 @@ for i=2:NN
                 if exist('Pcla','var'); ERW_TC_const.Pcla = Pcla; end
                 if exist('ERW_rain_chemistry','var') && isstruct(ERW_rain_chemistry) && isfield(ERW_rain_chemistry,'rain_pH_vwm')
                     ERW_TC_const.rain_pH_vwm = ERW_rain_chemistry.rain_pH_vwm;
+                    %%% v1.0: with a site's rain-chemistry record configured,
+                    %%% its Na and strong-acid anion (SO4 + Cl) wet deposition
+                    %%% reach the ERW seed and boundary (ERW_MOD_PARAM_excel's
+                    %%% I_Na and I_An sources).  N, K, Ca and Mg arrive through
+                    %%% the biogeochemistry's deposition, so each element
+                    %%% enters once.  Unconfigured runs are unchanged.
+                    if isfield(ERW_rain_chemistry,'source_file') && ...
+                            ~isempty(strtrim(char(ERW_rain_chemistry.source_file)))
+                        ERW_TC_const.rain_Na_flux_umol_m2_d = ERW_rain_chemistry.rain_Na_flux_umol_m2_d;
+                        ERW_TC_const.rain_strong_anion_flux_umolc_m2_d = ...
+                            ERW_rain_chemistry.rain_strong_anion_flux_umolc_m2_d;
+                    end
                 end
                 if exist('bulk_pH_params','var')
                     ERW_TC_const.bulk_pH_params = bulk_pH_params;

@@ -100,14 +100,19 @@ if any(CEC <= 0)
 end
 silt = max(silt,0);
 
-%% Optional: measured exchangeable base saturation (Ca, Mg, K as fractions
-%% of CEC).  There is no pedotransfer baseline for the exchanger -- the
-%% spin-up's own state is the baseline -- so the columns are optional and
-%% a cell without the toggle simply leaves the exchangeable pools to the
-%% spin-up.  Where used, the observed exchangeable stock handed to the
-%% spin-up constraint is fraction x resolved CEC [cmol_c kg-1].
+%% Optional: exchangeable base saturation (Ca, Mg, K as fractions of CEC),
+%% measured or a baseline.  There is no pedotransfer baseline for the
+%% exchanger -- the spin-up's own state is the baseline -- so the columns
+%% are optional and a cell with neither simply leaves the exchangeable
+%% pools to the spin-up.  A site may instead give a baseline (all three
+%% baseline_bs_* columns, one finite value per cell, as the other
+%% baselines): its representative exchanger until measurements replace
+%% it.  Where used, the exchangeable stock handed to the spin-up
+%% constraint is fraction x resolved CEC [cmol_c kg-1].
 bs_cols = {'measured_bs_Ca_fraction','measured_bs_Mg_fraction', ...
     'measured_bs_K_fraction'};
+base_bs_cols = {'baseline_bs_Ca_fraction','baseline_bs_Mg_fraction', ...
+    'baseline_bs_K_fraction'};
 exch = nan(topo.N_cells,3);
 use_bs = false(topo.N_cells,1);
 if all(ismember([bs_cols,{'use_measured_base_saturation'}],T.Properties.VariableNames))
@@ -116,16 +121,49 @@ if all(ismember([bs_cols,{'use_measured_base_saturation'}],T.Properties.Variable
     for k = 1:3
         require_measurement(F(:,k),use_bs,bs_cols{k});
     end
-    Fu = F(use_bs,:);
-    if any(Fu(:) <= 0 | Fu(:) >= 1) || any(sum(Fu,2) >= 1)
-        error('Resolve_Cell_Agronomic_Inputs:InvalidBaseSaturation', ...
-            ['Measured base saturation fractions must each lie in (0,1) and ' ...
-             'sum to less than one (the remainder is the acid saturation).']);
+    exch(use_bs,:) = base_saturation(F(use_bs,:),'Measured').*CEC(use_bs);
+end
+has_base_bs = ismember(base_bs_cols,T.Properties.VariableNames);
+if any(has_base_bs) && ~all(has_base_bs)
+    error('Resolve_Cell_Agronomic_Inputs:MissingColumns', ...
+        'A base-saturation baseline needs all of %s.',strjoin(base_bs_cols,', '));
+end
+use_base_bs = false(topo.N_cells,1);
+if all(has_base_bs)
+    B = T{:,base_bs_cols};
+    if ~isnumeric(B) || any(~isfinite(B(:)))
+        error('Resolve_Cell_Agronomic_Inputs:MissingBaseline', ...
+            '%s must contain one finite value for every simulated cell.', ...
+            strjoin(base_bs_cols,', '));
     end
-    exch(use_bs,:) = Fu.*CEC(use_bs);
+    use_base_bs = ~use_bs;
+    exch(use_base_bs,:) = base_saturation(B(use_base_bs,:),'Baseline').*CEC(use_base_bs);
 end
 bs_source = repmat("none",topo.N_cells,1);
 bs_source(use_bs) = "measured";
+bs_source(use_base_bs) = "baseline";
+
+%% Optional: land cover (Cell_Land_Cover, from a land-cover map or set by
+%% hand) -- the cell's ground divided among tree crown (with the low
+%% vegetation beneath it), open low vegetation, urban, water, bare soil and
+%% rock.  All six columns or none; every row sums to one.  Absent, each
+%% cell keeps the parameter row's own cover.
+cover_cols = {'cover_tree','cover_grass','cover_urban','cover_water', ...
+    'cover_bare','cover_rock'};
+has_cover = ismember(cover_cols,T.Properties.VariableNames);
+if any(has_cover) && ~all(has_cover)
+    error('Resolve_Cell_Agronomic_Inputs:MissingColumns', ...
+        'Land cover needs all of %s.',strjoin(cover_cols,', '));
+end
+cover = nan(topo.N_cells,numel(cover_cols));
+if all(has_cover)
+    cover = T{:,cover_cols};
+    if ~isnumeric(cover) || any(~isfinite(cover(:))) || ...
+            any(cover(:) < -1e-9 | cover(:) > 1+1e-9) || any(abs(sum(cover,2)-1) > 1e-6)
+        error('Resolve_Cell_Agronomic_Inputs:InvalidLandCover', ...
+            'Land-cover fractions must lie in [0,1] and sum to one in every cell.');
+    end
+end
 
 pH_source = source_label(use_pH);
 texture_source = source_label(use_texture);
@@ -138,11 +176,16 @@ for c = 1:topo.N_cells
         '%s;OM=%.17g:%s;CEC=%.17g:%s'],topology_id(c),cell_x(c),cell_y(c), ...
         bulk_pH(c),pH_source(c),sand(c),clay(c),texture_source(c), ...
         OM(c),OM_source(c),CEC(c),CEC_source(c));
-    %% Appended only when used, so identities of cells without measured
-    %% base saturation are unchanged from before this input existed.
-    if use_bs(c)
-        input_identity(c) = sprintf('%s;exch=%.17g,%.17g,%.17g:measured', ...
-            input_identity(c),exch(c,1),exch(c,2),exch(c,3));
+    %% Appended only when used, so identities of cells without base
+    %% saturation are unchanged from before this input existed.
+    if bs_source(c) ~= "none"
+        input_identity(c) = sprintf('%s;exch=%.17g,%.17g,%.17g:%s', ...
+            input_identity(c),exch(c,1),exch(c,2),exch(c,3),bs_source(c));
+    end
+    %% Likewise appended only when land cover is given.
+    if all(has_cover)
+        input_identity(c) = sprintf('%s;cover=%s',input_identity(c), ...
+            strjoin(compose('%.17g',cover(c,:)),','));
     end
 end
 
@@ -154,6 +197,17 @@ resolved = table(topology_id,cell_x,cell_y,bulk_pH,sand,clay,silt,OM,CEC, ...
     'CEC_cmolc_kg','exch_Ca_cmolc_kg','exch_Mg_cmolc_kg','exch_K_cmolc_kg', ...
     'bulk_pH_source','texture_source','OM_source','CEC_source', ...
     'base_saturation_source','input_identity'});
+resolved = [resolved array2table(cover,'VariableNames',cover_cols)];
+end
+
+function F = base_saturation(F,kind)
+%% Base-saturation fractions: each in (0,1), their sum below one (the
+%% remainder is the acid saturation).
+if any(F(:) <= 0 | F(:) >= 1) || any(sum(F,2) >= 1)
+    error('Resolve_Cell_Agronomic_Inputs:InvalidBaseSaturation', ...
+        ['%s base saturation fractions must each lie in (0,1) and ' ...
+         'sum to less than one (the remainder is the acid saturation).'],kind);
+end
 end
 
 function [x,y] = topology_centres(topo)

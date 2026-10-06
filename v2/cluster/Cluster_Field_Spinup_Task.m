@@ -37,11 +37,20 @@ function out = Cluster_Field_Spinup_Task(task, index)
 %%                     of land_cover, vegetation, pft, soil_class,
 %%                     texture_class the table carries)
 %%   TC_CASE           workbook case number                  (default 5)
+%%   TC_MOD_COLUMNS_FILE, TC_ERW_COLUMNS_FILE
+%%                     one-row CSVs of MOD and ERW row columns for every
+%%                     cell: a site's own settings over the case row it
+%%                     borrows (Run_Field_Cell_Spinup 'MODParamColumns',
+%%                     'ERWParamColumns'); a number stays a number, NaN
+%%                     included, anything else is text
 %%   TC_FORCING_FILE, TC_METEO_FILE, TC_METEO_START, TC_METEO_END,
 %%   TC_TRANSIENT_START, TC_TRANSIENT_END
-%%                     the spin-up columns a workbook row may lack
-%%                     (Run_Field_Cell_Spinup 'MODParamColumns'); unset ->
-%%                     the row must carry them
+%%                     the spin-up columns a workbook row may lack, over
+%%                     TC_MOD_COLUMNS_FILE; unset -> the row or that file
+%%                     must carry them
+%%   TC_WARM_START_STATES  CellBGStates.mat of an earlier spin-up of this
+%%                     grid: a warm start from it (Run_Field_Cell_Spinup
+%%                     'WarmStartStates'); unset -> cold
 %%   TC_VALIDATION_FRACTIONS  e.g. "0.10 0.15 0.20 0.30"      (validate)
 %%   TC_VALIDATION_SEEDS      e.g. "1 2 3 4 5"                (validate)
 %%   TC_RF_STATES_DIR         cell files of a flux_tracking run to score
@@ -70,7 +79,9 @@ casenum = str2double(getenv_default('TC_CASE','5'));
 if ~exist(outdir,'dir'); mkdir(outdir); end
 state_file = fullfile(outdir,'CellBGStates.mat');
 
-cols = struct();
+cols = Read_Parameter_Columns(getenv('TC_MOD_COLUMNS_FILE'));
+erw_cols = Read_Parameter_Columns(getenv('TC_ERW_COLUMNS_FILE'));
+warm = getenv_default('TC_WARM_START_STATES','');
 map = {'TC_FORCING_FILE','forcing_file'; 'TC_METEO_FILE','meteo_file'; ...
     'TC_METEO_START','meteo_start'; 'TC_METEO_END','meteo_end'; ...
     'TC_TRANSIENT_START','transient_start'; 'TC_TRANSIENT_END','transient_end'};
@@ -79,10 +90,12 @@ for k = 1:size(map,1)
     if ~isempty(v); cols.(map{k,2}) = v; end
 end
 if isempty(fieldnames(cols)); cols = []; end
+if isempty(fieldnames(erw_cols)); erw_cols = []; end
 
 common = {'FieldFeatureIndices',feats,'FieldPolygonIndex',poly, ...
     'CaseNumber',casenum,'OutputFile',state_file,'Method',method, ...
-    'SubsampleFraction',frac,'MODParamColumns',cols,'ClassColumns',classes};
+    'SubsampleFraction',frac,'MODParamColumns',cols,'ERWParamColumns',erw_cols, ...
+    'ClassColumns',classes,'WarmStartStates',warm};
 if isfinite(cell_m); common = [common, {'GridCellSizeM',cell_m}]; end
 if isfinite(cov);    common = [common, {'MinCoverage',cov}]; end
 if ~isempty(dem);    common = [common, {'FieldDEM',dem}]; end

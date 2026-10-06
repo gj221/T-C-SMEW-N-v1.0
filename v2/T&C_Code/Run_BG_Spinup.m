@@ -38,6 +38,11 @@ if exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
         isfield(RUN_SETTINGS,'SPINUP_PROVENANCE')
     spinup_provenance = char(string(RUN_SETTINGS.SPINUP_PROVENANCE));
 end
+%%% The CO2 record (Run_Automatic_Site_Spinup sets the site's; v0.9's
+%%% historical Ca_Data.mat otherwise).
+if ~exist('co2_record_file','var') || isempty(co2_record_file)
+    co2_record_file = 'Ca_Data.mat';
+end
 %%% A tracked cell's lateral record (Run_Field_Lateral_Tracking).  The 1-D
 %%% driver replays it through Lateral_Replay_*; without one nothing changes.
 LATERAL_REPLAY = struct([]);
@@ -204,6 +209,35 @@ end
 if spinup_handoff_only
     p1_done = false; p2_done = false; p3_done = false;
 end
+%%% Warm start (SPINUP_WARM_START): Phase 3 begins from the converged state
+%%% of an earlier spin-up of this cell (SPINUP_SEED_FILE) under the cell's
+%%% present inputs -- the cold field spin-up, say, once site observations
+%%% replace its provisional soil inputs.  Phases 1 and 2, which only bring a
+%%% cold soil near equilibrium, are skipped; Phase 3 converges its ring as
+%%% always and the handoff is built from the new inputs.
+spinup_warm_start = exist('RUN_SETTINGS','var') && isstruct(RUN_SETTINGS) && ...
+    isfield(RUN_SETTINGS,'SPINUP_WARM_START') && logical(RUN_SETTINGS.SPINUP_WARM_START);
+if spinup_warm_start
+    if spinup_handoff_only
+        error('Run_BG_Spinup:WarmHandoffOnly', ...
+            'A warm start runs Phase 3; it cannot also be handoff-only.');
+    end
+    warm_fields = {'B_out','O_out','NavlI_out','RexmyI_out','NupI_L_out'};
+    if ~(exist('bg_state','var') && isstruct(bg_state) && all(isfield(bg_state,warm_fields)))
+        error('Run_BG_Spinup:WarmStartNeedsState', ...
+            'SPINUP_WARM_START needs the earlier state (SPINUP_SEED_FILE) with %s.', ...
+            strjoin(warm_fields,', '));
+    end
+    if ~p3_done
+        p1_done = true; p2_done = true;
+        p2_bg_state = bg_state;
+        for warm_name = {'B_out','O_out','NavlI_out','RexmyI_out'}
+            p2_bg_state.(warm_name{1}) = bg_state.(warm_name{1})(end,:);
+        end
+        fprintf('Warm start: Phase 3 from the earlier state handed in (Phases 1-2 skipped)\n');
+    end
+    clear warm_fields warm_name
+end
 
 %% =========================================================================
 %% Phase 1: T&C-only run; extract annual-average fluxes
@@ -298,7 +332,7 @@ if ~spinup_handoff_only && ~p1_done && ~p2_done && ~p3_done
         Ds   = max(esat - ea, 0);
         [YE, MO, DA, HO, ~, ~] = datevec(Date);
         Datam = [YE, MO, DA, HO];
-        Ca = Load_CO2_Record(Date, Input_Directory);
+        Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
         clear YE MO DA HO
 
         PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']);
@@ -1026,7 +1060,7 @@ while ~p3_converged
     Ds   = max(esat - ea, 0);
     [YE, MO, DA, HO, ~, ~] = datevec(Date);
     Datam = [YE, MO, DA, HO];
-    Ca = Load_CO2_Record(Date, Input_Directory);
+    Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
     clear YE MO DA HO
 
     PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']);
@@ -1351,7 +1385,7 @@ if is_handoff_extension
     Ds   = max(esat - ea, 0);
     [YE, MO, DA, HO, ~, ~] = datevec(Date);
     Datam = [YE, MO, DA, HO];
-    Ca = Load_CO2_Record(Date, Input_Directory);
+    Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
     clear YE MO DA HO
 
     PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']);
@@ -1456,7 +1490,7 @@ Ws(Ws <= 0) = 0.01;
 Ds   = max(esat - ea, 0);
 [YE, MO, DA, HO, ~, ~] = datevec(Date);
 Datam = [YE, MO, DA, HO];
-Ca = Load_CO2_Record(Date, Input_Directory);
+Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
 clear YE MO DA HO
 
 PARAM_IC     = fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']);
@@ -1575,6 +1609,12 @@ restore_total_P_warn = onCleanup(@() warning(prev_total_P_warn));
 Validate_BG_State_For_Transient(bg_state, bg_file);
 clear restore_total_P_warn
 bg_state.spinup_provenance = spinup_provenance;
+%%% A warm start's cycle count is its own; the earlier run's provenance is
+%%% part of this one's (the seed label).  Recorded only on a warm start, so
+%%% every other state is as before.
+if spinup_warm_start
+    bg_state.spinup_warm_start = true;
+end
 if lateral_replay_spinup
     bg_state.spinup_lateral_record_identity = char(string(LATERAL_REPLAY.identity));
     bg_state.reconstruction_method = "replay";

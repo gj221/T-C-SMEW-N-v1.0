@@ -64,6 +64,33 @@ T_bad.cell_x_projected_m(T_bad.cell_id == 1) = 11;
 assert_error(@() Resolve_Cell_Agronomic_Inputs(topo,T_bad), ...
     'Resolve_Cell_Agronomic_Inputs:CellCoordinateMismatch');
 
+%% Base saturation: a site baseline in every cell, a measurement where
+%% used; both seed the cell's exchanger and enter its identity.
+B = T;
+B.baseline_bs_Ca_fraction = [0.20;0.30]; B.baseline_bs_Mg_fraction = [0.05;0.06];
+B.baseline_bs_K_fraction = [0.02;0.03];
+B.measured_bs_Ca_fraction = [0.50;NaN]; B.measured_bs_Mg_fraction = [0.10;NaN];
+B.measured_bs_K_fraction = [0.04;NaN]; B.use_measured_base_saturation = logical([1;0]);
+RB = Resolve_Cell_Agronomic_Inputs(topo,B);   % rows in grid order: cell 1 is B's row 2
+assert(isequal(RB.base_saturation_source,["baseline";"measured"]));
+assert(max(abs([RB.exch_Ca_cmolc_kg RB.exch_Mg_cmolc_kg RB.exch_K_cmolc_kg] - ...
+    [0.30 0.06 0.03; 0.50 0.10 0.04].*[9;10]),[],'all') < 1e-12);
+assert(endsWith(RB.input_identity(1),':baseline') && endsWith(RB.input_identity(2),':measured'));
+assert(~contains(R.input_identity(1),'exch='));   % no base saturation, identity as before
+CB = Configure_Cell_Agronomic_Inputs(MOD,table(8.6,"Kantola",NaN, ...
+    'VariableNames',{'CEC_tot_in','fX_conc_convention','f_CEC_in'}),RB);
+assert(CB(1).ERW_PARAM.fX_conc_convention == "f_CEC_inventory" && ...
+    max(abs(str2num(char(CB(1).ERW_PARAM.f_CEC_in)) - [0.30 0.06 0.03 0 0 0.61])) < 1e-12); %#ok<ST2NM>
+B_bad = B; B_bad.baseline_bs_K_fraction = [];
+assert_error(@() Resolve_Cell_Agronomic_Inputs(topo,B_bad), ...
+    'Resolve_Cell_Agronomic_Inputs:MissingColumns');
+B_bad = B; B_bad.baseline_bs_Ca_fraction(1) = NaN;
+assert_error(@() Resolve_Cell_Agronomic_Inputs(topo,B_bad), ...
+    'Resolve_Cell_Agronomic_Inputs:MissingBaseline');
+B_bad = B; B_bad.baseline_bs_Ca_fraction(2) = 0.95;   % cell 1, which uses its baseline
+assert_error(@() Resolve_Cell_Agronomic_Inputs(topo,B_bad), ...
+    'Resolve_Cell_Agronomic_Inputs:InvalidBaseSaturation');
+
 fprintf('  cell override, fallback and validation checks passed\n');
 end
 
