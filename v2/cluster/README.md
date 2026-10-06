@@ -8,7 +8,11 @@ field spin-up*, describes the method. It has four kinds of work:
   forcing year in the T&C-only Phase 1, a few minutes in the stand-alone
   Phase 2 and about 1-2 min per coupled, ERW-free Phase-3 year, whose
   convergence test runs over complete rings of cycle years (one Control 2
-  cell, this workstation). One is a job of hours.
+  cell, this workstation). One is a job of many hours: the test cell's
+  Phase 3 had not converged after 234 coupled years (about 3.5 h), its
+  last drift held up by the slow inorganic phosphorus pools (mineral and
+  secondary P), so a task may need resubmitting to finish; it resumes
+  from its checkpoint.
 - the **tracking run** is the whole field in 2-D for the ring and its
   handoff extension (ERW off): about one ERW-free column-year per cell
   per segment, so ~1 h per segment on the 54-cell diagnostic grid and

@@ -1148,12 +1148,16 @@ Phase 1 (T&C only) about 80 s per forcing year, 8 min for the ring;
 Phase 2 (stand-alone biogeochemistry under the mean forcing) converged
 after 787 mean-forcing years in 7 min; Phase 3, the coupled ERW-free
 loop, about 1.3 min per forcing year, with its convergence test taken over
-complete six-year rings. On the test cell the ring drift fell from 0.67 to
-0.022 per ring over the first 97 coupled years against the 0.01 limit,
-decaying with an e-folding time of about 60 coupled years in both the
-dynamic and the slow pools, so it is on course to converge near coupled
-year 160 and a plot-scale spin-up is a job of about four hours. In the
-flux-tracking spin-up that
+complete six-year rings. On the test cell (cell 17) the ring drift fell
+from 0.67 to 0.015 per ring over the first 126 coupled years, an
+e-folding time of about 60 years, and then flattened: at year 234 the
+dynamic and slow drifts were still 0.011 and 0.012 against the 0.01
+limit, held up by the inorganic phosphorus pools (pool 43, mineral P, and
+pool 45, secondary P, which feeds the occluded pool), when the workstation
+run ended unconverged after about 3.5 hours of Phase 3. A plot-scale
+spin-up is therefore a job of many hours, its length set by that slow
+phosphorus exchange; a cluster task that reaches its time limit resumes
+from its checkpoint when resubmitted. In the flux-tracking spin-up that
 cost is paid only by the class seeds and by the replays of the tracked
 ~10 % of cells, all array tasks; the 2-D tracking run costs about one
 ERW-free column-year per cell per segment, because the 2-D driver steps
