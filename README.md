@@ -1308,11 +1308,17 @@ window and, once downloaded, the 1 m DEM tile are in
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
-  holding the parcel, converted by `Build_TC_Forcing_From_NLDAS2` into
-  `Data_Hamden.mat` (Lat 41.437, Lon -72.866, Zbas 97 m from the USGS
-  1 m 3DEP point query, DeltaGMT -5). It reads the hourly NetCDF files
-  (any window around the site) or one text series per variable (Data
-  Rods, Giovanni), and follows NLDAS-2's own time convention (README,
+  holding the parcel (41.4375 N, 72.8125 W), 2014-12-31 00:00 to
+  2026-09-30 12:00 UTC, fetched as one point time series per variable
+  through NASA Harmony's Giovanni time-series service
+  (`Inputs/Hamden/Meteo/download_nldas2_point_series.py`; its hour stamps
+  equal the native files' to rounding) and converted by
+  `Build_TC_Forcing_From_NLDAS2` into `Data_Hamden.mat` (102,996 hours,
+  no gaps; Lat 41.437, Lon -72.866, Zbas 97 m from the USGS 1 m 3DEP
+  point query, DeltaGMT -5): 10.9-12.1 C, 764-1,442 mm/yr (mean 1,111).
+  The converter reads the hourly NetCDF files (any window around the
+  site) or one text series per variable (Giovanni CSV, Data Rods), joins a
+  variable's files, and follows NLDAS-2's own time convention (README,
   Table 8): temperature, humidity, pressure, wind and shortwave are
   instantaneous at the hour, precipitation the total of the hour ending
   there, so the state variables are taken at the end of each hour as the
@@ -1328,9 +1334,10 @@ window and, once downloaded, the 1 m DEM tile are in
   borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat` and
   `Rain_Chem_Hamden.mat`), the 2 m column, the vegetation file, the CO2
   and deposition records, the windows (ring 2015-2018, the 2019 handoff
-  extension, the state handed off at 2020-01-01 for the 2020-2025
-  simulation and validation runs), the base-saturation seed, pH by a 1:1
-  extract (`pH_DilutionFactor` 1, as SSURGO measures it) and no rock.
+  extension, the state handed off at 2020-01-01 for the simulation and
+  validation runs, 2020-01-01 to 2026-09-29, the last whole day of the
+  forcing), the base-saturation seed, pH by a 1:1 extract
+  (`pH_DilutionFactor` 1, as SSURGO measures it) and no rock.
 - **DEM**: the 1 m 3DEP tile (CT statewide 2016 lidar, NAD83 UTM 18N)
   cut to the parcel and 200 m around it
   (`USGS_1M_18_x67y459_CT_Statewide_C16_parcel_window.tif`, 1.4 MB,
@@ -1347,10 +1354,11 @@ window and, once downloaded, the 1 m DEM tile are in
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
 mapping on the parcel's grid; `test_hamden_field_configuration` (18) the
 site as the cluster configures it, down to one cell's assembled
-parameters and, with the DEM, the cluster's plan. Open: the NLDAS-2
-forcing (`Data_Hamden.mat`; the subsetted v2.0 files are read as they
-come), and whether the 2-D transient should take its Na and anion
-inputs from CT15 rather than the steady closure (`keyword_add`). The
+parameters and, with the DEM, the cluster's plan. Open: whether the wet
+deposition should be CT15's concentrations times the site's own
+precipitation (NLDAS 1,111 mm/yr) rather than CT15's (1,415 mm/yr), and
+whether the 2-D transient should take its Na and anion inputs from CT15
+rather than the steady closure (`keyword_add`). The
 base parameter file also carries the Energy Farm's exchange calibration
 (`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which
 partitions the seeded exchanger against the pore water at every site

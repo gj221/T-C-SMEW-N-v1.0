@@ -9,6 +9,9 @@
 #SBATCH --mem=8G
 #SBATCH --output=logs/spinup_%x_%A_%a.out
 #SBATCH --error=logs/spinup_%x_%A_%a.err
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@900
+#SBATCH --open-mode=append
 # One plot-scale job per SLURM array task, TC_TASK naming which:
 #   class_seed   the 1-D spin-up of class <id>     (flux_tracking)
 #   replay       tracked cell <id>'s replay         (flux_tracking)
@@ -22,8 +25,8 @@
 # Cost on one Control 2 cell (Kantola case, laptop): ~48 s per Phase-1
 # year, a few minutes for Phase 2, ~1-2 min per coupled ERW-free Phase-3
 # year over many rings -> hours per class seed or replay; a reconstruction
-# is minutes (its ERW handoff only).  A task that hits the limit resumes its
-# own checkpoints when the array is resubmitted.  MATLAB and node model as
+# is minutes (its ERW handoff only).  A task near its limit requeues itself
+# (requeue_on_timeout.sh) and resumes its own checkpoints.  MATLAB and node model as
 # the v0.9 campaigns (runtime/*: MATLAB/2025a on cpumodel:9575f), so a state
 # is produced on the platform the transient runs it on.
 set -euo pipefail
@@ -32,4 +35,5 @@ set -euo pipefail
 module load "${MATLAB_MODULE:-MATLAB/2025a}"
 cd "$TC_ROOT/v2/cluster"
 mkdir -p logs
-matlab -batch "Cluster_Field_Spinup_Task('${TC_TASK}', '${SLURM_ARRAY_TASK_ID}')"
+source ./requeue_on_timeout.sh     # near the time limit the task requeues itself
+run_requeueable matlab -batch "Cluster_Field_Spinup_Task('${TC_TASK}', '${SLURM_ARRAY_TASK_ID}')"

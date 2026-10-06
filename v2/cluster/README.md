@@ -26,6 +26,20 @@ Everything is resumable: finished class seeds, segments, replays and
 reconstructions are reused under their provenance keys, and a running
 plot-scale spin-up or tracking segment resumes its own checkpoints.
 
+**Time limits are handled automatically.** Every job asks SLURM for a
+warning 15 minutes before its limit (`--signal=B:USR1@900`, `--requeue`)
+and, on it, requeues itself under its own job id (an array task as
+`<array id>_<task id>`; `requeue_on_timeout.sh`), so every job that
+depends on it keeps waiting and the requeued run resumes the step's
+checkpoints: a plot-scale spin-up loses at most one Phase-3 year, the
+tracking run at most an hour (its rolling checkpoint). A step that fails
+is not requeued, only one that runs out of time, and at most
+`TC_MAX_REQUEUES` times per job (default 10); the log records each
+restart. Logs are appended across restarts. Should the cluster refuse a
+requeue the log says so, the job ends at its limit, and that step is
+resubmitted by hand as before (the chained tracking copies,
+`TC_TRACK_JOBS`, remain the tracking run's fallback).
+
 ## What runs
 
 | step | script | what it does |
@@ -83,8 +97,8 @@ window as it reads it, so a task holds one tile (about 0.8 GB) at its
 peak. The tracking job holds every column's hourly state for one
 segment; 64 GB is ample for the diagnostic grid, and the production grid
 needs a large-memory node (raise `--mem` in `field_spinup_track.sbatch`).
-If a task is preempted or times out, resubmit the same step: finished
-work is recognised by a provenance key (`Spinup_Provenance`: the cell,
+If a task is preempted, or ends at its limit with no requeue left,
+resubmit the same step: finished work is recognised by a provenance key (`Spinup_Provenance`: the cell,
 its soil inputs, the workbook case, the MOD and ERW rows with their
 forcing, meteo and transient windows, and what the run starts from --
 cold, or the lateral record and tracking run it replays), so a changed

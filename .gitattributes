@@ -3,3 +3,5 @@
 # back CRLF and the cluster fails them with $'\r': command not found.
 *.sbatch text eol=lf
 *.sh     text eol=lf
+*.env.example text eol=lf
+*.env     text eol=lf
