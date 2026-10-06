@@ -234,7 +234,12 @@ if Datam(1,4) ~= 0
         'A tracking segment must start at 00:00 (it starts %s).', ...
         datestr(Date(1),'yyyy-mm-dd HH:MM'));
 end
-Ca = Load_CO2_Record(Date,Input_Directory);
+co2_record_file = 'Ca_Data.mat';
+if ismember('co2_file',MOD_PARAM_input.Properties.VariableNames) && ...
+        strlength(strtrim(string(MOD_PARAM_input.co2_file))) > 0
+    co2_record_file = char(strtrim(string(MOD_PARAM_input.co2_file)));
+end
+Ca = Load_CO2_Record(Date,Input_Directory,co2_record_file);
 dt = 3600; dth = 1; Oa = 210000;
 t_bef = -0.67; t_aft = 1.67;
 eval(append('Zs','=',eval('MOD_PARAM_input.Zs'),';'));
@@ -264,6 +269,11 @@ ColCfg = repmat(struct('PARAM_IC',base_param,'PFT_OVERRIDE','', ...
 for c = 1:topo.N_cells
     ColCfg(c).MOD_PARAM = CellInputs(c).MOD_PARAM;
     ColCfg(c).ERW_PARAM = CellInputs(c).ERW_PARAM;
+    %% The vegetation override the cell's row names, as the 1-D driver
+    %% applies it in the cell's own spin-ups.
+    if ismember('pft_override',CellInputs(c).MOD_PARAM.Properties.VariableNames)
+        ColCfg(c).PFT_OVERRIDE = char(strtrim(string(CellInputs(c).MOD_PARAM.pft_override)));
+    end
     ColCfg(c).agronomic_identity = CellInputs(c).agronomic_identity;
     ColCfg(c).BG_STATE = struct('B_out',state(c).B_out,'O_out',state(c).O_out, ...
         'RexmyI_out',state(c).RexmyI_out,'NavlI_out',state(c).NavlI_out, ...

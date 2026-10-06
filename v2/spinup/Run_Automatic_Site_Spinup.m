@@ -116,6 +116,10 @@ end
 id_location = char(table_value(MOD_PARAM_input,'id_location',MOD_PARAM_input.Location));
 forcing_file = char(table_value(MOD_PARAM_input,'forcing_file',"Data_" + string(id_location) + ".mat"));
 daily_meteo_file = char(table_value(MOD_PARAM_input,'meteo_file',""));
+%% A site's own CO2 record (Inputs/<co2_file>, the form of Ca_Data.mat);
+%% without the column, v0.9's historical Ca_Data.mat.
+co2_record_file = char(table_value(MOD_PARAM_input,'co2_file',"Ca_Data.mat"));
+if isempty(strtrim(co2_record_file)); co2_record_file = 'Ca_Data.mat'; end
 pH_dilution_factor = table_value(MOD_PARAM_input,'pH_DilutionFactor',NaN);
 if ~isnan(pH_dilution_factor)
     if pH_dilution_factor <= 0
@@ -416,7 +420,7 @@ else
 end
 
 if ~IS_BG_SPINUP
-    Ca = Load_CO2_Record(Date, Input_Directory);
+    Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
 end
 ERW_rain_chemistry = Load_Rain_Chemistry(MOD_PARAM_input, Input_Directory, id_location);
 

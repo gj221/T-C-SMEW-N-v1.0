@@ -9,10 +9,12 @@ field spin-up*, describes the method. It has four kinds of work:
   Phase 2 and about 1-2 min per coupled, ERW-free Phase-3 year, whose
   convergence test runs over complete rings of cycle years (one Control 2
   cell, this workstation). One is a job of many hours: the test cell's
-  Phase 3 had not converged after 234 coupled years (about 3.5 h), its
-  last drift held up by the slow inorganic phosphorus pools (mineral and
-  secondary P), so a task may need resubmitting to finish; it resumes
-  from its checkpoint.
+  Phase 3 converged after 306 coupled years (about 5.4 h), its last drift
+  held up by the slow inorganic phosphorus pools, so a task may need
+  resubmitting to finish; it resumes from its checkpoint. A warm start
+  (below) runs Phase 3 alone from a converged state: the same cell
+  re-converged in 24 coupled years (17 min) after its pH, CEC and base
+  saturation were revised.
 - the **tracking run** is the whole field in 2-D for the ring and its
   handoff extension (ERW off): about one ERW-free column-year per cell
   per segment, so ~1 h per segment on the 54-cell diagnostic grid and
@@ -95,6 +97,27 @@ where the transient will run it. The code needs the Statistics and
 Machine Learning Toolbox (`TreeBagger`, `pdist2`) and the Mapping Toolbox
 (`readgeoraster`, `projcrs`) -- check `ver` once on a compute node.
 
+## Site settings and warm starts
+
+A site other than the workbook's borrows a case (`TC_CASE`) and replaces
+what differs through two one-row CSVs: `TC_MOD_COLUMNS_FILE` (location,
+soil column, vegetation file, CO2 and deposition records, forcing and
+windows) and `TC_ERW_COLUMNS_FILE` (the ERW settings). A number stays a
+number, `NaN` included, anything else is text, as the workbook holds it;
+the `TC_FORCING_FILE` ... `TC_TRANSIENT_END` variables still take
+precedence. Each cell's own soil and land cover come only from
+`TC_AGRONOMIC_FILE`: a column file that sets them is refused, and so is a
+column nothing reads. `field_spinup_hamden.env.example` is the Hamden
+site set up this way.
+
+Once site observations replace a field's provisional soil inputs, point
+`TC_WARM_START_STATES` at the first run's `CellBGStates.mat` (copied out
+of scratch), give a new `TC_OUTPUT_DIR` and submit again. The plan
+refuses states of another grid or missing a cell. The class-seed array
+then has nothing to do, the tracking starts from every cell's own
+converged state, and each replay (or, with `per_cell`, each cell) runs
+Phase 3 only; every handoff is built from the new inputs.
+
 ## The robust test
 
 The forest exists so that only a subsample of the field's cells needs a
@@ -127,8 +150,9 @@ scripts by dropping `TC_CELL_M` and `TC_MIN_COVERAGE`.
 ## Caveats carried from the workstation
 
 - The workbook has no Bruce Farm case; the environment file supplies
-  the Kantola forcing and windows as spin-up columns. A site row (Bruce
-  forcing, soils, management) is the next step for a field product.
+  the Kantola forcing and windows as spin-up columns. Bruce Farm's own
+  settings (forcing, soils, management) would go in column files, as
+  Hamden's do.
 - Base saturation reaches the ERW exchanger through the per-cell
   `f_CEC_in` seed (main README, *Base saturation*); Na and Al exchange
   start at zero.

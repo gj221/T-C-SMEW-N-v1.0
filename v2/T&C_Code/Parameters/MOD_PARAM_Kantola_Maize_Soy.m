@@ -66,6 +66,11 @@ zatm = 8.0; %% Reference Height
 %%%%%%% VEG. SPECIES  --- Low Grasses -- High Decidous
 %%%% LAND COVER PARTITION
 Cwat = 0.0; Curb = 0.0 ; Crock = 0.0;
+%%% v1.0: a field cell's land cover (Configure_Cell_Agronomic_Inputs) may
+%%% carry its urban, water and rock fractions; a row without them keeps 0.
+if ismember('Cwat',MOD_PARAM_input.Properties.VariableNames); Cwat = MOD_PARAM_input.Cwat; end
+if ismember('Curb',MOD_PARAM_input.Properties.VariableNames); Curb = MOD_PARAM_input.Curb; end
+if ismember('Crock',MOD_PARAM_input.Properties.VariableNames); Crock = MOD_PARAM_input.Crock; end
 Cbare = MOD_PARAM_input.Cbare; 
 % Ccrown = [MOD_PARAM_input.Ccrown MOD_PARAM_input.Ccrown];
 eval(append('Ccrown','=',eval('MOD_PARAM_input.Ccrown'),';'))

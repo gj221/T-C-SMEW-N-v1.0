@@ -828,14 +828,19 @@ catalogue export) are kriged with the same ensemble as pH, OM and CEC,
 as the fractions `bs_Ca_fraction`, `bs_Mg_fraction` and
 `bs_K_fraction`, and enter the template as `measured_bs_*_fraction`
 under one shared toggle, `use_measured_base_saturation`, so a cell is
-promoted only when all three pass the gate. They are measured-only
-attributes: there is no pedotransfer baseline for the exchanger, so the
-template carries no `baseline_bs_*` column, `Apply_Kriged_Cell_Values`
-needs only a `measured_` column and a toggle to recognise an attribute,
-and a cell without a measurement keeps the existing behaviour, in which
-the handoff derives the exchanger composition from the pore water and
-the bulk pH alone. Where the measurement is used,
-`Resolve_Cell_Agronomic_Inputs` checks it (each fraction in (0, 1), the
+promoted only when all three pass the gate. There is no pedotransfer
+baseline for the exchanger, so the template carries no `baseline_bs_*`
+column and `Apply_Kriged_Cell_Values` needs only a `measured_` column
+and a toggle to recognise an attribute; a cell with neither a
+measurement nor a baseline keeps the existing behaviour, in which the
+handoff derives the exchanger composition from the pore water and the
+bulk pH alone. A site may instead give its representative exchanger as
+a baseline (`baseline_bs_Ca_fraction`, `baseline_bs_Mg_fraction`,
+`baseline_bs_K_fraction`: all three, finite in every cell, like the
+other baselines; Hamden, below), which a cell's measurement replaces
+where its toggle is on. Both seed the exchanger the same way, and the
+cell's identity records which (`exch=...:baseline` or `:measured`).
+Where either is used, `Resolve_Cell_Agronomic_Inputs` checks it (each fraction in (0, 1), the
 three summing to less than one; the remainder is the exchangeable
 acidity), reports the exchangeable Ca, Mg and K it implies in
 cmolc kg-1 against the cell's resolved CEC, and
@@ -1039,6 +1044,28 @@ the assembly.
 `Method 'per_cell'` remains the 1-D reference: every cell's own spin-up
 with no lateral exchange.
 
+**Warm start.** `'WarmStartStates'` (on the cluster
+`TC_WARM_START_STATES`) re-spins a field from an earlier spin-up of the
+same grid, its `CellBGStates.mat`, for when site observations replace the
+provisional soil inputs the first spin-up used. Each earlier state is
+matched by cell id and refused if it lies elsewhere (a cell's identity
+records its centre), so states of another grid cannot be used, and the
+warm run must write to another folder than the run it starts from. A warm
+cell runs Phase 3 only (`Run_BG_Spinup`, `SPINUP_WARM_START`): Phases 1
+and 2 exist to bring a cold soil near equilibrium and are skipped, the
+ring converges under the new inputs from the earlier converged state,
+and the observation constraint and the ERW seed are built at the handoff
+from the new inputs, as always. Under `per_cell` each cell does this
+alone; under `flux_tracking` no class seed is spun up, the tracking run
+starts from every cell's own earlier state, each tracked cell replays its
+new record in Phase 3, and the forest reconstructs the rest as before (a
+cell whose reconstruction fails still falls back to a cold start). The
+earlier state's provenance is part of the warm run's, so neither resumes
+the other's checkpoints. `test_field_spinup_warm_start` (14 checks)
+covers the refusals, the per-cell seed and provenance, and the
+flux-tracking stages through the forest; the measured cost is under
+*Cost* below.
+
 `test_lateral_flux_tracking` checks the machinery: the radiation
 projection, the exact composition of the hourly exchange into the daily
 map (both directions of a face split layer by layer), the replay hooks'
@@ -1066,7 +1093,25 @@ The workbook's Kantola rows carry none of the spin-up columns
 onto every cell's parameter row; the spin-up accepts an override row
 that carries extra optional columns, and both sides read the workbook
 through `Read_Parameter_Workbook`, so an override is typed exactly like
-the workbook row it replaces. `Tests/test_spinup_meteo_loader.m` (10
+the workbook row it replaces. `'ERWParamColumns'` does the same for the
+ERW row, applied before each cell's own soil inputs, so a cell's CEC and
+exchanger seed still win. Both refuse a column nothing reads and one the
+cells set from the agronomic file (`PH`, `Psan`, `Pcla`, `Porg`,
+`CEC_tot_in`, and the cover when the file carries it), and a row that
+seeds the exchanger from base saturation (`f_CEC_inventory`) is refused
+at once if any cell has none, rather than at its handoff hours later. On
+the cluster both come from one-row CSVs (`TC_MOD_COLUMNS_FILE`,
+`TC_ERW_COLUMNS_FILE`, read by `Read_Parameter_Columns`): a site's own
+settings over the case rows it borrows. Three optional MOD columns serve
+a site with records of its own: `co2_file` names a CO2 record in
+`Inputs` of the form of v0.9's `Ca_Data.mat` (`Load_CO2_Record`,
+interpolated linearly, refused outside its span); `pft_override` names a
+vegetation script run after the base parameter file, in the 1-D and 2-D
+drivers alike (the pattern of `PFT_Prairie_Margin`); and a non-empty
+`rain_chem_file` makes the 10-minute driver pass the record's Na and
+strong-anion (SO4 + Cl) deposition, `Rain_Chem_<Location>.mat`, to the
+ERW chemistry. N, K, Ca and Mg enter through the biogeochemistry's
+deposition terms only, so each element enters once. `Tests/test_spinup_meteo_loader.m` (10
 checks) covers the slicing, complete-year detection, the cycle-year
 validator and the refusals. The topographically stratified subsample
 (`Select_Topographic_Subsample`) uses three quantile bins per terrain
@@ -1159,11 +1204,16 @@ from 0.67 to 0.015 per ring over the first 126 coupled years, an
 e-folding time of about 60 years, and then flattened: at year 234 the
 dynamic and slow drifts were still 0.011 and 0.012 against the 0.01
 limit, held up by the inorganic phosphorus pools (pool 43, mineral P, and
-pool 45, secondary P, which feeds the occluded pool), when the workstation
-run ended unconverged after about 3.5 hours of Phase 3. A plot-scale
-spin-up is therefore a job of many hours, its length set by that slow
-phosphorus exchange; a cluster task that reaches its time limit resumes
-from its checkpoint when resubmitted. In the flux-tracking spin-up that
+pool 45, secondary P, which feeds the occluded pool), after about 3.5
+hours of Phase 3. With secondary P out of the Phase-3 gate (above) the
+resumed run converged at year 306 and passed its handoff gate, about 5.4
+hours of Phase 3 in all. A plot-scale spin-up is therefore a job of many
+hours, its length set by that slow phosphorus exchange; a cluster task
+that reaches its time limit resumes from its checkpoint when resubmitted.
+A warm start (below) is far cheaper: the same cell, its bulk pH, CEC and
+base saturation revised (5.52 to 5.80, 3.47 to 5.0 cmolc kg-1, Ca 0.53 to
+0.60), re-converged from its converged state in 24 coupled years (17 min)
+and handed off at the new pH. In the flux-tracking spin-up that
 cost is paid only by the class seeds and by the replays of the tracked
 ~10 % of cells, all array tasks; the 2-D tracking run costs about one
 ERW-free column-year per cell per segment, because the 2-D driver steps
@@ -1181,6 +1231,107 @@ job: `v2/cluster/README.md` describes the SLURM chain on Bouchet (plan,
 class seeds, tracking, replays, reconstruction, assembly) and the
 validation experiment that scores the random forest against a run in
 which every cell is replayed.
+
+### Hamden (145 Blue Trail, CT)
+
+A 2.34 ha residential-forest parcel in Hamden, Connecticut, set up for a
+field spin-up on Bouchet with no rock: the runs track how differences in
+CEC change bulk soil pH under atmospheric deposition alone, under
+temperate deciduous trees over grass mown once a year, with no liming or
+fertiliser. The source data, their provenance and the decisions are in
+`v2/T&C_Code/Inputs/Hamden/README.md` (a documentation copy of every
+input is kept outside the repository); the site polygon, the land-cover
+window and, once downloaded, the 1 m DEM tile are in
+`v2/Spatial inputs/Hamden Blue Trail`.
+
+- **Grid**: the calibrated grid (95 % coverage rule), 4.48 m cells,
+  1,224 cells in UTM 18N.
+- **Land cover per cell** (`Cell_Land_Cover`): either from a land-cover
+  raster -- each cell's footprint (`Cell_Footprints`, the square clipped to
+  the field) intersected exactly with every pixel it touches, the pixels
+  read through a window rather than the whole map, and each class split
+  by `NLCD_Cover_Class_Table` among tree crown, open grass, urban, water,
+  bare and rock -- or set by hand (`'manual'`, a table by cell id or one
+  setting for every cell). The six `cover_*` columns of the agronomic
+  file (all or none, each row summing to one) become each cell's
+  `Ccrown = [tree grass]`, `Cbare`, `Curb`, `Cwat` and `Crock`; crown 1 is
+  the trees with grass beneath them, crown 2 the open grass. NLCD 2020
+  gives the parcel 80.3 % deciduous forest, 17.7 % woody wetland and
+  2.0 % developed open space, so tree 0.980, grass 0.018 and urban 0.002
+  area-weighted, and the cell shares reproduce the parcel's to rounding.
+- **Soil per cell** (`Cell_SSURGO_Soil`): each cell's dominant SSURGO map
+  unit by area, its dominant (or a named) major component, and the
+  mineral horizons in 0-30 cm depth-weighted into sand, clay, OM, bulk
+  density, pH (1:1 water) and CEC (CEC7, else ECEC). By decision every
+  cell starts as **Cheshire** (854 cells lie on Cheshire-Holyoke, 370 on
+  Wilbraham-Menlo; `Cell_Review_SSURGO_and_NLCD.csv` keeps each cell's
+  own map unit). Cheshire is very deep and well drained (bedrock below
+  1.8 m), so the soil column is 2 m in 14 layers with free drainage.
+- **Soil chemistry**: the representative bulk pH, CEC and base
+  saturation in `Inputs/Hamden/Soils/Representative_soil_chemistry.csv`
+  become every cell's baselines (`Run_Hamden_Field_Inputs`, which
+  rebuilds the per-cell file), until sub-plot data fill the `measured_*`
+  columns and a warm start re-spins the field. **Still to be set**: pH is
+  Cheshire's 5.3, but SSURGO gives Cheshire no CEC7 and an ECEC of 1.6
+  cmolc kg-1 that is below its own sum of bases (10), so neither CEC nor
+  base saturation can be taken from it. The spin-up refuses the grid
+  until every cell has a base saturation, because the site seeds its
+  exchanger from it (`f_CEC_inventory`) and the borrowed Kantola row
+  would otherwise impose its Mollisol's 80 %.
+- **Vegetation** (`PFT_Hamden_Deciduous_Grass`, the row's `pft_override`):
+  trees from the T&C site table's Harvard Forest row, grass from its
+  Fendt C3 meadow row; a mature, dormant stand re-prescribed each
+  spin-up year (only soil, its water and the plant reserves are carried,
+  so the wood increment is the stand's base-cation sink); the grass cut
+  to LAI 0.5 on 1 September with 90 % of the cut removed; and the forcing
+  reference height 2 m above the 24 m canopy (`zatm` 26 m, where the
+  base file's 8 m would put it below the zero-plane displacement).
+- **Deposition**: NADP NTN CT15 wet deposition
+  (`Extract_NTN_Rain_Chemistry`: precipitation-weighted mean concentration
+  of the valid samples x all gauge precipitation) replaces the global
+  maps for N, K, Ca and Mg; Na and the strong anions reach the ERW
+  chemistry; P keeps the global map; dry deposition is not included.
+- **CO2**: NOAA Mauna Loa daily means as given
+  (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
+- **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
+  holding the parcel, converted by `Build_TC_Forcing_From_NLDAS2` into
+  `Data_Hamden.mat` (Lat 41.437, Lon -72.866, Zbas 97 m from the USGS
+  1 m 3DEP point query, DeltaGMT -5). It reads the hourly NetCDF files
+  (any window around the site) or one text series per variable (Data
+  Rods, Giovanni), and follows NLDAS-2's own time convention (README,
+  Table 8): temperature, humidity, pressure, wind and shortwave are
+  instantaneous at the hour, precipitation the total of the hour ending
+  there, so the state variables are taken at the end of each hour as the
+  ERA5 route takes ERA5's, precipitation as the hour's total, and
+  shortwave as the mean of its two instantaneous ends. Vapour pressure
+  comes from specific humidity and pressure, capped at saturation, and
+  the dew point is that vapour pressure's own; the shortwave is split by
+  `Automatic_Radiation_Partition_I`, as the ERA5 route does. A missing
+  hour, a site outside the grid window and other units are refused.
+  `test_build_tc_forcing_from_nldas2` (14 checks) covers both formats.
+- **Site rows**: `Hamden_MOD_columns.csv` and `Hamden_ERW_columns.csv`
+  in `Inputs/Field_Spinup/Hamden_calibrated_grid` put the site over the
+  borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat` and
+  `Rain_Chem_Hamden.mat`), the 2 m column, the vegetation file, the CO2
+  and deposition records, the windows (ring 2015-2023, the 2024 handoff
+  extension, the state handed off at 2025-01-01, a placeholder until the
+  study period is fixed), the base-saturation seed, pH by a 1:1 extract
+  (`pH_DilutionFactor` 1, as SSURGO measures it) and no rock.
+- **Bouchet**: `v2/cluster/field_spinup_hamden.env.example` runs the
+  flux-tracking spin-up with one class (every cell shares soil and
+  vegetation); its header lists what must exist first and the warm start
+  that follows the site observations.
+
+`test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
+mapping on the parcel's grid; `test_hamden_field_configuration` (16) the
+site as the cluster configures it, down to one cell's assembled
+parameters. Open: the NLDAS-2 download, the DEM tile, the representative
+chemistry, and whether the 2-D transient should take its Na and anion
+inputs from CT15 rather than the steady closure (`keyword_add`). The
+base parameter file also carries the Energy Farm's exchange calibration
+(`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which
+partitions the seeded exchanger against the pore water at every site
+that borrows case 5.
 
 ### Energy Farm Bouchet R2025a runs
 

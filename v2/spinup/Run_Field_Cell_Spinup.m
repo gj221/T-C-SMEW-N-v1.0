@@ -47,6 +47,19 @@ function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_fi
 %% Finished work (a class seed, a tracking segment, a replay, a
 %% reconstruction) is reused under its provenance key, so an interrupted
 %% stage or array resumes.
+%%
+%% 'WarmStartStates', file: start from an earlier field spin-up's
+%% CellBGStates.mat on the same grid -- the first spin-up, once site
+%% observations replace its provisional soil inputs.  Every cell starts
+%% from its own converged state and runs Phase 3 only (Run_BG_Spinup,
+%% SPINUP_WARM_START): per_cell, each cell's own spin-up; flux_tracking, no
+%% class seeds -- the tracking starts from every cell's earlier state, the
+%% replays run Phase 3 with their recorded exchange, and the forest
+%% reconstructs the rest as before.  The exchanger and pore water are
+%% seeded from the new inputs at the handoff, as always.
+%% 'MODParamColumns' / 'ERWParamColumns', struct: columns over the case's
+%% MOD and ERW rows for every cell (a site's own settings, the spin-up
+%% windows); each cell's soil and land cover come from the agronomic file.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
@@ -54,7 +67,7 @@ opt = struct('FieldFeatureIndices',[],'FieldPolygonIndex',[], ...
     'Method','flux_tracking','FieldDEM','','SubsampleFraction',0.10, ...
     'MinCoverage',[],'MODParamColumns',[],'CellIndex',[],'ClassIndex',[], ...
     'Stage','','PlanOnly',false,'AssembleOnly',false,'RFOptions',{{}}, ...
-    'ClassColumns',{{}});
+    'ClassColumns',{{}},'WarmStartStates','','ERWParamColumns',[]);
 if mod(numel(varargin),2) ~= 0
     error('Run_Field_Cell_Spinup:BadOptions','Options must be name/value pairs.');
 end
@@ -122,35 +135,49 @@ if height(MOD) ~= 1 || height(ERW) ~= 1
     error('Run_Field_Cell_Spinup:CaseSelection', ...
         'CaseNumber %d must select one MOD and one ERW row.',opt.CaseNumber);
 end
+%% The soil inputs and land cover of every cell come from the agronomic
+%% file; a column override may not also set them.
+per_cell_MOD = {'PH','Psan','Pcla','Porg'};
+if ismember('cover_tree',resolved.Properties.VariableNames) && all(isfinite(resolved.cover_tree))
+    per_cell_MOD = [per_cell_MOD {'Ccrown','Cbare','Curb','Cwat','Crock'}];
+end
+if ~isempty(opt.ERWParamColumns)
+    %% Optional ERW row columns for every cell -- a site's own ERW settings
+    %% over the case row it borrows -- applied before the cells' own soil
+    %% inputs, so a cell's measured or baseline exchanger still wins.
+    names = column_names(opt.ERWParamColumns,'ERWParamColumns');
+    check_columns(names,ERW.Properties.VariableNames,{'CEC_tot_in'},'ERWParamColumns');
+    for k = 1:numel(names)
+        ERW.(names{k}) = column_value(opt.ERWParamColumns.(names{k}));
+    end
+end
 CellInputs = Configure_Cell_Agronomic_Inputs(MOD,ERW,resolved);
 if ~isempty(opt.MODParamColumns)
     %% Optional MOD_PARAM columns the workbook row does not carry (the
     %% spin-up meteo and transient windows, a forcing file), applied to
     %% every cell's row; the spin-up reads them through table_value.
-    if ~isstruct(opt.MODParamColumns) || ~isscalar(opt.MODParamColumns)
-        error('Run_Field_Cell_Spinup:BadMODParamColumns', ...
-            'MODParamColumns must be a scalar struct of column values.');
-    end
-    names = fieldnames(opt.MODParamColumns);
-    %% A column the spin-up never reads (a misspelling) would otherwise be
-    %% accepted silently and the row would run without it.
+    names = column_names(opt.MODParamColumns,'MODParamColumns');
     known = [MOD.Properties.VariableNames, {'id_location','forcing_file', ...
         'transient_start','transient_end','scenario_transient','source_data_file', ...
         'meteo_file','rain_chem_file','meteo_start','meteo_end','rain_chem_start', ...
-        'rain_chem_end'}];
-    unknown = names(~ismember(names,known));
-    if ~isempty(unknown)
-        error('Run_Field_Cell_Spinup:UnknownMODParamColumn', ...
-            'MODParamColumns %s: not a workbook column nor a spin-up column the spin-up reads.', ...
-            strjoin(unknown,', '));
-    end
+        'rain_chem_end','pft_override','co2_file'}];
+    check_columns(names,known,per_cell_MOD,'MODParamColumns');
     for c = 1:numel(CellInputs)
         for k = 1:numel(names)
-            v = opt.MODParamColumns.(names{k});
-            if ischar(v) || iscellstr(v); v = string(v); end   % text columns are strings
-            CellInputs(c).MOD_PARAM.(names{k}) = v;
+            CellInputs(c).MOD_PARAM.(names{k}) = column_value(opt.MODParamColumns.(names{k}));
         end
     end
+end
+%% A row that seeds the exchanger from base saturation (v0.9's
+%% f_CEC_inventory convention) needs it in every cell: without it the seed
+%% fails at the handoff, hours into the run, so it is refused here.
+no_bs = arrayfun(@(ci) lacks_exchanger_seed(ci.ERW_PARAM),CellInputs);
+if any(no_bs)
+    error('Run_Field_Cell_Spinup:NoBaseSaturation', ...
+        ['The ERW row seeds the exchanger from base saturation (f_CEC_inventory) ' ...
+         'but %d cell(s) have none (cell id(s) %s): give baseline_bs_* or ' ...
+         'measured_bs_* columns in the agronomic file.'], ...
+        nnz(no_bs),mat2str(resolved.cell_id(no_bs).'));
 end
 
 state_file = char(opt.OutputFile);
@@ -213,7 +240,7 @@ if cluster_step
 end
 F = struct('dir',output_directory,'case',opt.CaseNumber,'resolved',resolved, ...
     'inputs',CellInputs,'track_idx',track_idx,'class_of',class_of, ...
-    'class_rep',class_rep);
+    'class_rep',class_rep,'warm',warm_seeds(opt.WarmStartStates,resolved,output_directory));
 if strcmp(stage,'cell_auto')
     %% A cell index alone: a tracked cell's replay, any other's reconstruction.
     c = check_index(opt.CellIndex,N,'CellIndex');
@@ -241,6 +268,11 @@ switch stage
     case 'class_seed'
         k = check_index(opt.ClassIndex,numel(class_rep),'ClassIndex');
         state_file = class_seed_path(output_directory,k);
+        if F.warm.on
+            fprintf('Class %d: no class seed in a warm start (the tracking starts from the earlier states)\n',k);
+            state_file = '';
+            return
+        end
         class_seed(F,k);
         fprintf('Class %d seed (cell id %d): %s\n',k,resolved.cell_id(class_rep(k)),state_file);
         return
@@ -271,9 +303,10 @@ switch stage
         return
     case 'cell'
         c = check_index(opt.CellIndex,N,'CellIndex');
+        [label,extra] = cell_start(F,c);
         st = stamp(full_cell_spinup(spinup_state_path(output_directory, ...
-            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c)), ...
-            "full",false);
+            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c), ...
+            label,extra),"full",false);
         state_file = write_cell_state(output_directory,c,resolved.cell_id(c),st,"full");
         fprintf('Saved cell %d (id %d, full): %s\n',c,resolved.cell_id(c),state_file);
         return
@@ -281,7 +314,7 @@ end
 
 %% ---- every stage here, in turn ----------------------------------------
 if strcmp(opt.Method,'flux_tracking')
-    for k = 1:numel(class_rep)
+    for k = 1:numel(class_rep)*~F.warm.on
         class_seed(F,k);
     end
     track_field(F,topo);
@@ -293,9 +326,10 @@ if strcmp(opt.Method,'flux_tracking')
 else
     state_cells = cell(N,1);
     for c = 1:N
+        [label,extra] = cell_start(F,c);
         state_cells{c} = stamp(full_cell_spinup(spinup_state_path(output_directory, ...
-            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c)), ...
-            "full",false);
+            resolved.cell_id(c)),resolved.cell_id(c),opt.CaseNumber,CellInputs(c), ...
+            label,extra),"full",false);
     end
     CellBGStates = harmonise_states(state_cells);
     report = struct('method','per_cell','method_per_cell',repmat("full",N,1), ...
@@ -409,7 +443,16 @@ f = fullfile(output_directory,sprintf('classseed_%02d.mat',k));
 end
 
 function out = track_field(F,topo)
-%% Lian et al. Fig. 3c: the field in 2-D from its class seeds.
+%% Lian et al. Fig. 3c: the field in 2-D from its class seeds -- or, in a
+%% warm start, from every cell's own earlier state.
+if F.warm.on
+    seeds = arrayfun(@(s) struct('B_out',s.B_out(end,:),'O_out',s.O_out(end,:), ...
+        'RexmyI_out',s.RexmyI_out(end,:),'NavlI_out',s.NavlI_out(end,:), ...
+        'NupI_L_out',s.NupI_L_out),F.warm.states(:),'UniformOutput',false);
+    out = Run_Field_Lateral_Tracking(topo,F.inputs,F.resolved.cell_id,vertcat(seeds{:}), ...
+        F.track_idx,F.dir,F.case);
+    return
+end
 n_class = numel(F.class_rep);
 seeds_by_class = cell(n_class,1);
 for k = 1:n_class
@@ -455,10 +498,21 @@ if ~strcmp(R.record.tracking_key,seed.tracking_key)
     error('Run_Field_Cell_Spinup:TrackingMismatch', ...
         'The record and the replay seed of cell %d come from different tracking runs.',cell_id);
 end
-label = sprintf('replay:%s;tracking:%s',R.record.identity,seed.tracking_key);
+extra = struct('LATERAL_REPLAY_FILE',record_file,'SPINUP_SEED_FILE',seed_file);
+if F.warm.on
+    %% the ring-end state of a tracking run that began from the earlier
+    %% converged states: Phase 3 starts from it
+    extra.SPINUP_WARM_START = true;
+end
 st = full_cell_spinup(replay_state_path(F.dir,cell_id),cell_id,F.case,F.inputs(c), ...
-    label,struct('LATERAL_REPLAY_FILE',record_file,'SPINUP_SEED_FILE',seed_file));
+    replay_label(F,R.record.identity,seed.tracking_key),extra);
 st = stamp(st,"replay",false);
+end
+
+function label = replay_label(F,record_identity,tracking_key)
+%% A replay's provenance label, the same where it is run and where it is read.
+label = sprintf('replay:%s;tracking:%s',record_identity,tracking_key);
+if F.warm.on; label = ['warm-' label]; end
 end
 
 function f = replay_state_path(output_directory,cell_id)
@@ -508,7 +562,7 @@ R = load(fullfile(F.dir,'track',sprintf('record_%04d.mat',cell_id)),'record');
 seed = load(fullfile(F.dir,'track',sprintf('ringend_%04d.mat',cell_id)),'tracking_key');
 want = Spinup_Provenance(cell_id,F.inputs(c).agronomic_identity,F.case, ...
     F.inputs(c).MOD_PARAM,F.inputs(c).ERW_PARAM, ...
-    sprintf('replay:%s;tracking:%s',R.record.identity,seed.tracking_key));
+    replay_label(F,R.record.identity,seed.tracking_key));
 if ~(isfield(st,'spinup_provenance') && strcmp(char(string(st.spinup_provenance)),want))
     error('Run_Field_Cell_Spinup:ReplayStale', ...
         '%s was replayed for another run; rerun the replay array.',f);
@@ -764,4 +818,115 @@ r = requested;
 if isempty(r) && isfield(topo,'cell_size_m') && ~isempty(topo.cell_size_m)
     r = topo.cell_size_m;
 end
+end
+
+%% =======================================================================
+function W = warm_seeds(states_file,resolved,output_directory)
+%% A warm start's seeds: every cell's converged state from an earlier field
+%% spin-up (its CellBGStates.mat), matched by cell id and checked to lie at
+%% the same place (the identity records the cell centre), so states of
+%% another grid are refused.  Kept in memory; a stage writes only its own
+%% cell's seed file (cell_start).
+W = struct('on',false,'states',struct([]),'dir','');
+if isempty(states_file); return; end
+states_file = char(states_file);
+if ~isfile(states_file)
+    error('Run_Field_Cell_Spinup:WarmStatesMissing', ...
+        'Warm-start states not found: %s',states_file);
+end
+%% The warm run writes cell files and a CellBGStates.mat of its own, which
+%% would overwrite the run it starts from.
+if strcmpi(canonical_path(fileparts(states_file)),canonical_path(output_directory))
+    error('Run_Field_Cell_Spinup:WarmStartSameDirectory', ...
+        ['A warm start needs its own output directory, not %s, which holds ' ...
+         'the states it starts from.'],output_directory);
+end
+S = load(states_file,'CellBGStates');
+prev = S.CellBGStates;
+ids = arrayfun(@(s) double(s.cell_id),prev);
+order = zeros(height(resolved),1);
+for c = 1:height(resolved)
+    k = find(ids == resolved.cell_id(c),1);
+    if isempty(k)
+        error('Run_Field_Cell_Spinup:WarmStateMissing', ...
+            'The warm-start states hold no cell %d.',resolved.cell_id(c));
+    end
+    xy = [];
+    if isfield(prev,'cell_agronomic_identity')
+        xy = sscanf(regexp(char(string(prev(k).cell_agronomic_identity)), ...
+            'x=[^;]*;y=[^;]*','match','once'),'x=%f;y=%f');
+    end
+    centre = [resolved.cell_x_projected_m(c) resolved.cell_y_projected_m(c)];
+    if numel(xy) ~= 2 || any(abs(xy(:).' - centre) > 1e-6)
+        error('Run_Field_Cell_Spinup:WarmStateGrid', ...
+            ['The warm-start state of cell %d does not lie at this cell''s centre ' ...
+             '(another grid, or no cell identity).'],resolved.cell_id(c));
+    end
+    order(c) = k;
+end
+W = struct('on',true,'states',prev(order),'dir',fullfile(output_directory,'warm'));
+end
+
+function p = canonical_path(p)
+if isempty(p); p = pwd; end
+p = char(java.io.File(char(p)).getCanonicalPath());
+end
+
+function [label,extra] = cell_start(F,c)
+%% How a cell's own spin-up starts: cold, or warm from its earlier state.
+label = 'cold'; extra = struct();
+if ~F.warm.on; return; end
+st = F.warm.states(c);
+cell_id = F.resolved.cell_id(c);
+if ~isfolder(F.warm.dir); mkdir(F.warm.dir); end
+f = fullfile(F.warm.dir,sprintf('warm_%04d.mat',cell_id));
+tmp = [tempname(F.warm.dir) '.mat'];
+save(tmp,'-struct','st','-v7.3');
+movefile(tmp,f,'f');
+earlier = mat2str(st.B_out(end,:),17);
+if isfield(st,'spinup_provenance'); earlier = char(string(st.spinup_provenance)); end
+label = ['warm:' earlier];
+extra = struct('SPINUP_SEED_FILE',f,'SPINUP_WARM_START',true);
+end
+
+%% =======================================================================
+function names = column_names(cols,option)
+if ~isstruct(cols) || ~isscalar(cols)
+    error(['Run_Field_Cell_Spinup:Bad' option], ...
+        '%s must be a scalar struct of column values.',option);
+end
+names = fieldnames(cols);
+end
+
+function check_columns(names,known,per_cell,option)
+%% A column the spin-up never reads (a misspelling) would otherwise be
+%% accepted silently and the row would run without it; one the cells set
+%% from the agronomic file would be overwritten, or overwrite them.
+unknown = names(~ismember(names,known));
+if ~isempty(unknown)
+    error(['Run_Field_Cell_Spinup:Unknown' option(1:end-7) 'Column'], ...
+        '%s %s: not a workbook column nor a column the spin-up reads.', ...
+        option,strjoin(unknown,', '));
+end
+own = names(ismember(names,per_cell));
+if ~isempty(own)
+    error('Run_Field_Cell_Spinup:CellColumn', ...
+        '%s %s: set per cell from the agronomic file, not for the whole field.', ...
+        option,strjoin(own,', '));
+end
+end
+
+function v = column_value(v)
+if ischar(v) || iscellstr(v); v = string(v); end   % text columns are strings
+end
+
+function tf = lacks_exchanger_seed(E)
+tf = false;
+if ~(ismember('fX_conc_convention',E.Properties.VariableNames) && ...
+        string(E.fX_conc_convention) == "f_CEC_inventory")
+    return
+end
+f = E.f_CEC_in;
+if isstring(f) || ischar(f); f = str2num(char(f)); end %#ok<ST2NM>
+tf = ~(isnumeric(f) && numel(f) == 6 && all(isfinite(f)));
 end
