@@ -1262,22 +1262,36 @@ window and, once downloaded, the 1 m DEM tile are in
 - **Soil per cell** (`Cell_SSURGO_Soil`): each cell's dominant SSURGO map
   unit by area, its dominant (or a named) major component, and the
   mineral horizons in 0-30 cm depth-weighted into sand, clay, OM, bulk
-  density, pH (1:1 water) and CEC (CEC7, else ECEC). By decision every
-  cell starts as **Cheshire** (854 cells lie on Cheshire-Holyoke, 370 on
-  Wilbraham-Menlo; `Cell_Review_SSURGO_and_NLCD.csv` keeps each cell's
-  own map unit). Cheshire is very deep and well drained (bedrock below
-  1.8 m), so the soil column is 2 m in 14 layers with free drainage.
-- **Soil chemistry**: the representative bulk pH, CEC and base
-  saturation in `Inputs/Hamden/Soils/Representative_soil_chemistry.csv`
-  become every cell's baselines (`Run_Hamden_Field_Inputs`, which
-  rebuilds the per-cell file), until sub-plot data fill the `measured_*`
-  columns and a warm start re-spins the field. **Still to be set**: pH is
-  Cheshire's 5.3, but SSURGO gives Cheshire no CEC7 and an ECEC of 1.6
-  cmolc kg-1 that is below its own sum of bases (10), so neither CEC nor
-  base saturation can be taken from it. The spin-up refuses the grid
-  until every cell has a base saturation, because the site seeds its
-  exchanger from it (`f_CEC_inventory`) and the borrowed Kantola row
-  would otherwise impose its Mollisol's 80 %.
+  density, pH (1:1 water) and CEC (CEC7, else ECEC). Texture is
+  **Cheshire** in every cell, by decision; pH and OM are each cell's own
+  map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 854 cells of the
+  Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 370 cells
+  of the wet Wilbraham-Menlo unit (`Cell_Review_SSURGO_and_NLCD.csv`).
+  Cheshire is very deep and well drained (bedrock below 1.8 m), so the
+  soil column is 2 m in 14 layers with free drainage.
+- **Soil chemistry**: SSURGO cannot supply the exchanger (Cheshire has
+  no CEC7, and an ECEC of 1.6 cmolc kg-1 below its own sum of bases, 10)
+  and SoilGrids has CEC at pH 7 but no base saturation, so the
+  representative exchanger comes from the NRCS Kellogg laboratory data
+  of the eight characterised Cheshire pedons
+  (`KSSL_Cheshire_pedons_0-30cm.csv`, six within 13 km).
+  `Representative_Soil_Chemistry` pools the 0-30 cm layers whose pH lies
+  within 0.3 of the cells' area-mean pH (5.36) and that carry an
+  effective CEC (bases + KCl Al): three layers at pH 5.2-5.3. The model
+  takes the CEC at the soil's own pH, so the effective CEC: 6.8 cmolc
+  kg-1, with Ca 0.709, Mg 0.216 and K 0.019 of it (each fraction the
+  layers' summed base over their summed effective CEC). SoilGrids' CEC at
+  pH 7 at the parcel (12.9 cmolc kg-1, 0-30 cm median) scaled by those
+  layers' effective/pH-7 ratio (0.63) gives 8.1, the cross-check. The
+  pH window matters, because the exchanger follows pH: the one forested
+  pedon (7.9 km away, pH 4.6) holds Al on 67-83 % of its sites. SoilGrids'
+  pH (5.0-5.3) agrees with SSURGO; its organic carbon does not (269 g/kg
+  at 0-5 cm, a forest-floor value), so OM is SSURGO's. All of this is
+  every cell's baseline (`Run_Hamden_Field_Inputs`); sub-plot data fill
+  the `measured_*` columns and a warm start re-spins the field. The
+  representative exchanger passes the model's ERW handoff gate at both
+  map units' pH (pore pH 5.09 and 5.28; the exchange law re-partitions
+  it to 0.71 and 0.77 base saturation at the Energy Farm constants).
 - **Vegetation** (`PFT_Hamden_Deciduous_Grass`, the row's `pft_override`):
   trees from the T&C site table's Harvard Forest row, grass from its
   Fendt C3 meadow row; a mature, dormant stand re-prescribed each
@@ -1313,20 +1327,29 @@ window and, once downloaded, the 1 m DEM tile are in
   in `Inputs/Field_Spinup/Hamden_calibrated_grid` put the site over the
   borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat` and
   `Rain_Chem_Hamden.mat`), the 2 m column, the vegetation file, the CO2
-  and deposition records, the windows (ring 2015-2023, the 2024 handoff
-  extension, the state handed off at 2025-01-01, a placeholder until the
-  study period is fixed), the base-saturation seed, pH by a 1:1 extract
-  (`pH_DilutionFactor` 1, as SSURGO measures it) and no rock.
+  and deposition records, the windows (ring 2015-2018, the 2019 handoff
+  extension, the state handed off at 2020-01-01 for the 2020-2025
+  simulation and validation runs), the base-saturation seed, pH by a 1:1
+  extract (`pH_DilutionFactor` 1, as SSURGO measures it) and no rock.
+- **DEM**: the 1 m 3DEP tile (CT statewide 2016 lidar, NAD83 UTM 18N)
+  cut to the parcel and 200 m around it
+  (`USGS_1M_18_x67y459_CT_Statewide_C16_parcel_window.tif`, 1.4 MB,
+  not versioned), which gives the cells the tile's terrain exactly: 82.7
+  to 101.5 m, slope to 0.49 (median 0.11). The margin only lets the edge
+  cells' slope, curvature and wetness index see real terrain; the
+  simulation is the whole field, with no buffer region.
 - **Bouchet**: `v2/cluster/field_spinup_hamden.env.example` runs the
-  flux-tracking spin-up with one class (every cell shares soil and
-  vegetation); its header lists what must exist first and the warm start
-  that follows the site observations.
+  flux-tracking spin-up: one class seed (every cell shares texture and
+  vegetation), 122 tracked and replayed cells, 1,102 from the forest; its
+  header lists what must exist first and the warm start that follows the
+  site observations.
 
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
-mapping on the parcel's grid; `test_hamden_field_configuration` (16) the
+mapping on the parcel's grid; `test_hamden_field_configuration` (18) the
 site as the cluster configures it, down to one cell's assembled
-parameters. Open: the NLDAS-2 download, the DEM tile, the representative
-chemistry, and whether the 2-D transient should take its Na and anion
+parameters and, with the DEM, the cluster's plan. Open: the NLDAS-2
+forcing (`Data_Hamden.mat`; the subsetted v2.0 files are read as they
+come), and whether the 2-D transient should take its Na and anion
 inputs from CT15 rather than the steady closure (`keyword_add`). The
 base parameter file also carries the Energy Farm's exchange calibration
 (`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which
