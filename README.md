@@ -1113,7 +1113,13 @@ costs about a minute per year, and its fixed cation pools start on the
 equilibrium Phase 2 reached under the same exchange model. Each Phase-3
 year restarts from the previous year's end state, so a year boundary
 moves no mass and the converged ring is a periodic orbit of the model;
-the last year's mean is only the ring-convergence metric. The final
+the last year's mean is only the ring-convergence metric. Two pools are
+not held to that orbit (`P3_UNGATED_POOLS`): occluded P (46), which has no
+return flux, and secondary P (45), which turns over in 37 years toward
+mineral P and some 82,000 years toward occluded P while a field's P
+surplus accumulates in it ring after ring, so it cannot settle on a
+spin-up's timescale. Phase 2 still converges secondary P under the mean
+forcing, cheaply, and mineral P (43) stays gated in Phase 3. The final
 handoff diagnostic waited for a readiness record the v0.9 driver never
 writes (and ran the whole transient window doing so): it now runs the
 two forcing days the ERW seed reads, with ERW on, and scores the seed the

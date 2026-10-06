@@ -93,6 +93,15 @@ P3_POOL_NEG_TOL = 1e-6; % [g element m-2], below the resolved convergence scale
 P2_POOL_NEG_TOL = P3_POOL_NEG_TOL;
 P2_STREAK_REQ = n_spinup_years; % one complete meteorological ring of consecutive passing mean-forcing years
 P3_RING_STREAK_REQ = 1; % one complete meteorological ring
+%%% Pools the Phase-3 ring gate does not hold to stationarity.  Occluded P
+%%% (46) has no return flux: dB46/dt = K3p*B45.  Secondary P (45) turns over
+%%% in 1/K2p = 37 years toward mineral P and 1/K3p ~ 82,000 years toward
+%%% occluded P, and a field's P surplus accumulates in it ring after ring
+%%% (+3.8 g P m-2 per ring on a Control 2 cell after 234 coupled years), so
+%%% it cannot settle on a spin-up's timescale.  Phase 2 still converges it
+%%% under the mean forcing, cheaply, which hands Phase 3 a near-equilibrium
+%%% split between mineral and secondary P; mineral P (43) stays gated.
+P3_UNGATED_POOLS = [45 46];
 %%% A cycle year of a vegetated case whose canopy never reaches this leaf
 %%% area is bare soil: Phases 2 and 3 would converge the soil of a bare
 %%% field (the pre-merge reserve limiter left LAI ~0.003 and passed).
@@ -107,9 +116,10 @@ P3_NUTRIENT_BUDGET_VERS = 12;
 %%% The observed MAP dose remains split equally between spin-up maize years;
 %%% the transient retains the full observed 2022 dose.
 %%% Phase 3 applies no total-P boundary. A boundary would hide a management
-%%% imbalance by creating or removing P. Non-occluded P must settle across the
-%%% complete rotation; full total P remains diagnostic because pool 46 has no
-%%% return flux. Total P is screened in Validate_BG_Pool_Physicality.
+%%% imbalance by creating or removing P. Non-occluded P other than secondary P
+%%% (P3_UNGATED_POOLS) must settle across the complete rotation; full total P
+%%% remains diagnostic because pool 46 has no return flux. Total P is screened
+%%% in Validate_BG_Pool_Physicality.
 
 %%% Rebuilt from the workbook row here, before any parameter file has run, so a
 %%% checkpoint carrying a differently constrained pool state can be rejected
@@ -1169,11 +1179,11 @@ while ~p3_converged
     p3_B_prev = p3_B_prev_by_ring{ring_pos};
     if ~isempty(p3_B_prev)
         p3_diag = spinup_pool_group_diagnostics(p3_B_metric, p3_B_prev, n_spinup_years, ...
-            P3_POOL_SCALE_FLOOR, p3_pool_ring_scale);
+            P3_POOL_SCALE_FLOOR, p3_pool_ring_scale, P3_UNGATED_POOLS);
         p3_diag.pool_pass = p3_diag.pool_ring_rel < P3_RING_REL_TOL;
         p3_diag.pool_pass(p3_diag.slow_pool_idx) = ...
             p3_diag.pool_ring_rel(p3_diag.slow_pool_idx) < P3_SLOW_RING_REL_TOL;
-        p3_diag.pool_pass(46) = true;  %%% dB46/dt = K3p*B45 has no return term
+        p3_diag.pool_pass(P3_UNGATED_POOLS) = true;
         p3_dynamic_pass = p3_diag.dynamic_ring_rel < P3_RING_REL_TOL;
         p3_slow_pass = p3_diag.slow_ring_rel < P3_SLOW_RING_REL_TOL;
         p3_element_total_pass = p3_diag.element_ring_rel < P3_RING_REL_TOL;
@@ -1530,6 +1540,7 @@ bg_state.spinup_pool_scale_floor_g_element_m2 = P3_POOL_SCALE_FLOOR;
 bg_state.spinup_pool_negative_tolerance_g_element_m2 = P3_POOL_NEG_TOL;
 bg_state.spinup_ring_streak_required = P3_RING_STREAK_REQ;
 bg_state.spinup_ring_streak_achieved = p3_ring_streak;
+bg_state.spinup_ring_ungated_pools = P3_UNGATED_POOLS;
 bg_state.spinup_observation_constraint = BG_SPINUP_CONSTRAINT;
 bg_state.spinup_transient_observation_constraint = BG_TRANSIENT_INITIAL_CONSTRAINT;
 bg_state.spinup_transient_observation_constraint_diag = handoff_constraint_diag;
@@ -1652,11 +1663,16 @@ ring = cell2mat(cellfun(@(b) reshape(b(1:79), 1, 79), populated(:), ...
 scale = max(mean(abs(ring), 1), pool_scale_floor);
 end
 
-function diag = spinup_pool_group_diagnostics(B_now, B_prev, cycle_years, pool_scale_floor, pool_ring_scale)
+function diag = spinup_pool_group_diagnostics(B_now, B_prev, cycle_years, pool_scale_floor, pool_ring_scale, ungated)
 %%% Pool 46 has no return flux and is excluded from the ring gate. Total P
-%%% drift remains diagnostic; ERW reads mineral P in pool 43 only.
-dynamic_idx = {1:22, 23:34, [35:43 47], 48:53, 56:61, 64:69, 72:77};
-slow_idx = {44:45, 54:55, 62:63, 70:71, 78:79};
+%%% drift remains diagnostic; ERW reads mineral P in pool 43 only.  Pools in
+%%% ungated (Phase 3: P3_UNGATED_POOLS) leave every group, pool list and
+%%% element total, so their drift neither passes nor fails a ring; Phase 2
+%%% passes none.
+if nargin < 6; ungated = []; end
+dynamic_idx = spinup_drop_ungated_pools( ...
+    {1:22, 23:34, [35:43 47], 48:53, 56:61, 64:69, 72:77}, ungated);
+slow_idx = spinup_drop_ungated_pools({44:45, 54:55, 62:63, 70:71, 78:79}, ungated);
 B_now = B_now(:).';
 B_prev = B_prev(:).';
 
@@ -1723,7 +1739,7 @@ diag.slow_group_idx = slow_idx;
 diag.slow_pool_idx = slow_pool_idx;
 
 % Gate total N and non-occluded P as well as individual pools.
-element_idx = struct('N', 23:34, 'P', [35:45 47]);
+element_idx = struct('N', 23:34, 'P', setdiff([35:45 47], ungated, 'stable'));
 element_names = fieldnames(element_idx);
 diag.element_names = element_names;
 diag.element_ring_abs = zeros(1, numel(element_names));
@@ -1737,6 +1753,12 @@ end
 diag.finite_nonnegative = all(isfinite(B_now(1:79))) && ...
     all(isfinite(B_prev(1:79))) && all(B_now(1:79) >= 0) && ...
     all(B_prev(1:79) >= 0);
+end
+
+function groups = spinup_drop_ungated_pools(groups, ungated)
+%%% The pool groups without the ungated pools; a group left empty goes.
+groups = cellfun(@(g) setdiff(g, ungated, 'stable'), groups, 'UniformOutput', false);
+groups = groups(~cellfun(@isempty, groups));
 end
 
 function label = spinup_worst_offender_label(rel_vec, group_idx, pool_idx)
