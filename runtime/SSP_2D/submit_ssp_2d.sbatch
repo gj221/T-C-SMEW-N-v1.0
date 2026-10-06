@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
-#SBATCH --mem=384G
+#SBATCH --mem=256G
 #SBATCH --time=4-00:00:00
 #SBATCH --requeue
 #SBATCH --output=runtime/SSP_2D/slurm_%A_%a.out
@@ -19,15 +19,15 @@
 # --partition, --time and --mem for 5yr, so those values are the ceiling
 # rather than the only setting.
 #
-# Memory: the completed five-year 2-D runs peaked at 17.3 GB (control) and
-# 24.2 GB (basalt) against a 48 G request. State arrays are indexed by day
-# and hour, so seven times the span puts a 35-year run near 120-170 GB. The
-# 384 G here is about 2.3x that, because the extrapolation is linear while
-# memory need not be, and because only two of the nine 2-D treatments have
-# ever been measured. At the old 48 G these jobs would be killed part-way
-# through after many hours, which costs far more than the headroom does:
-# 384 G is 17% of a 2251 GB week node. Confirm against the
-# Worker_Scaling_Test MaxRSS figures before trusting the extrapolation.
+# Memory: package u's 35-year runs, at 384 G, had reached 97 GB (control),
+# 172 GB (calcite) and 205 GB (basalt, whole field) by about half way,
+# because every treated column then kept its particle-class histories at
+# each ten-minute row, 17 GB per column by the end. From package v those
+# keep the last three days and each day's last row (ERW_Particle_History),
+# which puts a whole-field basalt run near 150-200 GB and the controls near
+# 105 GB, so 256 G covers every run of the array. The week partition lets
+# one user hold 1.5 TB at once, so this figure sets how many runs go
+# together: six at 256 G, four at 384 G.
 #
 # Twelve workers, one per column. See the worker-count comment in the task.
 
@@ -79,7 +79,7 @@ if [[ -n "${TC_CALCITE_CASE:-}" ]]; then
 fi
 export TC_CAMPAIGN_TAG="SSP_2D_${TC_HORIZON}_${TC_SSP}${case_suffix}"
 export TC_NUMERICAL_IDENTITY='cpumodel=9575f;matlab_release=2025a;single_comp_thread=1;parallel_workers=12'
-export TC_CKPT_MINUTES=30
+export TC_CKPT_MINUTES=120
 unset TC_CKPT_FORCE_RESUME || true
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1

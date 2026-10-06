@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
-#SBATCH --mem=384G
+#SBATCH --mem=256G
 #SBATCH --time=1-00:00:00
 #SBATCH --array=1-18
 #SBATCH --output=runtime/Uncertainty_2D/slurm_%A_%a.out
