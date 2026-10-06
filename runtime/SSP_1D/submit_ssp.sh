@@ -65,17 +65,15 @@ if [[ -n "$calcite_case" ]]; then
 fi
 
 # Resources differ only by horizon. 35yr is roughly seven times the span, so
-# it needs the week partition and, critically, far more memory: the completed
-# five-year 2-D runs peaked at 17.3-24.2 GB, which extrapolates to 120-170 GB.
-#
-# The requests below carry about 2.3x that extrapolation. The headroom is
-# deliberate and close to free: a week node has 2251 GB, so 384 G is 17% of
-# one, and the 27 concurrent 2-D elements of three campaigns still fit on
-# roughly six of the fourteen nodes. Three reasons not to run this tight:
-# the extrapolation is linear and memory need not be; the 24.2 GB peak was
-# basalt, and only two of the nine 2-D treatments have ever been measured;
-# and being killed at hour 30 of a 43-hour run costs far more than a larger
-# request delays scheduling.
+# it needs the week partition and more memory. The week partition lets one
+# user hold 1.5 TB at once, so the 2-D figure sets how many runs go
+# together: six at 256 G. Package u's 35-year whole-field basalt run had
+# reached 205 GB by half way, most of it particle-class histories kept at
+# every ten-minute row; from package v those keep the last three days and
+# each day's last row (ERW_Particle_History), which puts that run near
+# 150-200 GB. The controls need about 105 GB and can be lowered with
+# scontrol update before they start; read a finished run's MaxRSS before
+# lowering anything else.
 #
 # The 1-D job-level figure must exceed the sum of its three srun steps, which
 # request run_mem each inside submit_ssp_1d.sbatch: 3 x 12 G at 5yr
@@ -87,7 +85,7 @@ case "$TC_HORIZON" in
         ;;
     35yr)
         prod_1d_partition=week; prod_1d_time=1-12:00:00;   prod_1d_mem=192G
-        prod_2d_partition=week; prod_2d_time=4-00:00:00;   prod_2d_mem=384G
+        prod_2d_partition=week; prod_2d_time=4-00:00:00;   prod_2d_mem=256G
         ;;
     *) echo "Bad TC_HORIZON: $TC_HORIZON" >&2; exit 2 ;;
 esac

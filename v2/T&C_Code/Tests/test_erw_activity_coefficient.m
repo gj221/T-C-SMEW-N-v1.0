@@ -52,6 +52,22 @@ catch ME
     did_reject = strcmp(ME.identifier,'ERW:negativeConcentration');
 end
 assert(did_reject,'A negative concentration must be rejected.');
+% A value a rounding error below zero counts as zero: a 35-year run
+% stopped on -4.5e-16 (5 October 2026). Beyond 1e-10 below zero it is
+% still rejected.
+I_zero = ERW_Ionic_Strength(1000,200,100,50,0,1,0,200,1500,10,50,1e6, ...
+    30,4,3,0,1);
+I_roundoff = ERW_Ionic_Strength(1000,200,100,50,0,1,0,200,1500,10,50,1e6, ...
+    30,4,3,-4.54747e-16,1);
+assert(I_roundoff == I_zero, ...
+    'A concentration a rounding error below zero must count as zero.');
+did_reject = false;
+try
+    ERW_Ionic_Strength(1000,200,100,50,0,1,0,200,1500,10,50,1e6,30,4,3,-2e-10,1);
+catch ME
+    did_reject = strcmp(ME.identifier,'ERW:negativeConcentration');
+end
+assert(did_reject,'A concentration beyond rounding distance below zero must be rejected.');
 did_reject = false;
 try
     ERW_Ionic_Strength(1,0,0,0,0,0,0,0,0,0,0,0);

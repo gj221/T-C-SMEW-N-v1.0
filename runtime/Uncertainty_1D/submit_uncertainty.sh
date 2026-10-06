@@ -12,8 +12,8 @@
 # forcing (originals Base_1D and Base_2D); TC_SSP=ssp126|ssp245|ssp585 with
 # TC_HORIZON=35yr is that projection (originals SSP_1D_35yr_<ssp> and
 # SSP_2D_35yr_<ssp>). Add TC_CALCITE_CASE=8 for the 5 t/ha arm.
-# TC_UC_2D_MEM overrides the 384G asked for each 35-year 2-D element, once
-# the SSP 2-D runs have measured what one needs. TC_UC_WITH_ORIGINAL=1 runs
+# TC_UC_2D_MEM overrides the 256G asked for each 35-year 2-D element, the
+# SSP 2-D campaign's figure (see its batch file). TC_UC_WITH_ORIGINAL=1 runs
 # the original set here too, first in each array, under the same checks.
 # TC_UC_DIMS=1d or 2d submits that array alone (default all: both).
 
@@ -85,11 +85,14 @@ fi
 # its checkpoint.
 case "$horizon" in
     5yr)  time_1d=12:00:00;   mem_1d=12G;  workers_2d=6;  mem_2d=48G ;;
-    35yr) time_1d=1-00:00:00; mem_1d=56G;  workers_2d=12; mem_2d="${TC_UC_2D_MEM:-384G}" ;;
+    35yr) time_1d=1-00:00:00; mem_1d=56G;  workers_2d=12; mem_2d="${TC_UC_2D_MEM:-256G}" ;;
 esac
-# A 35-year 2-D element holds a result of roughly 7-10 GB, a checkpoint of
+# A 35-year 2-D element holds a result of about 11 GB for a control and
+# more for a treatment, tens of GB for whole-field basalt, a checkpoint of
 # about the same and a temporary copy while each checkpoint is written;
-# eighteen of them at once need about half a terabyte.
+# eighteen of them at once can need a terabyte. The check below is only a
+# floor: a scratch copy of the checkout is the place for the 35-year sets
+# (RUNBOOK section 0v).
 minimum_free_gib=100
 [[ "$horizon" == 35yr ]] && minimum_free_gib=600
 if ! available_kib="$(LC_ALL=C df -Pk "$repo_root" | awk 'NR == 2 {print $4}')" || \

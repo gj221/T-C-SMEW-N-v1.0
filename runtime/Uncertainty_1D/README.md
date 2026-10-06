@@ -153,7 +153,7 @@ for c in '' 8; do TC_BOUCHET_ACCOUNT=pi_np363 TC_UC_ORIGINAL_ROOT="$PWD" TC_UC_D
 ```
 
 ```bash
-for c in '' 8; do for s in ssp126 ssp245 ssp585; do TC_BOUCHET_ACCOUNT=pi_np363 TC_UC_ORIGINAL_ROOT="$PWD" TC_SSP=$s TC_HORIZON=35yr TC_CALCITE_CASE=$c TC_UC_2D_MEM=700G bash runtime/Uncertainty_1D/submit_uncertainty.sh || break 2; done; done
+for c in '' 8; do for s in ssp126 ssp245 ssp585; do TC_BOUCHET_ACCOUNT=pi_np363 TC_UC_ORIGINAL_ROOT="$PWD" TC_SSP=$s TC_HORIZON=35yr TC_CALCITE_CASE=$c bash runtime/Uncertainty_1D/submit_uncertainty.sh || break 2; done; done
 ```
 
 Resources per element, set by the controller:
@@ -161,11 +161,11 @@ Resources per element, set by the controller:
 | horizon | 1-D | 2-D |
 |---|---|---|
 | 5 yr | 1 CPU, 12 GiB, `day`, 12 h | 6 CPUs, 48 GiB, `day`, 24 h |
-| 35 yr | 1 CPU, 56 GiB, `day`, 24 h per piece | 12 CPUs, 384 GiB, `day`, 24 h per piece |
+| 35 yr | 1 CPU, 56 GiB, `day`, 24 h per piece | 12 CPUs, 256 GiB, `day`, 24 h per piece |
 
 Everything runs on the `day` partition. The per-user limits there, 1500
 CPUs and 20 TB, are far wider than on `week` (96 CPUs and 1.5 TB, where
-a 384 GiB element runs four at a time), so the ensemble does not queue
+a 256 GiB element runs six at a time), so the ensemble does not queue
 behind the Base and SSP campaigns. A day job stops at 24 hours. A 35-year
 run longer than a day requeues itself when Slurm signals
 the limit half an hour ahead, and continues from its last checkpoint
@@ -182,15 +182,18 @@ Without originals, each horizon has 8 one-dimensional and 24
 two-dimensional elements (the standard and 5 t/ha arms together), 128
 elements across both horizons and all SSPs. The six 35-year calls include
 72 two-dimensional and 24 one-dimensional elements. Allow space for
-their results and checkpoints, including temporary checkpoint copies;
-no 35-year disk peak has been measured yet. The controller refuses a
-5-year call below 100 GiB free and a 35-year call
-below 600 GiB. The group quota can be tighter than `df` shows. The
-35-year 2-D elements dominate the cost, and no treated 35-year run has
-finished yet. l ran them at 700 GiB (`TC_UC_2D_MEM=700G`), sized from the
-treated five-year peaks; keep that until a treated m run has finished,
-including initialization, checkpoints and final history assembly.
-A control's MaxRSS alone cannot size the treated runs. An element that runs out of
+their results and checkpoints, including temporary checkpoint copies:
+a 35-year 2-D result is about 11 GB for a control and tens of GB for
+whole-field basalt, so the 35-year sets belong in a scratch copy of the
+checkout (RUNBOOK section 0v). The controller refuses a 5-year call below
+100 GiB free and a 35-year call below 600 GiB, a floor only. The group
+quota can be tighter than `df` shows. The 35-year 2-D elements dominate
+the cost. Package u's 35-year runs measured what sets their memory: the
+particle-class histories, 17 GiB per treated column held whole, put a
+whole-field basalt run near 400 GiB; package v keeps those histories
+daily (`PARTICLE_RECORDS_DAILY_2026-10-04.md`), which puts it near
+150-200 GiB, hence 256 GiB (`TC_UC_2D_MEM` overrides it). Read the
+MaxRSS of a finished whole-field basalt run before going lower. An element that runs out of
 memory stops (OUT_OF_MEMORY) with its checkpoint; resubmitting the call
 with more memory, once its arrays have left the queue, continues it.
 

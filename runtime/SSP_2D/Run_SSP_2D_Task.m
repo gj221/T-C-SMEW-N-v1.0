@@ -93,14 +93,17 @@ if allocated_cpus < workers
     error('Bouchet_Kantola_SSP:InsufficientCpus', ...
         'Reserve at least %d CPUs.',workers);
 end
-%% Thirty minutes, matching the 1-D campaign. Checkpoints are a restart
-%% mechanism taking no part in the computation, so the interval cannot move
-%% a result; test_2d_parfor_equivalence runs with them disabled entirely.
-%% Over a 35-year run that is about 86 writes rather than 258, and the cost
-%% is that a preempted job loses up to half an hour rather than ten minutes.
-if ~strcmp(getenv('TC_CKPT_MINUTES'),'30')
+%% Two hours. Checkpoints are a restart mechanism taking no part in the
+%% computation, so the interval cannot move a result;
+%% test_2d_parfor_equivalence runs with them disabled entirely. Each one
+%% writes the whole frame state. In package u's 35-year runs, at thirty
+%% minutes, a write took 2-8 minutes on average and grew with the run, to
+%% about 15 minutes by half way through the whole-field basalt run, which
+%% then spent a fifth of its time writing checkpoints. The cost of two
+%% hours is that a job stopped part-way loses up to two hours.
+if ~strcmp(getenv('TC_CKPT_MINUTES'),'120')
     error('Bouchet_Kantola_SSP:BadCheckpointInterval', ...
-        'TC_CKPT_MINUTES must be 30.');
+        'TC_CKPT_MINUTES must be 120.');
 end
 if ~isempty(getenv('TC_CKPT_FORCE_RESUME'))
     error('Bouchet_Kantola_SSP:ForcedResumeForbidden', ...

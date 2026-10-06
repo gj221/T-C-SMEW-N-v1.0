@@ -5,7 +5,7 @@ polygon grids, kriged per-cell soil inputs, DEM topography with
 gravity-driven lateral flow, and the flux-tracking field spin-up of
 T&C-BG-2D (Lian et al. 2025), adapted for ERW, for the Bruce Farm
 (Virginia) control fields. It carries the v0.9 model of
-package u (2026-10-02) unchanged in the Energy Farm (Kantola) runs; the
+package w (2026-10-05) unchanged in the Energy Farm (Kantola) runs; the
 section *Model lineage from v0.9* at the end records what each v0.9
 package changed, and `RUNBOOK_2026-09-24.md` orders the Energy Farm
 campaigns on Bouchet.
@@ -1317,9 +1317,37 @@ figures come with its post-processing package.
 
 ## Model lineage from v0.9
 
-These are the v0.9 package notes, newest first, as shipped with package u.
+These are the v0.9 package notes, newest first, as shipped with package w.
 v1.0 contains every change they describe; the files they cite are at the
 repository root.
+
+Package w is package v with one guard relaxed (`ROUNDOFF_NEGATIVE_2026-10-05.md`):
+`ERW_Ionic_Strength` counts a concentration within 1e-10 umol-conv/L below
+zero as zero instead of stopping the run. A 35-year 2-D uncertainty run
+stopped on -4.5e-16, a cancellation residue. Every run that got past the
+check gives the same numbers in v and w. One audit test file differs from
+v's (`test_erw_activity_coefficient`), and the comparison utility at the
+package root (`compare_u_v.m`) now also compares two results that both
+keep daily particle rows, as v and w do, and compares the fsolve options
+by their settings. `RUNBOOK_2026-09-24.md`, section 0w, is the procedure.
+The paragraph below describes v, which w contains.
+
+Package v is package u with two changes to how a run holds and saves its
+state, and none to the model (`PARTICLE_RECORDS_DAILY_2026-10-04.md`).
+The particle-class histories of an amended column (`psd`, `d`, `lamb`,
+`SSA`, `delta_d`) keep their last three days whole and, of every earlier
+day, its last row: the model reads only the previous row and each
+application's first row, so every computed value is u's, and the results
+hold those histories at the initial rows and the last row of every ERW
+day (`weath.particle_rows`) instead of every ten-minute row. Held whole
+they took 16.8 GiB per amended column over 35 years, about half of a
+whole-field basalt run's memory. The SSP 2-D campaign checkpoints every
+two hours instead of every thirty minutes, and the 35-year 2-D runs ask
+256 G instead of 384 G, so six run together on the week partition. One
+audit test is rewritten (`test_erw_particle_history`) and one pinned line
+changes (`test_uncertainty_campaign`). `RUNBOOK_2026-09-24.md`, section
+0v, is the procedure for this root. The paragraph below describes u,
+which v contains.
 
 Package u is package t with three changes. The soil-water paste of the
 bulk-pH operator stands open to the laboratory air

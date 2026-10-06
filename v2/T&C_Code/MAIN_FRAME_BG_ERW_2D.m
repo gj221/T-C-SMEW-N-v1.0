@@ -1640,7 +1640,8 @@ for i = i_resume:NN
 end
 
 %% The particle-class histories were kept in daily blocks during the run
-%% (ERW_Daily_Step_2D); the results carry them as full arrays.
+%% (ERW_Daily_Step_2D); the results carry the rows each column kept:
+%% those set at initialisation and the last row of every ERW day.
 if OPT_ERW == 1
     for c = 1:N_col
         ERW{c} = ERW_Particle_History('assemble',ERW{c});
