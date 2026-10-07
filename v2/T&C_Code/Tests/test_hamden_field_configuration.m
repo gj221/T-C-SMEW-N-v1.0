@@ -28,7 +28,9 @@ function test_hamden_field_configuration()
 %%      Hamden vegetation file: event deposition (CT15 wet on the day's
 %%      precipitation, TDep dry every day) and no fertiliser, nor any
 %%      fertiliser year for the plot-scale frame to refill; a cold start
-%%      takes the base file's 20-layer moisture profile
+%%      takes the base file's 20-layer moisture profile; trees and grass
+%%      are perennial, a run that follows another starting from its stand,
+%%      and grow without T&C's sink limitation
 %%   6  with the parcel's DEM window (not versioned; skipped without it) the
 %%      flux-tracking plan the cluster runs first: one class (every cell
 %%      shares soil and vegetation), a topographically stratified ~10 %
@@ -198,6 +200,34 @@ P_cold = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maiz
     fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx_cold);
 check('a cold start takes the base file''s 20-layer moisture profile', ...
     isequal(size(P_cold.O(1,:)),[1 20]) && all(P_cold.O(1,:) > 0));
+%% Trees and grass are perennial: a cold start begins from the file's stand,
+%% a run that follows another from that run's end state, as the 2-D driver
+%% loads it for each cell (Cell_BG_State_Context -> Perennial_Vegetation_Apply);
+%% the stand grows without T&C's sink limitation, as the legacy forest runs do.
+[veg_names,veg_depth] = Perennial_Vegetation_States();
+depth = struct('B',8,'NupI',6,'PARI',3,'NuLit',6,'ISOIL',27,'Rexmy',3);
+Veg = struct();
+for k = 1:numel(veg_names)
+    if veg_depth(k)
+        Veg.(veg_names{k}) = rand(1,2,depth.(regexprep(veg_names{k},'_[HL]$','')));
+    else
+        Veg.(veg_names{k}) = rand(1,2);
+    end
+end
+Veg.hc_H = [24 0]; Veg.hc_L = [0.3 0.3];   % a carried canopy keeps the reference height
+ctx_veg = ctx; ctx_veg.Veg_out = Veg;
+P_veg = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maize_Soy.m'), ...
+    fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx_veg);
+carried = true;
+for k = 1:numel(veg_names)
+    carried = carried && isequal(P_veg.(veg_names{k})(1,:,:),Veg.(veg_names{k}));
+end
+check('the stand is perennial: it starts from a run''s end state handed in, else from the file''s mature stand over an established sward', ...
+    isequal(P.PFT_perennial,true) && carried && isequal(squeeze(P.B_H(1,1,:)).',[0 3000 300 800 0 8000 0 0]) && ...
+    isequal(squeeze(P.B_L(1,2,:)).',[0 0 140 93 0 0 0 0]) && P_veg.zatm == 26);
+check('the stand grows as the legacy coupled forest runs: no sink limitation, heartwood turning over in 40 years', ...
+    P.OPT_EnvLimitGrowth == 0 && P_veg.OPT_EnvLimitGrowth == 0 && ...
+    abs(P.Wm_H(1)*40*365 - 1) < 1e-12 && isequal(P.Wm_L,[0 0]));
 
 %% --- 6 --------------------------------------------------------------------
 dem = fullfile(v2,'Spatial inputs','Hamden Blue Trail','DEM');

@@ -438,6 +438,14 @@ c = F.class_rep(k);
 st = full_cell_spinup(class_seed_path(F.dir,k),F.resolved.cell_id(c),F.case,F.inputs(c));
 end
 
+function v = stand_of(st)
+%% A state's perennial stand (Veg_out), or [] when it has none.
+v = [];
+if isfield(st,'Veg_out') && isstruct(st.Veg_out)
+    v = st.Veg_out;
+end
+end
+
 function f = class_seed_path(output_directory,k)
 f = fullfile(output_directory,sprintf('classseed_%02d.mat',k));
 end
@@ -448,7 +456,7 @@ function out = track_field(F,topo)
 if F.warm.on
     seeds = arrayfun(@(s) struct('B_out',s.B_out(end,:),'O_out',s.O_out(end,:), ...
         'RexmyI_out',s.RexmyI_out(end,:),'NavlI_out',s.NavlI_out(end,:), ...
-        'NupI_L_out',s.NupI_L_out),F.warm.states(:),'UniformOutput',false);
+        'NupI_L_out',s.NupI_L_out,'Veg_out',{stand_of(s)}),F.warm.states(:),'UniformOutput',false);
     out = Run_Field_Lateral_Tracking(topo,F.inputs,F.resolved.cell_id,vertcat(seeds{:}), ...
         F.track_idx,F.dir,F.case);
     return
@@ -472,7 +480,7 @@ for k = 1:n_class
     end
     seeds_by_class{k} = struct('B_out',st.B_out(end,:),'O_out',st.O_out(end,:), ...
         'RexmyI_out',st.RexmyI_out(end,:),'NavlI_out',st.NavlI_out(end,:), ...
-        'NupI_L_out',st.NupI_L_out);
+        'NupI_L_out',st.NupI_L_out,'Veg_out',{stand_of(st)});
 end
 seeds = vertcat(seeds_by_class{F.class_of});
 out = Run_Field_Lateral_Tracking(topo,F.inputs,F.resolved.cell_id,seeds, ...

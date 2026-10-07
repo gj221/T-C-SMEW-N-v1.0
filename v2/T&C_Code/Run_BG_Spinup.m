@@ -354,6 +354,12 @@ if ~spinup_handoff_only && ~p1_done && ~p2_done && ~p3_done
         % so Phase 1 is a continuous multi-year run rather than resetting to
         % field capacity every year.
         O_out = O(NNd_y, :);
+        %% A perennial stand is not carried through Phase 1: without the
+        %% biogeochemistry the plants take up no nutrients, yet growth still
+        %% draws on their reserves, so a carried stand would starve (Hamden's
+        %% grass within a year, its trees in four).  Each Phase-1 year starts
+        %% from the vegetation file, as in v0.9; the stand is carried from
+        %% Phase 3 on.
 
         p1_n       = p1_n + 1;
         p1_Ta_acc  = p1_Ta_acc  + mean(Ta,                    'omitnan');
@@ -914,6 +920,9 @@ if ~spinup_handoff_only
     NavlI_out  = p2_bg_state.NavlI_out;
     RexmyI_out = p2_bg_state.RexmyI_out;
     NupI_L_out = p2_bg_state.NupI_L_out;
+    if isfield(p2_bg_state,'Veg_out') && isstruct(p2_bg_state.Veg_out)
+        Veg_out = p2_bg_state.Veg_out;
+    end
     if isfield(p2_bg_state,'Nreserve_L_out');  Nreserve_L_out  = p2_bg_state.Nreserve_L_out;  end
     if isfield(p2_bg_state,'Preserve_L_out');  Preserve_L_out  = p2_bg_state.Preserve_L_out;  end
     if isfield(p2_bg_state,'Kreserve_L_out');  Kreserve_L_out  = p2_bg_state.Kreserve_L_out;  end
@@ -966,6 +975,9 @@ if p3_done
     NavlI_out     = tmp.NavlI_out;
     RexmyI_out    = tmp.RexmyI_out;
     NupI_L_out    = tmp.NupI_L_out;
+    if isfield(tmp,'Veg_out') && isstruct(tmp.Veg_out)
+        Veg_out = tmp.Veg_out;
+    end
     if isfield(tmp,'Nreserve_L_out');  Nreserve_L_out  = tmp.Nreserve_L_out;  end
     if isfield(tmp,'Preserve_L_out');  Preserve_L_out  = tmp.Preserve_L_out;  end
     if isfield(tmp,'Kreserve_L_out');  Kreserve_L_out  = tmp.Kreserve_L_out;  end
@@ -987,6 +999,9 @@ if spinup_handoff_only
     %%% replayed cell it was built from (Reconstruct_Cell_Pools_RF); its own
     %%% ERW handoff runs below under this cell's inputs.
     p3_handoff_source = bg_state;
+    if isfield(p3_handoff_source,'Veg_out') && isstruct(p3_handoff_source.Veg_out)
+        Veg_out = p3_handoff_source.Veg_out;
+    end
     required_record = {'spinup_converged','spinup_cycles_completed', ...
         'spinup_ring_streak_achieved','spinup_nutrient_budgets'};
     if ~all(isfield(p3_handoff_source,required_record)) || ...
@@ -1047,7 +1062,7 @@ p3_keep = [who; { ...
     'Mgreserve_L_out'; 'Sireserve_L_out'; ...
     'Nreserve_H_out'; 'Preserve_H_out'; 'Kreserve_H_out'; 'Careserve_H_out'; ...
     'Mgreserve_H_out'; 'Sireserve_H_out'; ...
-    'Bio_Zs'; 'Zbio'; 'rsd'; ...
+    'Bio_Zs'; 'Zbio'; 'rsd'; 'Veg_out'; ...
     'p3_nutrient_budgets'}];
 p3_keep = setdiff(p3_keep, {'Mpar_L','Mpar_H','ParEx_L','ParEx_H','VegH_Param_Dyn','VegL_Param_Dyn'}, 'stable');
 
@@ -1240,6 +1255,13 @@ while ~p3_converged
     bg_state = build_bg_state(P, O, RexmyI, NavlI, NupI_L, ...
         Nreserve_L, Preserve_L, Kreserve_L, Careserve_L, Mgreserve_L, Sireserve_L, ...
         Nreserve_H, Preserve_H, Kreserve_H, Careserve_H, Mgreserve_H, Sireserve_H, id_location);
+    %%% A perennial stand (its vegetation file sets PFT_perennial) goes on
+    %%% from this year's end state (Perennial_Vegetation_Capture).
+    if exist('PFT_perennial','var') && isequal(PFT_perennial,true)
+        Perennial_Vegetation_Capture;
+        bg_state.Veg_out = Veg_out;
+        fprintf('%s\n',Perennial_Stand_Summary(LAI_H(2:j,:),LAI_L(2:j,:),Veg_out));
+    end
 
     % The next year restarts from this year's END state, so a year boundary
     % moves no mass and the converged ring is a periodic orbit of the model.
@@ -1466,6 +1488,13 @@ if is_handoff_extension
     bg_state = build_bg_state(P, O, RexmyI, NavlI, NupI_L, ...
         Nreserve_L, Preserve_L, Kreserve_L, Careserve_L, Mgreserve_L, Sireserve_L, ...
         Nreserve_H, Preserve_H, Kreserve_H, Careserve_H, Mgreserve_H, Sireserve_H, id_location);
+    %%% A perennial stand (its vegetation file sets PFT_perennial) goes on
+    %%% from this year's end state (Perennial_Vegetation_Capture).
+    if exist('PFT_perennial','var') && isequal(PFT_perennial,true)
+        Perennial_Vegetation_Capture;
+        bg_state.Veg_out = Veg_out;
+        fprintf('%s\n',Perennial_Stand_Summary(LAI_H(2:j,:),LAI_L(2:j,:),Veg_out));
+    end
 
     % The real pre-transient extension defines the state at the observed start.
     ok = any(isfinite(P) & abs(P) > 0, 2);
@@ -1515,6 +1544,9 @@ bg_state_no_erw = build_bg_state([B_out; B_out], [O_out; O_out], ...
     [Nreserve_H_out; Nreserve_H_out], [Preserve_H_out; Preserve_H_out], ...
     [Kreserve_H_out; Kreserve_H_out], [Careserve_H_out; Careserve_H_out], ...
     [Mgreserve_H_out; Mgreserve_H_out], [Sireserve_H_out; Sireserve_H_out], id_location);
+if exist('Veg_out','var') && isstruct(Veg_out)
+    bg_state_no_erw.Veg_out = Veg_out;   % a perennial stand, for the transient
+end
 P_no_erw = bg_state_no_erw.B_out;
 O_no_erw = bg_state_no_erw.O_out;
 

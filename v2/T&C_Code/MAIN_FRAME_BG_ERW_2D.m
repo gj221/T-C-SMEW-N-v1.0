@@ -77,6 +77,8 @@ if exist('O_out','var');      ctx.O_out = O_out;           end
 if exist('NavlI_out','var');  ctx.NavlI_out = NavlI_out;   end
 if exist('RexmyI_out','var'); ctx.RexmyI_out = RexmyI_out; end
 if exist('NupI_L_out','var'); ctx.NupI_L_out = NupI_L_out; end
+%%% v1.0: a perennial stand's end state (Perennial_Vegetation_Apply).
+if exist('Veg_out','var');    ctx.Veg_out = Veg_out;       end
 
 PAR = cell(N_col,1);
 biogeo_exchange_scheme = repmat({'TC_GT'},N_col,1);
@@ -479,6 +481,11 @@ OPT_FR_SOIL = 1; OPT_VegSnow = 1; OPT_SoilTemp = 1;
 if ~exist('OPT_VCA','var');  OPT_VCA = 0; OPT_ALLOME = 0; end
 if ~exist('OPT_PlantHydr','var');      OPT_PlantHydr = 0;      end
 if ~exist('OPT_EnvLimitGrowth','var'); OPT_EnvLimitGrowth = 1; end
+%%% v1.0: a column whose vegetation file sets OPT_EnvLimitGrowth keeps it.
+OPT_EnvLimitGrowth_c = repmat(OPT_EnvLimitGrowth,1,N_col);
+for c = 1:N_col
+    if isfield(PAR{c},'OPT_EnvLimitGrowth'); OPT_EnvLimitGrowth_c(c) = PAR{c}.OPT_EnvLimitGrowth; end
+end
 OPT_WET = 0;
 
 %% ERW per-column state
@@ -1059,7 +1066,7 @@ for i = i_resume:NN
                         Cauptake_H(j,k,c),Mguptake_H(j,k,c),Siuptake_H(j,k,c), ...
                         FNC_H(j-1,k,c),Se_bio,Tdp_bio, ...
                         p.ParEx_H(k),p.ExEM,Bam_c(c),Bem_c(c),p.Mpar_H(k), ...
-                        TBio_Ht(j-1,k,c),OPT_EnvLimitGrowth,OPT_VCA,OPT_VD,OPT_SoilBiogeochemistry);
+                        TBio_Ht(j-1,k,c),OPT_EnvLimitGrowth_c(c),OPT_VCA,OPT_VD,OPT_SoilBiogeochemistry);
 
                     [TexC_H(j,k,c),TexN_H(j,k,c),TexP_H(j,k,c),TexK_H(j,k,c), ...
                      TexCa_H(j,k,c),TexMg_H(j,k,c),TexSi_H(j,k,c), ...
@@ -1151,7 +1158,7 @@ for i = i_resume:NN
                         Cauptake_L(j,k,c),Mguptake_L(j,k,c),Siuptake_L(j,k,c), ...
                         FNC_L(j-1,k,c),Se_bio,Tdp_bio, ...
                         p.ParEx_L(k),p.ExEM,Bam_c(c),Bem_c(c),p.Mpar_L(k), ...
-                        TBio_Lt(j-1,k,c),OPT_EnvLimitGrowth,OPT_VCA,OPT_VD,OPT_SoilBiogeochemistry);
+                        TBio_Lt(j-1,k,c),OPT_EnvLimitGrowth_c(c),OPT_VCA,OPT_VD,OPT_SoilBiogeochemistry);
 
                     [TexC_L(j,k,c),TexN_L(j,k,c),TexP_L(j,k,c),TexK_L(j,k,c), ...
                      TexCa_L(j,k,c),TexMg_L(j,k,c),TexSi_L(j,k,c), ...
@@ -1744,9 +1751,10 @@ function ctx = Cell_BG_State_Context(ctx,state)
 %% The pool state v0.9's parameter scripts read, plus the exchanger seed
 %% (Load_Cell_Parameters -> bulk_pH_params.initial_f_CEC / initial_Al_w).
 %% Respiration, the Na-seed water loss and the plant reserves start the way
-%% v0.9 starts them, from the run itself and the parameter file.
+%% v0.9 starts them, from the run itself and the parameter file; v1.0: a
+%% perennial stand's end state (Veg_out) goes on (Perennial_Vegetation_Apply).
 names = {'B_out','O_out','RexmyI_out','NavlI_out','NupI_L_out', ...
-    'spinup_erw_handoff_diagnostic'};
+    'spinup_erw_handoff_diagnostic','Veg_out'};
 for k = 1:numel(names)
     if isfield(state,names{k})
         ctx.(names{k}) = state.(names{k});

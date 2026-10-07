@@ -104,8 +104,8 @@ id_parts = arrayfun(@(c) sprintf('%d:%s:%s:%s',cell_ids(c), ...
     ERW_Runtime_Parameter_Identity(CellInputs(c).ERW_PARAM)),(1:N).', ...
     'UniformOutput',false);
 seed_parts = arrayfun(@(c) mat2str([seeds(c).B_out(:); seeds(c).O_out(:); ...
-    seeds(c).RexmyI_out(:); seeds(c).NavlI_out(:); seeds(c).NupI_L_out(:)].',17), ...
-    (1:N).','UniformOutput',false);
+    seeds(c).RexmyI_out(:); seeds(c).NavlI_out(:); seeds(c).NupI_L_out(:); ...
+    vegetation_vector(seeds(c))].',17),(1:N).','UniformOutput',false);
 terrain = [topo.cell_z_m(:) topo.cell_slope(:) topo.cell_aspect_deg(:) topo.cell_svf(:)];
 run_key = sha256_hex(sprintf('case=%d|cells=%s|seeds=%s|track=%s|terrain=%s|edges=%s|segments=%s|handoff=%.17g', ...
     case_number,strjoin(id_parts,';'),strjoin(seed_parts,';'), ...
@@ -278,6 +278,11 @@ for c = 1:topo.N_cells
     ColCfg(c).BG_STATE = struct('B_out',state(c).B_out,'O_out',state(c).O_out, ...
         'RexmyI_out',state(c).RexmyI_out,'NavlI_out',state(c).NavlI_out, ...
         'NupI_L_out',state(c).NupI_L_out);
+    %% A perennial stand goes on from the state handed in (Perennial_
+    %% Vegetation_Apply, run by the cell's vegetation file).
+    if isfield(state(c),'Veg_out') && isstruct(state(c).Veg_out)
+        ColCfg(c).BG_STATE.Veg_out = state(c).Veg_out;
+    end
 end
 clear YE MO DA HO met mask state c
 %% The driver's day counter, declared here: a j the script alone creates
@@ -291,7 +296,8 @@ clear cleanup
 %% Every column's end state, built and projected as Run_BG_Spinup hands a
 %% Phase-3 year to the next.
 end_states = repmat(struct('B_out',[],'O_out',[],'RexmyI_out',[],'NavlI_out',[], ...
-    'NupI_L_out',[]),topo.N_cells,1);
+    'NupI_L_out',[],'Veg_out',[]),topo.N_cells,1);
+[veg_names,veg_depth] = Perennial_Vegetation_States();
 for c = 1:topo.N_cells
     st = build_bg_state(P(:,:,c),O(:,:,c),RexmyI(:,:,c),NavlI(:,:,c),NupI_L(:,:,:,c), ...
         Nreserve_L(:,:,c),Preserve_L(:,:,c),Kreserve_L(:,:,c),Careserve_L(:,:,c), ...
@@ -303,6 +309,20 @@ for c = 1:topo.N_cells
     end_states(c).RexmyI_out = st.RexmyI_out;
     end_states(c).NavlI_out = st.NavlI_out;
     end_states(c).NupI_L_out = st.NupI_L_out;
+    %% A perennial stand goes on into the next segment from its end state,
+    %% as Run_BG_Spinup carries it from one year to the next.
+    if isfield(PAR{c},'PFT_perennial') && isequal(PAR{c}.PFT_perennial,true)
+        V = struct();
+        for k = 1:numel(veg_names)
+            x = eval(veg_names{k});
+            if veg_depth(k)
+                V.(veg_names{k}) = x(j,:,:,c);
+            else
+                V.(veg_names{k}) = x(j,:,c);
+            end
+        end
+        end_states(c).Veg_out = V;
+    end
 end
 %% The steps (rows 2:NN) and days (rows 2:NNd) of the tracked cells; row 1
 %% is the segment's initial state and carries no exchange.
@@ -327,6 +347,17 @@ end
 end
 
 %% =======================================================================
+function v = vegetation_vector(s)
+%% A perennial stand's state as one column, in Perennial_Vegetation_States
+%% order, for the run's key; empty without one, so other keys are unchanged.
+v = zeros(0,1);
+if isfield(s,'Veg_out') && isstruct(s.Veg_out) && ~isempty(fieldnames(s.Veg_out))
+    names = Perennial_Vegetation_States();
+    v = cell2mat(cellfun(@(n) reshape(double(s.Veg_out.(n)),[],1),names(:), ...
+        'UniformOutput',false));
+end
+end
+
 function B = project_small_negative(B,tolerance)
 %% Run_BG_Spinup's projection between Phase-3 years.
 large_negative = find(B < -tolerance);

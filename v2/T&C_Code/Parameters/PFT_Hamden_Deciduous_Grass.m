@@ -25,16 +25,19 @@
 %% LAI 0.5; 90 % of the cut leaf and standing dead is removed, 10 % left
 %% as litter.  Trees are not cut.  No sowing, harvest or fertiliser.
 %%
-%% INITIAL STAND  The spin-up restarts the vegetation, its reserves
-%% included, from this state at the start of every year (only the soil and
-%% its moisture are carried), so the trees start as a mature, winter-dormant
-%% stand typical of Harvard Forest -- live wood ~110 Mg C/ha (sapwood 30,
-%% heartwood 80), fine roots 3, carbohydrate reserve 8 Mg C/ha, canopy
-%% 24 m, leafless -- and grow leaves, wood and litter within each year.
-%% These are literature priors, not Hamden measurements.  Each year's wood
-%% increment is not returned to the soil, so it acts as the base-cation
-%% sink of an aggrading forest.  The grass starts from seed, as a sown
-%% crop does.
+%% PERENNIAL  Trees and grass live from one year to the next.  The stand
+%% below starts a cold start: a winter-dormant stand typical of Harvard
+%% Forest -- live wood ~110 Mg C/ha (sapwood 30, heartwood 80), fine roots
+%% 3, carbohydrate reserve 8 Mg C/ha, canopy 24 m, leafless -- over an
+%% established sward, its roots sized so the legacy leaf-to-root ratio and
+%% specific leaf area admit a mown lawn's peak LAI of about 2.5 (literature
+%% priors, not Hamden measurements).  From Phase 3 on, every year of the
+%% spin-up, its handoff and the transient start from the previous run's
+%% end state (PFT_perennial, Perennial_Vegetation_Apply; Run_BG_Spinup
+%% carries it), so roots, wood, reserves and the sward grow into the stand
+%% the legacy parameters and the site sustain; leaf mass is capped at LtR
+%% times the fine roots.  Phase 1, which has no nutrient uptake, restarts
+%% each year from this stand.
 %%
 %% DEPOSITION  replaces the built-in global maps for N, K, Ca and Mg, year
 %% by year (Inputs/Deposition_Hamden.mat, Build_Site_Deposition): NADP CT15
@@ -102,7 +105,12 @@ drn_H = [1/1300 1/1300];   drn_L = [1/450 1/450];   %% fine roots
 dsn_H = [0.001 0.001];     dsn_L = [1/365 1/365];   %% sapwood to heartwood
 Klf_H = [1/28 1/28];       Klf_L = [1/30 1/30];     %% dead-leaf fall
 Mf_H = [0.0125 0.0125];    Mf_L = [0.02 0.02];
-Wm_H = [0 0];              Wm_L = [0 0];
+%% Heartwood turnover, as the legacy coupled T&C-BG-2D forest runs (37.6 and
+%% 40.1 years; the site table's 0 comes from water-carbon runs, where
+%% heartwood is inert).  Without it heartwood grows for ever and buries the
+%% nitrogen of its sapwood, 2 g N/m2 a year at Hamden, three times the
+%% deposition, and the canopy declines; with it dead wood returns to the soil.
+Wm_H = [1/(40*365) 1/(40*365)];   Wm_L = [0 0];
 
 %% --- Mortality and stress
 dd_max_H = [0.01 0.01];        dd_max_L = [1/45 1/45];
@@ -231,7 +239,8 @@ B_IO.Dep_events = hamden_dep.Deposition.events;
 %% factor starts neutral (PFT_Prairie_Margin explains why the base file's
 %% legacy 1000 g/m2 reserves must not stand).
 tree_B = [0 3000 300 800 0 8000 0 0];      %% [gC/m2]: leaves sapwood fineroot reserve fruit heartwood deadleaf idle
-grass_B = [0 0 20 30 0 0 0 0];             %% grass from seed (base file Crop_B)
+grass_B = [0 0 140 93 0 0 0 0];            %% an established sward: roots 2.5/(Sl_L*LtR_L),
+                                           %% reserve at its cap of 2/3 the roots
 reserve_at = @(St,B4) max(0,B4 .* ...
     ([1/St.Nl 1/St.Phol 1/St.Kpotl 1/St.Call 1/St.Magl 1/St.Sill] - ...
      [1/St.Ns 1/St.Phos 1/St.Kpots 1/St.Cals 1/St.Mags 1/St.Sils]));
@@ -253,6 +262,19 @@ SAI_H(1,:) = [0.5 0];      SAI_L(1,:) = [0.001 0.001];
 PHE_S_H(1,:) = [1 0];      PHE_S_L(1,:) = [1 1];
 AgeL_H(1,:) = [0 0];       AgeL_L(1,:) = [0 0];
 e_rel_H(1,:) = [1 0];      e_rel_L(1,:) = [1 1];
+
+%% --- Perennial: a run that follows another starts from its end state.
+PFT_perennial = true;
+Perennial_Vegetation_Apply;
+
+%% --- Growth without T&C's sink limitation, as the legacy T&C-BG-2D forest
+%% runs (OPT_EnvLimitGrowth = 0, T&C's own default).  The v0.9 plot-scale
+%% driver switches it on for every site before running this file; with it,
+%% NPP above the environmental growth limit goes to the carbohydrate
+%% reserve past its cap of 2/3 of the sapwood (VEGETATION_DYNAMIC, Add_AR),
+%% so a stand that lives from year to year piles carbon into its reserve
+%% while its canopy stalls.
+OPT_EnvLimitGrowth = 0;
 
 %% --- Reference height of the forcing [m]: 2 m above the canopy, T&C's
 %% convention over tall vegetation (the driver's own guard adds 2 m when a

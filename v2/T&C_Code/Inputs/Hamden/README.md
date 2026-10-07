@@ -38,13 +38,6 @@ The same files are kept in two places:
 - **Source: NLDAS-2 hourly forcing** (`NLDAS_FORA0125_H` v2.0, 0.125°,
   about 11 × 14 km; the whole parcel lies in one grid cell), for the cell
   containing 41.437 N, 72.866 W. precip.ai is not used.
-- **Still to download** (Meteo/NLDAS-2): `Tair` (2 m air temperature, K),
-  `Qair` (2 m specific humidity, kg/kg), `PSurf` (surface pressure, Pa),
-  `Wind_E` and `Wind_N` (10 m wind, m/s), `Rainf` (hourly precipitation,
-  kg m⁻² = mm) and `SWdown` (incoming shortwave, W m⁻²); `LWdown` optional,
-  for checking. Hours in UTC. Suggested period: 2014-01-01 00 UTC to the
-  latest available, giving ten complete years for the spin-up cycle plus
-  the recent years.
 - **Downloaded** (6 October 2026) as one hourly point time series per
   variable -- Tair, Qair, PSurf, Wind_E, Wind_N, SWdown, Rainf -- for the
   0.125 degree cell holding the parcel (centre 41.4375 N, 72.8125 W),
@@ -83,6 +76,28 @@ The same files are kept in two places:
   terrain. The spin-up reads 2015-01-01 to 2019-12-31 and the simulation
   and validation runs 2020-01-01 to 2026-09-29 (the last whole local
   day), both checked complete with the spin-up's own loader.
+- **Against precip.ai** (PRISM 800 m daily, 2020-01-01 to 2026-09-30;
+  not used as forcing). Compared over the same 24 hours, PRISM's day ends
+  at 12 UTC on its date: daily r = 0.96 on that day, 0.34 on calendar days.
+  - Rain falls on the same days in both, but NLDAS-2 carries 14 % less of
+    it: lower in 69 of 81 months, with fewer heavy days (74 against 104
+    of 25 mm or more).
+  - Mean temperature agrees (+0.2 C). NLDAS-2's daily range is 3.2 C
+    narrower and its dew point 2.5 C higher, so its summer maximum vapour
+    pressure deficit is about 40 % lower.
+  - Its shortwave is 15 % higher.
+- **For the Bouchet run: CW3E**, the 1-km, 1-hourly forcing downscaled
+  from NLDAS-2/HRRR with Stage IV and PRISM (Pan 2025,
+  doi:10.5281/zenodo.14714512).
+  - It is fetched for the parcel's 1 km cell from HydroFrame's
+    `hf_hydrodata` service, 2015-01-01 to 2026-09-30, by
+    `Inputs/Preprocess/Fetch_CW3E_Point.py`. That needs the account
+    holder's HydroFrame API PIN, registered on the machine.
+  - The fetch writes the converter's point-series format. The hour labels
+    and units are checked against NLDAS-2 before `Data_Hamden.mat` and the
+    deposition record are rebuilt from it.
+  - Local tests keep NLDAS-2. NLDAS-3 (1 km) is set aside while it is in
+    beta.
 
 ## Atmospheric deposition
 
@@ -236,6 +251,32 @@ The same files are kept in two places:
     "C3 grass": aSE = 2, Vmax 50, ZR95 25 cm), a humid temperate meadow.
 - Management: grass cut once a year on 1 September; no liming, fertiliser,
   irrigation or rock.
+- Trees and grass are perennial. The stand in `PFT_Hamden_Deciduous_Grass`
+  starts only a cold start: a dormant Harvard Forest stand over an
+  established sward, its 140 gC m-2 of roots sized for a mown lawn's peak
+  LAI of about 2.5 (a sward started from seed died within two years). From
+  Phase 3 on, every year, the handoff and the transient start from the
+  previous run's end state (`Perennial_Vegetation_*`).
+  - The trees close their canopy within a decade and hold it: peak LAI
+    4.8-5.0 through twenty-five coupled years, near Harvard Forest's
+    measured 4.5-5. An open lawn settles at a peak LAI of about 1.2.
+    Beneath the trees, the sward is shaded out.
+  - Phase 1 has no biogeochemistry, so the plants take up no nutrients
+    there, yet growth still draws on their reserves. Carried through it,
+    the grass starved within a year and the trees within four, so each
+    Phase-1 year starts from the file, as before.
+- Heartwood turns over in 40 years (`Wm_H`), as in the legacy coupled
+  T&C-BG-2D forest runs (37.6 and 40.1 years). The site table's 0, from
+  water-carbon runs, let heartwood grow for ever and bury 2 g N m-2 a
+  year (three times the deposition) and its base cations. The canopy then
+  thinned after fifteen years, to LAI 1.4 by the forty-second.
+- The trees grow without T&C's sink limitation (`OPT_EnvLimitGrowth = 0`),
+  T&C's own default and the legacy T&C-BG-2D forest runs' setting.
+  - The v0.9 plot-scale driver switches it on for every site. With it on,
+    surplus NPP goes to the carbohydrate reserve past its cap of 2/3 of
+    the sapwood.
+  - Carried from year to year, the reserve then grew from 0.8 to 2 kg C
+    m-2 while the canopy shrank.
 
 ## Land cover
 

@@ -1284,6 +1284,82 @@ so the final handoff check stopped; the row now gives Cheshire's class,
 "sandy loam", and `test_hamden_field_configuration` checks the class
 against the chemistry's own table.
 
+A perennial stand -- trees, a sward -- lives from one year to the next. A
+vegetation file declares one (`PFT_perennial = true`, then
+`Perennial_Vegetation_Apply`). Its stand then starts only a cold start:
+from Phase 3 on, every year, the handoff extension, the final handoff
+check, the transient, a warm start and each segment of the field's 2-D
+tracking start from the previous run's end state (`Veg_out`,
+`Perennial_Vegetation_Capture`), carried through every checkpoint and the
+state handed off. The 2-D driver hands each cell's stand to its vegetation
+file (`Cell_BG_State_Context`). The state is every vegetation variable the
+drivers read from the previous day (`Perennial_Vegetation_States`):
+- the carbon pools, phenology and leaf age;
+- the memories of growth, temperature, stress, uptake and light;
+- the nutrient reserves and uptake suppression;
+- the canopy the first day's hours see;
+- the litter and exudates the soil takes the next day.
+
+So a year boundary moves no mass, and a log line reports the stand each
+year.
+
+Phase 1 is excluded. It has no biogeochemistry, so the plants take up no
+nutrients there, yet growth still draws on their reserves: carried
+through it, Hamden's grass starved within a year and its trees within
+four. Each Phase-1 year therefore starts from the file, as in v0.9.
+Crops declare nothing and are unchanged (`test_perennial_vegetation`).
+
+Restarting Hamden's forest every year had held it at the leaf mass its
+initial fine roots allow. T&C stops leaf growth, and the spring flush
+from the reserve, at LtR times the fine-root carbon (`VEGETATION_DYNAMIC`),
+and the legacy Harvard Forest LtR is 0.3: peak LAI 2.5, every year.
+
+Carrying the stand exposed T&C's sink limitation, which the v0.9
+plot-scale driver switches on for every site (`OPT_EnvLimitGrowth = 1`;
+T&C's own default, and the legacy T&C-BG-2D forest runs, leave it off).
+With it on, NPP above the environmental growth limit goes to the
+carbohydrate reserve past its cap of 2/3 of the sapwood. Carried from
+year to year, the reserve grew from 0.8 to 2 kg C m-2 while the canopy
+shrank to LAI 1.9. Hamden's vegetation file therefore switches it off,
+and the 2-D driver now honours a cell's own setting (an inert extension
+for v0.9 parameter files, which set none).
+
+Carried, with the sink limitation off, the trees grow into a closed
+canopy: Hamden's class seed reached peak LAI 4.9-5.1 within six coupled
+years, near Harvard Forest's measured 4.5-5.
+
+The site table's Harvard Forest row gives no wood turnover (`Wm` 0), a
+value from water-carbon runs, where heartwood is inert. In a spin-up of
+decades, heartwood then grows without limit and buries its sapwood's
+nutrients. Hamden's doubled to 15.8 kg C m-2 in twenty coupled years,
+burying 2 g N m-2 a year at T&C's heartwood C:N of 193 (three times the
+deposition), and its base cations with it.
+
+The legacy coupled forest runs of T&C-BG-2D turn heartwood over in 37.6
+and 40.1 years, returning dead wood to the soil as woody litter.
+Hamden's trees now do the same, at 40 years; heartwood levels off where
+conversion from sapwood equals mortality.
+
+With the turnover, the class seed's canopy holds through twenty-five
+coupled years, cycling with the four-year forcing ring: peak LAI 4.8-5.0,
+sapwood 820-950 gC m-2.
+
+Without it, the same run held for fifteen years and then thinned, to LAI
+1.4 by the forty-second, as the nitrogen buried in heartwood drained the
+trees' reserve and the soil. By then the shrunken stand's reserves
+sufficed again, so its uptake had switched off. Each year's stand is
+logged (`Perennial_Stand_Summary`).
+
+The grass started from seed, the state a sown crop starts from. Its
+leaves were then capped at LtR times 20 gC m-2 of roots, LAI 0.36, and it
+died out even in the open within two years. It now starts as an
+established sward instead: roots of 140 gC m-2, which the legacy LtR and
+specific leaf area turn into a mown lawn's peak LAI of about 2.5, and a
+reserve at its cap. A 90 %-grass cell's lawn then thins over a decade to
+a peak LAI of about 1.2 and holds there; it is unfertilised and its
+clippings are removed each September. Beneath the closed canopy, the
+sward is shaded out.
+
 **Cost, measured on one Control 2 cell with the Kantola case (six cycle
 years 2009-2014, a 2016-01-01 handoff after the 2015 extension), single
 column, on this workstation while several other MATLAB jobs shared it:**
