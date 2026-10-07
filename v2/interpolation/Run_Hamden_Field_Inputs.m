@@ -1,8 +1,8 @@
 function files = Run_Hamden_Field_Inputs(varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% The per-cell inputs of the Hamden (145 Blue Trail, CT) field spin-up on
-%% its process grid -- 4.5 m squares, the width at which the parcel's
-%% terrain statistics have converged (Run_Topographic_Grid_Convergence),
+%% its process grid -- 5 m squares, the coarsest width at which the
+%% parcel's terrain statistics have converged (Run_Topographic_Grid_Convergence),
 %% kept by the majority rule on the lattice that minimises the
 %% misrepresented area (Build_Projected_Field_Topology) -- written to
 %% T&C_Code/Inputs/Field_Spinup/Hamden:
@@ -31,7 +31,7 @@ function files = Run_Hamden_Field_Inputs(varargin)
 %%                   derived one (columns CEC_cmolc_kg, bs_Ca_fraction,
 %%                   bs_Mg_fraction, bs_K_fraction)
 %%   'CellSizeM', 'CoverageRule'
-%%                   another grid (default 4.5 and 'majority'; the spin-up's
+%%                   another grid (default 5 and 'majority'; the spin-up's
 %%                   TC_CELL_M and TC_MIN_COVERAGE must match)
 %%   'Output'        another output folder
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -41,7 +41,7 @@ code = fullfile(v2,'T&C_Code');
 addpath(code,here,fullfile(v2,'spinup'));
 site = fullfile(v2,'Spatial inputs','Hamden Blue Trail');
 soil_dir = fullfile(code,'Inputs','Hamden','Soils');
-opt = struct('Chemistry','','CellSizeM',4.5,'CoverageRule','majority', ...
+opt = struct('Chemistry','','CellSizeM',5,'CoverageRule','majority', ...
     'Output',fullfile(code,'Inputs','Field_Spinup','Hamden'));
 for k = 1:2:numel(varargin)
     if ~isfield(opt,char(varargin{k}))

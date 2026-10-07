@@ -147,6 +147,20 @@ band of outside land along the whole boundary, and its bound on that band,
   depends on (`Run_Topographic_Grid_Convergence`, `'CoverageRule'`), not
   from coverage; the rule refuses an empty width.
 
+The rotation turns only the lattice. Every cell's terrain (elevation,
+slope, aspect from true north, curvature, wetness index, sky view) comes
+from the north-up DEM at the cell's true centre, so the vertical processes
+and the sun geometry do not see the grid's angle, and the two-point face
+fluxes of the lateral exchange resolve a uniform head gradient exactly at
+any angle, so turning the grid re-aims the discretisation error without
+biasing it. On the Hamden parcel at 5 m, the cells' mean slope, its spread,
+the wetness index and its spread, the mean aspect and the gradient the
+face fluxes see agree within 1 % at 0, 9.7, 19.3 and 45 degrees, and with
+the DEM raster itself. What the rotation does change is the boundary: the
+misrepresented area (548 m2 at 19.3 degrees, about 780 at 0 and 45) and
+the number of perimeter cells where surface water leaves the grid (8 to
+22), which moves where along the low edge the water exits, not how much.
+
 The field land in the dropped squares, `topo.field_missed_area_m2`, is not
 simulated. Field means are unchanged (overlap-weighted over the kept
 squares); field totals are the mean times the whole field area `A`, so that
@@ -156,8 +170,8 @@ land enters at the field mean (`Field_Aggregation_Areas`,
 exactly (two sides on grid lines, the 0.3 m column and 0.2 m row dropped),
 the same rectangle turned 23 degrees, and a field with a hole, where the
 boundary integral and the polygon clipping agree. On the Hamden parcel at
-4.5 m it keeps 1,156 squares and misrepresents 2.1 % of the parcel, against
-1,224 squares and 5.0 % under the coverage rule (Hamden, below).
+5 m it keeps 936 squares and misrepresents 2.3 % of the parcel, against
+1,224 squares of 4.48 m and 5.0 % under the coverage rule (Hamden, below).
 
 The whole-site source contains three control polygons. Source feature 3,
 `Control 3`, is associated with Field 7 and is excluded. Source features 1
@@ -1282,15 +1296,16 @@ input is kept outside the repository); the site polygon, the land-cover
 window and, once downloaded, the 1 m DEM tile are in
 `v2/Spatial inputs/Hamden Blue Trail`.
 
-- **Grid**: 4.5 m squares in UTM 18N under the majority rule (above):
-  1,156 squares, turned 19.31 degrees onto the parcel's 115 m and 71 m
-  sides, taking in 254 m2 of outside land and leaving out 244 m2 of the
-  parcel, 2.1 % misrepresented (the coverage rule's 1,224 squares of
-  4.48 m took in 1,179 m2, 5.0 %). The width is the terrain's: on the
-  parcel's DEM the mean slope, its spread, the wetness index's spread and
-  the relief change by less than 5 % at every refinement below 5 m
-  (`Run_Topographic_Grid_Convergence`); the mean wetness index never
-  settles, falling as the 1 m micro-relief is resolved.
+- **Grid**: 5 m squares in UTM 18N under the majority rule (above): 936
+  squares, turned 19.31 degrees onto the parcel's 115 m and 71 m sides,
+  taking in 274 m2 of outside land and leaving out 273 m2 of the parcel,
+  2.3 % misrepresented (the coverage rule's 1,224 squares of 4.48 m took
+  in 1,179 m2, 5.0 %). The width is the terrain's: 5 m is the coarsest
+  width from which the mean slope, its spread, the wetness index's spread
+  and the relief change by less than 5 % at every refinement down to 1 m
+  (`Run_Topographic_Grid_Convergence`; the slope's spread is the last to
+  settle); the mean wetness index never settles, falling as the 1 m
+  micro-relief is resolved.
 - **Land cover per cell** (`Cell_Land_Cover`): either from a land-cover
   raster -- each cell's footprint (`Cell_Footprints`, the square clipped to
   the field) intersected exactly with every pixel it touches, the pixels
@@ -1311,8 +1326,8 @@ window and, once downloaded, the 1 m DEM tile are in
   mineral horizons in 0-30 cm depth-weighted into sand, clay, OM, bulk
   density, pH (1:1 water) and CEC (CEC7, else ECEC). Texture is
   **Cheshire** in every cell, by decision; pH and OM are each cell's own
-  map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 798 cells of the
-  Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 358 cells
+  map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 646 cells of the
+  Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 290 cells
   of the wet Wilbraham-Menlo unit (`Cell_Review_SSURGO_and_NLCD.csv`).
   Cheshire is very deep and well drained (bedrock below 1.8 m), so the
   soil column is 2 m in 14 layers with free drainage.
@@ -1397,9 +1412,9 @@ window and, once downloaded, the 1 m DEM tile are in
   cells' slope, curvature and wetness index see real terrain; the
   simulation is the whole field, with no buffer region.
 - **Bouchet**: `v2/cluster/field_spinup_hamden.env.example` runs the
-  flux-tracking spin-up on the 4.5 m majority grid (`TC_CELL_M`,
+  flux-tracking spin-up on the 5 m majority grid (`TC_CELL_M`,
   `TC_MIN_COVERAGE`): one class seed (every cell shares texture and
-  vegetation), 116 tracked and replayed cells, 1,040 from the forest; its
+  vegetation), 94 tracked and replayed cells, 842 from the forest; its
   header lists what must exist first and the warm start that follows the
   site observations.
 

@@ -151,8 +151,8 @@ The same files are kept in two places:
   and calls every horizon strongly acid). The soil column is 2 m in 14
   layers with free drainage.
 - **pH and OM per cell** from each cell's own map unit (dominant
-  component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (798 cells); Wilbraham
-  pH 5.5, OM 4.5 % (358 cells). pH is 1:1 water, so the model's
+  component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (646 cells); Wilbraham
+  pH 5.5, OM 4.5 % (290 cells). pH is 1:1 water, so the model's
   extraction ratio is 1.
 - **Exchanger (CEC and base saturation)**, one representative set for
   every cell, `Soils/Representative_soil_chemistry.csv`, derived by
@@ -229,17 +229,20 @@ The same files are kept in two places:
 
 ## Model configuration (Bouchet)
 
-- Grid: 4.5 m squares, each kept when more than half of it lies in the
+- Grid: 5 m squares, each kept when more than half of it lies in the
   parcel, on the lattice (rotation 19.31 degrees, along the parcel's
   115 m and 71 m sides, and offset) that minimises the misrepresented
-  area: 1,156 squares, 254 m2 of outside land taken in and 244 m2 of the
-  parcel left out, 2.1 % of the parcel (the 95 % coverage rule: 1,224
-  squares of 4.48 m, 1,179 m2 taken in, 5.0 %). 4.5 m is inside the
-  terrain's converged range: the mean slope, its spread, the wetness
-  index's spread and the relief change by less than 5 % at every
-  refinement below 5 m (`Run_Topographic_Grid_Convergence`). The cluster
-  builds the same grid (`TC_CELL_M=4.5`, `TC_MIN_COVERAGE=majority`); the
-  per-cell file is tied to it by cell id and centre.
+  area: 936 squares, 274 m2 of outside land taken in and 273 m2 of the
+  parcel left out, 2.3 % of the parcel (the 95 % coverage rule: 1,224
+  squares of 4.48 m, 1,179 m2 taken in, 5.0 %). 5 m is the coarsest
+  width from which the mean slope, its spread, the wetness index's spread
+  and the relief change by less than 5 % at every refinement down to 1 m
+  (`Run_Topographic_Grid_Convergence`). The rotation turns only the
+  lattice: the cells' terrain comes from the north-up DEM at their true
+  centres, and at 0, 9.7, 19.3 and 45 degrees their slope, wetness index,
+  aspect and face gradients agree within 1 %. The cluster builds the same
+  grid (`TC_CELL_M=5`, `TC_MIN_COVERAGE=majority`); the per-cell file is
+  tied to it by cell id and centre.
 - Per-cell file:
   `Inputs/Field_Spinup/Hamden/Cell_Agronomic_Hamden_Blue_Trail_Parcel_polygon_01.csv`
   (Cheshire texture, each map unit's pH and OM, the representative
@@ -257,7 +260,7 @@ The same files are kept in two places:
 - The vegetation file sets the forcing reference height 2 m above the
   24 m canopy (26 m).
 - `v2/cluster/field_spinup_hamden.env.example` submits the flux-tracking
-  spin-up (one class seed, 116 tracked and replayed cells, 1,040 from the
+  spin-up (one class seed, 94 tracked and replayed cells, 842 from the
   forest); its header lists what must exist first (the forcing and the
   DEM window).
 - **Warm start** once the site observations arrive: put them in the
