@@ -1,6 +1,9 @@
-function [area_m2,weights,fraction] = Field_Aggregation_Areas(topo)
+function [area_m2,weights,fraction,field_area_m2] = Field_Aggregation_Areas(topo)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Return the in-field accounting area, weights and full-cell fractions.
+%% Return the in-field accounting area, weights and full-cell fractions,
+%% and the field area that totals are for: the overlaps plus, on a
+%% majority-rule grid (Build_Polygon_Grid_Topology), the field land in the
+%% dropped squares, which the totals carry at the field mean.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if ~isstruct(topo) || ~isfield(topo,'cell_area_m2')
@@ -37,5 +40,15 @@ end
 
 weights = reshape(area_m2/total_area_m2,1,[]);
 fraction = area_m2./full_area_m2;
+field_area_m2 = total_area_m2;
+if isfield(topo,'field_missed_area_m2')
+    missed_area_m2 = topo.field_missed_area_m2;
+    if ~(isnumeric(missed_area_m2) && isscalar(missed_area_m2) && ...
+            isfinite(missed_area_m2) && missed_area_m2 >= 0)
+        error('Field_Aggregation_Areas:BadMissedArea', ...
+            'field_missed_area_m2 must be a finite nonnegative scalar.');
+    end
+    field_area_m2 = total_area_m2+missed_area_m2;
+end
 
 end

@@ -77,10 +77,18 @@ validate_optional_integer(opt.NDays,'NDays');
 validate_optional_integer(opt.GridNx,'GridNx');
 validate_optional_integer(opt.GridNy,'GridNy');
 validate_optional_positive_scalar(opt.GridCellSizeM,'GridCellSizeM');
-validate_optional_positive_scalar(opt.FieldMinCoverage,'FieldMinCoverage');
-if ~isempty(opt.FieldMinCoverage) && opt.FieldMinCoverage >= 1
-    error('Run_One_Subfield:BadOptions', ...
-        'FieldMinCoverage is a fraction of full-cell area and must be below 1.');
+%% FieldMinCoverage: the grid's coverage rule, a fraction of full-cell area
+%% below 1 or 'majority' (Build_Projected_Field_Topology).
+if (ischar(opt.FieldMinCoverage) || isstring(opt.FieldMinCoverage)) && ...
+        strcmp(char(opt.FieldMinCoverage),'majority')
+    opt.FieldMinCoverage = 'majority';
+else
+    validate_optional_positive_scalar(opt.FieldMinCoverage,'FieldMinCoverage');
+    if ~isempty(opt.FieldMinCoverage) && opt.FieldMinCoverage >= 1
+        error('Run_One_Subfield:BadOptions', ...
+            ['FieldMinCoverage is a fraction of full-cell area and must be ' ...
+             'below 1, or ''majority''.']);
+    end
 end
 validate_optional_index_vector(opt.FieldFeatureIndices,'FieldFeatureIndices');
 validate_optional_integer(opt.FieldPolygonIndex,'FieldPolygonIndex');
@@ -665,7 +673,7 @@ if ~isempty(opt.FieldDEM) && topo.N_cells > 1
         number_tag(dem_resolution(opt.DEMResolutionM,topo)));
 end
 if ~isempty(opt.FieldMinCoverage)
-    ckpt_tag = sprintf('%s__cov%s',ckpt_tag,strrep(sprintf('%g',opt.FieldMinCoverage),'.','p'));
+    ckpt_tag = sprintf('%s__cov%s',ckpt_tag,coverage_tag(opt.FieldMinCoverage));
 end
 ckpt_tag = sprintf('%s__%dd__from%s',ckpt_tag,NN/24,datestr(Date(1),'yyyymmdd'));
 ERW_ckpt_file = fullfile(ckpt_dir, ...
@@ -799,7 +807,7 @@ if opt.SaveResults
             number_tag(dem_resolution(opt.DEMResolutionM,topo)));
     end
     if ~isempty(opt.FieldMinCoverage)
-        tag = sprintf('%s__cov%s',tag,strrep(sprintf('%g',opt.FieldMinCoverage),'.','p'));
+        tag = sprintf('%s__cov%s',tag,coverage_tag(opt.FieldMinCoverage));
     end
     if ~isempty(opt.NDays); tag = sprintf('%s__%dd',tag,opt.NDays); end
     %% the forcing day the run actually starts on (snapped), as the checkpoint tag
@@ -981,6 +989,14 @@ if ~(isnumeric(value) && isvector(value) && all(isfinite(value)) && ...
         numel(unique(value)) == numel(value))
     error('Run_One_Subfield:BadOptions', ...
         '%s must contain unique positive integers.',name);
+end
+end
+
+function tag = coverage_tag(rule)
+if ischar(rule)
+    tag = rule;
+else
+    tag = strrep(sprintf('%g',rule),'.','p');
 end
 end
 

@@ -121,6 +121,44 @@ mean of pH values. Full cell areas remain in `topo.cell_area_m2` for storage
 and lateral transport. `topo.cell_overlap_area_m2` is used only for field
 accounting.
 
+#### The majority rule
+
+The coverage rule keeps every square the polygon touches, so it simulates a
+band of outside land along the whole boundary, and its bound on that band,
+`A/(N*h^2) > 0.95`, is also what sets the width. The majority rule
+(`'majority'` wherever the coverage rule is passed: the fourth argument of
+`Build_Shapefile_Grid_Setups`, `MinCoverage`, `FieldMinCoverage`,
+`TC_MIN_COVERAGE`) settles the grid's three choices each on its own ground:
+
+- **Which squares.** A square is simulated when more than half of it lies
+  in the field. Over a given lattice that is the exact minimiser of the
+  misrepresented area, the field land left out plus the outside land taken
+  in: a kept square adds its outside part `h^2-a`, a dropped one loses its
+  field part `a`, so `E = sum(min(a,h^2-a))`. There is no threshold to tune.
+- **Where the lattice lies.** `E` still depends on the lattice, and
+  `Place_Field_Polygon_Grid` chooses it by the same criterion. Along a
+  boundary edge parallel to the grid the error can vanish, so the rotation
+  is taken from the directions of the field's own edges at least one cell
+  long; for each, the lattice offset comes from a 16 x 16 scan of the
+  offset torus and a compass search. Every evaluation is exact: the
+  overlap of each square comes from the polygon's boundary integral, each
+  edge cut at the grid lines, and matches polygon clipping to 1e-6 m2.
+- **How wide.** The width is prescribed from the terrain the lateral flow
+  depends on (`Run_Topographic_Grid_Convergence`, `'CoverageRule'`), not
+  from coverage; the rule refuses an empty width.
+
+The field land in the dropped squares, `topo.field_missed_area_m2`, is not
+simulated. Field means are unchanged (overlap-weighted over the kept
+squares); field totals are the mean times the whole field area `A`, so that
+land enters at the field mean (`Field_Aggregation_Areas`,
+`Domain.field_missed_area_m2`). The default rule is unchanged.
+`test_field_grid_majority` checks a rectangle whose answer is known
+exactly (two sides on grid lines, the 0.3 m column and 0.2 m row dropped),
+the same rectangle turned 23 degrees, and a field with a hole, where the
+boundary integral and the polygon clipping agree. On the Hamden parcel at
+4.5 m it keeps 1,156 squares and misrepresents 2.1 % of the parcel, against
+1,224 squares and 5.0 % under the coverage rule (Hamden, below).
+
 The whole-site source contains three control polygons. Source feature 3,
 `Control 3`, is associated with Field 7 and is excluded. Source features 1
 and 2 are retained and run separately. Their areas are 8410.29 and 15282.73
@@ -1244,8 +1282,15 @@ input is kept outside the repository); the site polygon, the land-cover
 window and, once downloaded, the 1 m DEM tile are in
 `v2/Spatial inputs/Hamden Blue Trail`.
 
-- **Grid**: the calibrated grid (95 % coverage rule), 4.48 m cells,
-  1,224 cells in UTM 18N.
+- **Grid**: 4.5 m squares in UTM 18N under the majority rule (above):
+  1,156 squares, turned 19.31 degrees onto the parcel's 115 m and 71 m
+  sides, taking in 254 m2 of outside land and leaving out 244 m2 of the
+  parcel, 2.1 % misrepresented (the coverage rule's 1,224 squares of
+  4.48 m took in 1,179 m2, 5.0 %). The width is the terrain's: on the
+  parcel's DEM the mean slope, its spread, the wetness index's spread and
+  the relief change by less than 5 % at every refinement below 5 m
+  (`Run_Topographic_Grid_Convergence`); the mean wetness index never
+  settles, falling as the 1 m micro-relief is resolved.
 - **Land cover per cell** (`Cell_Land_Cover`): either from a land-cover
   raster -- each cell's footprint (`Cell_Footprints`, the square clipped to
   the field) intersected exactly with every pixel it touches, the pixels
@@ -1257,15 +1302,17 @@ window and, once downloaded, the 1 m DEM tile are in
   `Ccrown = [tree grass]`, `Cbare`, `Curb`, `Cwat` and `Crock`; crown 1 is
   the trees with grass beneath them, crown 2 the open grass. NLCD 2020
   gives the parcel 80.3 % deciduous forest, 17.7 % woody wetland and
-  2.0 % developed open space, so tree 0.980, grass 0.018 and urban 0.002
-  area-weighted, and the cell shares reproduce the parcel's to rounding.
+  2.0 % developed open space, so tree 0.980, grass 0.018 and urban 0.002;
+  the kept squares' in-parcel parts hold 0.982, 0.016 and 0.002 (the 1 %
+  of the parcel left in dropped boundary squares is grassier than the
+  rest).
 - **Soil per cell** (`Cell_SSURGO_Soil`): each cell's dominant SSURGO map
   unit by area, its dominant (or a named) major component, and the
   mineral horizons in 0-30 cm depth-weighted into sand, clay, OM, bulk
   density, pH (1:1 water) and CEC (CEC7, else ECEC). Texture is
   **Cheshire** in every cell, by decision; pH and OM are each cell's own
-  map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 854 cells of the
-  Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 370 cells
+  map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 798 cells of the
+  Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 358 cells
   of the wet Wilbraham-Menlo unit (`Cell_Review_SSURGO_and_NLCD.csv`).
   Cheshire is very deep and well drained (bedrock below 1.8 m), so the
   soil column is 2 m in 14 layers with free drainage.
@@ -1301,10 +1348,14 @@ window and, once downloaded, the 1 m DEM tile are in
   reference height 2 m above the 24 m canopy (`zatm` 26 m, where the
   base file's 8 m would put it below the zero-plane displacement).
 - **Deposition**: NADP NTN CT15 wet deposition
-  (`Extract_NTN_Rain_Chemistry`: precipitation-weighted mean concentration
-  of the valid samples x all gauge precipitation) replaces the global
-  maps for N, K, Ca and Mg; Na and the strong anions reach the ERW
-  chemistry; P keeps the global map; dry deposition is not included.
+  (`Extract_NTN_Rain_Chemistry`: the precipitation-weighted mean
+  concentration of the valid samples times the site's own precipitation
+  over the same window, the NLDAS forcing's 1,098 mm/yr, not the Abington
+  gauge's 1,415, so the deposition rides on the rain the model receives:
+  N 2.68, S 0.99, Ca 0.57, Mg 0.28, K 0.26 and Na 1.99 kg ha-1 yr-1)
+  replaces the global maps for N, K, Ca and Mg; Na and the strong anions
+  reach the ERW chemistry; P keeps the global map; dry deposition is not
+  included.
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
@@ -1330,7 +1381,7 @@ window and, once downloaded, the 1 m DEM tile are in
   hour, a site outside the grid window and other units are refused.
   `test_build_tc_forcing_from_nldas2` (14 checks) covers both formats.
 - **Site rows**: `Hamden_MOD_columns.csv` and `Hamden_ERW_columns.csv`
-  in `Inputs/Field_Spinup/Hamden_calibrated_grid` put the site over the
+  in `Inputs/Field_Spinup/Hamden` put the site over the
   borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat` and
   `Rain_Chem_Hamden.mat`), the 2 m column, the vegetation file, the CO2
   and deposition records, the windows (ring 2015-2018, the 2019 handoff
@@ -1346,19 +1397,18 @@ window and, once downloaded, the 1 m DEM tile are in
   cells' slope, curvature and wetness index see real terrain; the
   simulation is the whole field, with no buffer region.
 - **Bouchet**: `v2/cluster/field_spinup_hamden.env.example` runs the
-  flux-tracking spin-up: one class seed (every cell shares texture and
-  vegetation), 122 tracked and replayed cells, 1,102 from the forest; its
+  flux-tracking spin-up on the 4.5 m majority grid (`TC_CELL_M`,
+  `TC_MIN_COVERAGE`): one class seed (every cell shares texture and
+  vegetation), 116 tracked and replayed cells, 1,040 from the forest; its
   header lists what must exist first and the warm start that follows the
   site observations.
 
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
-mapping on the parcel's grid; `test_hamden_field_configuration` (18) the
-site as the cluster configures it, down to one cell's assembled
-parameters and, with the DEM, the cluster's plan. Open: whether the wet
-deposition should be CT15's concentrations times the site's own
-precipitation (NLDAS 1,111 mm/yr) rather than CT15's (1,415 mm/yr), and
-whether the 2-D transient should take its Na and anion inputs from CT15
-rather than the steady closure (`keyword_add`). The
+mapping on the parcel's grid; `test_hamden_field_configuration` (20) the
+site as the cluster configures it, from the grid down to one cell's
+assembled parameters and, with the DEM, the cluster's plan. Open: whether
+the 2-D transient should take its Na and anion inputs from CT15 rather
+than the steady closure (`keyword_add`). The
 base parameter file also carries the Energy Farm's exchange calibration
 (`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which
 partitions the seeded exchanger against the pore water at every site

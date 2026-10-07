@@ -1655,12 +1655,16 @@ fprintf('\nCOMPUTATIONAL TIME [h] %.3f   (%.1f ms per column-step)\n', ...
 %% ========================================================================
 %% DOMAIN AGGREGATION  --  polygon-overlap weighted where available
 %% ========================================================================
-[A_field,w_col,~] = Field_Aggregation_Areas(topo);
-A_field_total = sum(A_field);
+%% A_field_total is the whole field, including any field land a majority-
+%% rule grid leaves in its dropped squares (carried at the field mean).
+[A_field,w_col,~,A_field_total] = Field_Aggregation_Areas(topo);
 A_simulated_total = sum(A_cell);
 Domain.area_m2 = A_field_total;
 Domain.simulated_area_m2 = A_simulated_total;
-Domain.grid_outside_area_m2 = A_simulated_total-A_field_total;
+Domain.grid_outside_area_m2 = A_simulated_total-sum(A_field);
+if isfield(topo,'field_missed_area_m2')
+    Domain.field_missed_area_m2 = A_field_total-sum(A_field);
+end
 Domain.area_main_m2 = sum(A_field(strcmp(topo.cell_region,'main')));
 Domain.area_buffer_m2 = sum(A_field(~strcmp(topo.cell_region,'main')));
 [Domain.N2Oflx,Domain.N2O_total_gN] = Field_Aggregate_Areal(squeeze(N2Oflx),topo);
