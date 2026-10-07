@@ -1,2 +1,2 @@
-Location,ExperimentFullName,Lat,Lon,Zs,Kbot,Zbio,NumberOfDays,pft_override,co2_file,rain_chem_file,forcing_file,meteo_file,meteo_start,meteo_end,transient_start,transient_end
-Hamden,Hamden (US),41.437,-72.866,[0 10 50 100 150 200 300 400 600 800 1000 1250 1500 1750 2000],NaN,300,2464,PFT_Hamden_Deciduous_Grass,Ca_Data_NOAA_MLO_daily.mat,Rain_Chem_Hamden.mat,Data_Hamden.mat,Data_Hamden.mat,2015-01-01,2019-12-31,2020-01-01,2026-09-29
+Location,ExperimentFullName,Lat,Lon,Kbot,Zbio,NumberOfDays,pft_override,co2_file,forcing_file,meteo_file,meteo_start,meteo_end,transient_start,transient_end
+Hamden,Hamden (US),41.437,-72.866,NaN,300,2464,PFT_Hamden_Deciduous_Grass,Ca_Data_NOAA_MLO_daily.mat,Data_Hamden.mat,Data_Hamden.mat,2015-01-01,2019-12-31,2020-01-01,2026-09-29

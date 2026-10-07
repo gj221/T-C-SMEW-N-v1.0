@@ -1257,22 +1257,32 @@ of the same run, and a state records the instant it hands off at, which
 `Run_One_Subfield` checks against its own first hour.
 
 The first spin-up of a site with its own vegetation (Hamden: a mature
-forest over grass on a 2 m, 14-layer column) surfaced three more, all
-fixed; the first two change nothing on the Kantola rows, the third only
-the day the budgets start. The base parameter file's default
-initial soil moisture is a 20-layer profile, so a cold start on any other
-column stopped in its first hour; such a column now starts at its
-layers' field capacity. Phase 2 ran only the base parameter file, not
-the row's vegetation override that the driver runs in Phases 1 and 3, so
-it equilibrated with the borrowed maize-soy roots, deposition and
-fertiliser years; it now runs the override as the driver does. And the
-Phase-3 nutrient budgets took their starting storage from row 1, the
-parameter file's initial state, whose tissue nutrients (`TNIT` ... `TSIL`)
-the driver never fills: harmless for a crop sown into bare soil, but a
-stand that starts with wood (Hamden's 11 kg C m-2) gained its whole
-nutrient stock, 72 g N m-2, on the second day. The budgets now run from
-the first day the driver computes (row 2), as the driver's own nutrient
-check does, and a budget that fails reports every term.
+forest over grass) surfaced four more, all fixed; none changes what the
+Kantola rows compute. Phase 2 ran only the base parameter file, not the
+row's vegetation override that the driver runs in Phases 1 and 3, so it
+equilibrated with the borrowed maize-soy roots, deposition and fertiliser
+years; it now runs the override as the driver does. The Phase-3 nutrient
+budgets took the plants' starting stock from row 1, the parameter file's
+initial state, whose tissue nutrients (`TNIT` ... `TSIL`) the driver
+never fills: harmless for a crop sown into bare soil, but a stand that
+starts with wood (Hamden's 11 kg C m-2) gained its whole nutrient stock,
+72 g N m-2, on the second day. The budgets now start from that stock
+computed as the driver computes it (`Plant_Tissue_Nutrients`: each live
+pool's carbon over its carbon:nutrient ratio, plus litter in transit).
+And the driver hands each day's litter to the soil the next day
+(`BIOGEO_UNIT` takes `ISOIL(j-1)`), so the litter of a loop's last day is
+in neither the soil's nor the plants' end stock; the soil storage now
+counts it (0.021 g N m-2, one December day's litter, on Hamden's first
+loop, where the plant side then closed to 1e-14 g m-2 and the whole
+budget to 3e-13). Like the year's plant growth, it is not carried into
+the next loop, which restarts the vegetation, its reserves included, from
+the parameter file and carries only the soil and its moisture. A budget
+that fails reports every term. And the site's ERW row named its soil
+"fine sandy loam", the SSURGO texture name, which the ERW chemistry (it
+tabulates its exchange selectivities by USDA texture class) does not know,
+so the final handoff check stopped; the row now gives Cheshire's class,
+"sandy loam", and `test_hamden_field_configuration` checks the class
+against the chemistry's own table.
 
 **Cost, measured on one Control 2 cell with the Kantola case (six cycle
 years 2009-2014, a 2016-01-01 handoff after the 2015 extension), single
@@ -1359,10 +1369,10 @@ window and, once downloaded, the 1 m DEM tile are in
   map unit's: Cheshire (pH 5.3, OM 2.7 %) on the 646 cells of the
   Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 290 cells
   of the wet Wilbraham-Menlo unit (`Cell_Review_SSURGO_and_NLCD.csv`).
-  Cheshire is very deep and well drained (bedrock below 1.8 m), so the
-  soil column is 2 m in 14 layers with free drainage; a cold start fills
-  it at each layer's field capacity, where the borrowed row's default
-  moisture profile has 20 layers and had stopped the spin-up's first hour.
+  Cheshire is very deep and well drained (bedrock below 1.8 m); the
+  column is, by decision, the base parameter file's default, 20 layers to
+  5 m with free drainage. The trees root to a ZR95 of 1 m and the grass to
+  0.25 m, the legacy table's values for their rows.
 - **Soil chemistry**: SSURGO cannot supply the exchanger (Cheshire has
   no CEC7, and an ECEC of 1.6 cmolc kg-1 below its own sum of bases, 10)
   and SoilGrids has CEC at pH 7 but no base saturation, so the
@@ -1408,10 +1418,11 @@ window and, once downloaded, the 1 m DEM tile are in
   (kg ha-1 yr-1): N 6.6 (wet 2.6, dry 4.0), S 1.6 (1.0, 0.6), Ca 0.85,
   Mg 0.42, K 0.36; dry S halves over the decade (0.97 to 0.45) and dry N
   falls a fifth. The wet-only record had given N 2.7. P keeps the global
-  map. The ERW chemistry's Na and strong anions still take CT15's
-  long-term wet values at the site's precipitation (`Rain_Chem_Hamden.mat`)
-  pending the `keyword_add` decision. No fertiliser, and no fertiliser
-  year (`FertN_years` empty).
+  map. The ERW chemistry takes no rain record (`rain_chem_file` empty):
+  the 2-D transient never reads one, so with it the spin-up's handoff
+  check had seeded a rain Na the transient does not use. CT15's Na and
+  strong anions (`Rain_Chem_Hamden.mat`) wait on the `keyword_add`
+  decision. No fertiliser, and no fertiliser year (`FertN_years` empty).
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
@@ -1438,9 +1449,8 @@ window and, once downloaded, the 1 m DEM tile are in
   `test_build_tc_forcing_from_nldas2` (14 checks) covers both formats.
 - **Site rows**: `Hamden_MOD_columns.csv` and `Hamden_ERW_columns.csv`
   in `Inputs/Field_Spinup/Hamden` put the site over the
-  borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat` and
-  `Rain_Chem_Hamden.mat`), the 2 m column, the vegetation file, the CO2
-  and deposition records, the windows (ring 2015-2018, the 2019 handoff
+  borrowed case 5: Location `Hamden` (which names `Data_Hamden.mat`),
+  the vegetation file, the CO2 and deposition records, the windows (ring 2015-2018, the 2019 handoff
   extension, the state handed off at 2020-01-01 for the simulation and
   validation runs, 2020-01-01 to 2026-09-29, the last whole day of the
   forcing), the base-saturation seed, pH by a 1:1 extract
@@ -1460,7 +1470,7 @@ window and, once downloaded, the 1 m DEM tile are in
   site observations.
 
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
-mapping on the parcel's grid; `test_hamden_field_configuration` (20) the
+mapping on the parcel's grid; `test_hamden_field_configuration` (23) the
 site as the cluster configures it, from the grid down to one cell's
 assembled parameters and, with the DEM, the cluster's plan. Open: whether
 the 2-D transient should take its Na and anion inputs from CT15 rather
