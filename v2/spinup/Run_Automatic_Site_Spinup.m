@@ -225,6 +225,9 @@ if IS_BG_SPINUP
         if isfield(bg_state,'Careserve_H_out');  Careserve_H_out  = bg_state.Careserve_H_out;  end
         if isfield(bg_state,'Mgreserve_H_out');  Mgreserve_H_out  = bg_state.Mgreserve_H_out;  end
         if isfield(bg_state,'Sireserve_H_out');  Sireserve_H_out  = bg_state.Sireserve_H_out;  end
+        if isfield(bg_state,'Veg_out') && isstruct(bg_state.Veg_out)
+            Veg_out = bg_state.Veg_out;   % a perennial stand goes on (Perennial_Vegetation_Apply)
+        end
     end
 else
     bg_state = load_bg_state(bg_file);
@@ -235,7 +238,12 @@ else
     O_out = bg_state.O_out;
     RexmyI_out = bg_state.RexmyI_out;
     %% Respiration, the Na-seed water loss and the plant reserves start the
-    %% way the v0.9 driver starts them, from the run and the parameter file.
+    %% way the v0.9 driver starts them, from the run and the parameter file;
+    %% a perennial stand goes on from the state handed off (Veg_out,
+    %% Perennial_Vegetation_Apply).
+    if isfield(bg_state,'Veg_out') && isstruct(bg_state.Veg_out)
+        Veg_out = bg_state.Veg_out;
+    end
     % Keep the converged exchange state for the transient pH inversion.
     if isfield(bg_state, 'spinup_erw_handoff_diagnostic') && ...
             isstruct(bg_state.spinup_erw_handoff_diagnostic)
