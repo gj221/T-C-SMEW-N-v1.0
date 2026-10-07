@@ -5,7 +5,8 @@ function test_hamden_field_configuration()
 %% The Hamden (145 Blue Trail, CT) field spin-up as the cluster configures
 %% it, without spinning anything up:
 %%   1  the site's MOD and ERW column files read as the workbook rows hold
-%%      them (numbers, NaN, text, the Zs vector as text)
+%%      them (numbers, NaN, text); they leave the borrowed row its soil
+%%      layers and set no rain chemistry
 %%   2  a per-cell file without base saturation is refused: the site seeds
 %%      the exchanger from it (f_CEC_inventory), and the Kantola row's 80 %
 %%      would otherwise stand in
@@ -13,8 +14,8 @@ function test_hamden_field_configuration()
 %%      lattice of least misrepresented area, as the cluster builds it
 %%      (the environment example's TC_CELL_M and TC_MIN_COVERAGE)
 %%   3  the site's own per-cell file: every cell runs the site's settings
-%%      over the borrowed case (location, 2 m soil column with free
-%%      drainage, vegetation file, CO2 and deposition records, the 2020
+%%      over the borrowed case (location, its default 20-layer column with
+%%      free drainage, vegetation file, CO2 and deposition records, the 2020
 %%      handoff); its exchanger seeded from the representative base
 %%      saturation (Representative_Soil_Chemistry) on the representative
 %%      CEC; pH by a 1:1 extract; no rock; Cheshire texture, its own map
@@ -22,12 +23,12 @@ function test_hamden_field_configuration()
 %%   4  a column override may not set a cell's own soil or cover, nor an
 %%      unknown column
 %%   5  a cell with open grass assembles the site's parameters: the forcing
-%%      reference height 2 m above the 24 m canopy, the 2 m soil column, its
+%%      reference height 2 m above the 24 m canopy, the default column, its
 %%      own cover, and the vegetation, management and deposition of the
 %%      Hamden vegetation file: event deposition (CT15 wet on the day's
 %%      precipitation, TDep dry every day) and no fertiliser, nor any
 %%      fertiliser year for the plot-scale frame to refill; a cold start
-%%      fills the 14-layer column at its field capacity
+%%      takes the base file's 20-layer moisture profile
 %%   6  with the parcel's DEM window (not versioned; skipped without it) the
 %%      flux-tracking plan the cluster runs first: one class (every cell
 %%      shares soil and vegetation), a topographically stratified ~10 %
@@ -78,12 +79,20 @@ E = Read_Parameter_Columns(fullfile(grid_dir,'Hamden_ERW_columns.csv'));
 check('the MOD columns read as the workbook holds them', ...
     M.Lat == 41.437 && M.Lon == -72.866 && isnan(M.Kbot) && M.Zbio == 300 && ...
     M.NumberOfDays == 2464 && M.Location == "Hamden" && ...
-    isequal(eval(char(M.Zs)),[0 10 50 100 150 200 300 400 600 800 1000 1250 1500 1750 2000]) && ...
+    ~isfield(M,'Zs') && ~isfield(M,'rain_chem_file') && ...
     M.meteo_start == "2015-01-01" && M.meteo_end == "2019-12-31" && ...
     M.transient_start == "2020-01-01" && M.transient_end == "2026-09-29");
 check('the ERW columns read as the workbook holds them', ...
     E.fX_conc_convention == "f_CEC_inventory" && E.pH_DilutionFactor == 1 && ...
     E.M_rock_in == 0 && E.M_rock_event == 0 && E.Location == "Hamden");
+%% The exchange selectivities are tabulated by USDA texture class
+%% (ERW_MOD_PARAM_excel); Cheshire (55-62 % sand, 9.5 % clay) is a sandy loam.
+erw_src = fileread(fullfile(code,'Parameters','ERW_MOD_PARAM_excel.m'));
+known = regexp(erw_src,'ismember\(soil, \{([^}]*)\}\)','tokens');
+known = regexp(strjoin(cellfun(@(t) t{1},known,'UniformOutput',false),','),'''([^'']+)''','tokens');
+known = cellfun(@(t) t{1},known,'UniformOutput',false);
+check('the soil class is one the ERW exchange constants know: a sandy loam', ...
+    E.soil == "sandy loam" && ismember(char(E.soil),known), char(E.soil));
 check('a column file without a value is refused', raises(@() ...
     Read_Parameter_Columns(write_text(fullfile(tmp,'blank.csv'),"a,b"+newline+"1,")), ...
     'Read_Parameter_Columns:BadFile'));
@@ -110,7 +119,9 @@ for c = 1:N
     mod_ok = mod_ok && m.Location == "Hamden" && m.Lat == 41.437 && isnan(m.Kbot) && ...
         m.pft_override == "PFT_Hamden_Deciduous_Grass" && ...
         m.co2_file == "Ca_Data_NOAA_MLO_daily.mat" && m.forcing_file == "Data_Hamden.mat" && ...
-        m.rain_chem_file == "Rain_Chem_Hamden.mat" && m.transient_start == "2020-01-01";
+        (~ismember('rain_chem_file',m.Properties.VariableNames) || ...
+         strlength(strtrim(string(m.rain_chem_file))) == 0) && ...
+        m.transient_start == "2020-01-01";
     f = str2num(char(e.f_CEC_in)); %#ok<ST2NM>
     fs = [chem.bs_Ca_fraction chem.bs_Mg_fraction chem.bs_K_fraction];
     erw_ok = erw_ok && e.fX_conc_convention == "f_CEC_inventory" && e.pH_DilutionFactor == 1 && ...
@@ -165,8 +176,8 @@ P = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maize_Soy
     fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx);
 check('the forcing reference height is 2 m above the 24 m canopy', ...
     P.zatm == 26 && max(P.hc_H(1,:)) == 24, sprintf('zatm %g',P.zatm));
-check('the soil column is 2 m deep, in 14 layers, with free drainage', ...
-    P.Zs(end) == 2000 && P.ms == 14 && isnan(P.Kbot));
+check('the soil column is the default: 20 layers to 5 m, with free drainage', ...
+    P.Zs(end) == 5000 && P.ms == 20 && isnan(P.Kbot));
 check('the cell''s own cover reaches the parameters', ...
     cover_grass(c) > 0 && max(abs(P.Ccrown - str2num(char(CI(c).MOD_PARAM.Ccrown)))) < 1e-12 && ... %#ok<ST2NM>
     abs(sum(P.Ccrown) + P.Cbare + P.Curb + P.Cwat + P.Crock - 1) < 1e-9);
@@ -185,8 +196,8 @@ check('no fertiliser, and no fertiliser year for the plot-scale frame to refill'
 ctx_cold = ctx; ctx_cold.O_out = zeros(1,numel(Zs)-1);
 P_cold = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maize_Soy.m'), ...
     fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx_cold);
-check('a cold start fills the 14 layers at field capacity, not the borrowed 20-layer profile', ...
-    isequal(size(P_cold.O(1,:)),[1 14]) && isequal(P_cold.O(1,:),P_cold.Ofc));
+check('a cold start takes the base file''s 20-layer moisture profile', ...
+    isequal(size(P_cold.O(1,:)),[1 20]) && all(P_cold.O(1,:) > 0));
 
 %% --- 6 --------------------------------------------------------------------
 dem = fullfile(v2,'Spatial inputs','Hamden Blue Trail','DEM');

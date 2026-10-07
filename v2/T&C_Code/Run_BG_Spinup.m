@@ -1105,12 +1105,22 @@ while ~p3_converged
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
-    %%% The budget runs from the first day the frame computes (row 2) to the
-    %%% last.  Row 1 is the parameter file's initial state, whose tissue
-    %%% nutrients (TNIT ... TSIL) the frame never fills, so a stand that starts
-    %%% with wood would otherwise gain its whole nutrient stock on day 2.
-    p3_r0 = 2;
-    p3_rows = p3_r0+1:j;
+    p3_rows = 2:j;
+    %%% The plants' nutrient stock on day 1, the state the parameter file sets.
+    %%% The frame fills its tissue records (TNIT ... TSIL) from day 2, so their
+    %%% row 1 is empty and a stand that starts with wood would seem to gain its
+    %%% whole stock on day 2; this is that stock, [N P K Ca Mg Si] per m2.
+    %%% The frame hands each day's litter to the soil the next day (BIOGEO_UNIT
+    %%% takes ISOIL(j-1)), so a loop's last litter is still on its way at the end;
+    %%% the soil storage counts it (the first row's is zero: the frame starts
+    %%% without any).  idx are an element's three ISOIL litter columns.
+    p3_transit = @(r,w,idx) sum(w.*(sum(ISOIL_H(r,:,idx),3) + sum(ISOIL_L(r,:,idx),3)));
+    p3_plant1 = zeros(1,6);
+    for p3_c = 1:cc
+        p3_plant1 = p3_plant1+CcrownFIX(p3_c)*( ...
+            Plant_Tissue_Nutrients(B_H(1,p3_c,:),Stoich_H(p3_c),NuLit_H(1,p3_c,:))+ ...
+            Plant_Tissue_Nutrients(B_L(1,p3_c,:),Stoich_L(p3_c),NuLit_L(1,p3_c,:)));
+    end
     p3_cover = Ccrown_t(p3_rows,:);
     p3_litter_P = sum(ISOIL_H(p3_rows,:,13:15),3) + sum(ISOIL_L(p3_rows,:,13:15),3);
     p3_reserve_harvest_P = reshape(AgrHarNut_H(p3_rows,:,2),numel(p3_rows),cc) + ...
@@ -1125,10 +1135,9 @@ while ~p3_converged
     p3_p_terms.harvest = sum(p3_cover.*(TexP_H(p3_rows,:) + TexP_L(p3_rows,:) - ...
         p3_litter_P + p3_reserve_harvest_P),'all');
     p3_p_terms.leaching = sum(LEAK_P(p3_rows) + LEAK_DOP(p3_rows));
-    p3_p_terms.soil_start = sum(P(p3_r0,35:47));
-    p3_p_terms.soil_end = sum(P(j,35:47));
-    p3_p_terms.plant_start = sum(CcrownFIX.*(TPHO_H(p3_r0,:) + TPHO_L(p3_r0,:) + ...
-        Preserve_H(p3_r0,:) + Preserve_L(p3_r0,:)));
+    p3_p_terms.soil_start = sum(P(1,35:47)) + p3_transit(1,CcrownFIX,13:15);
+    p3_p_terms.soil_end = sum(P(j,35:47)) + p3_transit(j,Ccrown_t(j,:),13:15);
+    p3_p_terms.plant_start = p3_plant1(2)+sum(CcrownFIX.*(Preserve_H(1,:) + Preserve_L(1,:)));
     p3_p_terms.plant_end = sum(Ccrown_t(j,:).*(TPHO_H(j,:) + TPHO_L(j,:) + ...
         Preserve_H(j,:) + Preserve_L(j,:)));
     if lateral_replay_spinup
@@ -1197,9 +1206,9 @@ while ~p3_converged
         %%% v1.0 gas partition (BIOGEOCHEMISTRY_DYNAMIC3): N2 from denitrification and
         %%% total N2O (nitrification + denitrification); there is no NO pathway.
         p3_terms.gaseous_loss = strcmp(p3_names{p3_x},'N')*sum(VOL(p3_rows)+N2flx(p3_rows)+N2Oflx(p3_rows));
-        p3_terms.soil_start = sum(P(p3_r0,p3_soil_idx{p3_x}));
-        p3_terms.soil_end = sum(P(j,p3_soil_idx{p3_x}));
-        p3_terms.plant_start = sum(CcrownFIX.*(p3_plant_h{p3_x}(p3_r0,:) + p3_plant_l{p3_x}(p3_r0,:) + p3_reserve_h{p3_x}(p3_r0,:) + p3_reserve_l{p3_x}(p3_r0,:)));
+        p3_terms.soil_start = sum(P(1,p3_soil_idx{p3_x})) + p3_transit(1,CcrownFIX,p3_litter_idx{p3_x});
+        p3_terms.soil_end = sum(P(j,p3_soil_idx{p3_x})) + p3_transit(j,Ccrown_t(j,:),p3_litter_idx{p3_x});
+        p3_terms.plant_start = p3_plant1(p3_n_i)+sum(CcrownFIX.*(p3_reserve_h{p3_x}(1,:) + p3_reserve_l{p3_x}(1,:)));
         p3_terms.plant_end = sum(Ccrown_t(j,:).*(p3_plant_h{p3_x}(j,:) + p3_plant_l{p3_x}(j,:) + p3_reserve_h{p3_x}(j,:) + p3_reserve_l{p3_x}(j,:)));
         if lateral_replay_spinup
             p3_lat_is = ismember(lat_rep.pool_idx,p3_soil_idx{p3_x});

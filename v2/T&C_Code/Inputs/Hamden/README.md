@@ -14,7 +14,7 @@ The same files are kept in two places:
 | Where | Purpose |
 |---|---|
 | `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/Hamden/` | source data the model setup reads (deposition, CO₂, soils, vegetation; NLDAS-2 meteo once downloaded) |
-| `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/` | model-ready records the loaders look for: `Rain_Chem_Hamden.mat`, `Ca_Data_NOAA_MLO_daily.mat` |
+| `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/` | model-ready records the loaders look for: `Data_Hamden.mat`, `Deposition_Hamden.mat`, `Ca_Data_NOAA_MLO_daily.mat`, and `Rain_Chem_Hamden.mat` (kept, not read; see below) |
 | `T&C-SMEW-N v1.0/v2/Spatial inputs/Hamden Blue Trail/` | site polygon, land-cover clip, DEM (when downloaded) |
 | `Documents/Model data/Hamden data/` | documentation copy of everything, by data type |
 
@@ -159,10 +159,12 @@ The same files are kept in two places:
   biogeochemistry's deposition terms (replacing the built-in global maps,
   which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus dry, older and
   coarse); P is measured by neither network and stays on the global map;
-  Na and the strong anions reach the ERW chemistry, for now as CT15's
-  long-term wet values above (`Rain_Chem_Hamden.mat`), pending the
-  `keyword_add` decision; nitrate is not counted among the strong anions
-  because it is already N deposition.
+  the ERW chemistry takes no rain record for now (the site row leaves
+  `rain_chem_file` empty): the 2-D transient never reads one, so with it
+  the spin-up's handoff check had seeded a rain Na the transient does not
+  use. CT15's Na and strong anions (`Rain_Chem_Hamden.mat`, above) wait on
+  the `keyword_add` decision; nitrate is not counted among the strong
+  anions because it is already N deposition.
 
 ## Atmospheric CO₂
 
@@ -190,8 +192,9 @@ The same files are kept in two places:
   drained fine sandy loam, sand 55–62 %, clay 9.5 %, OM 3.5 % Ap / 1 % B,
   bulk density 1.30 / 1.53, pH 5.3, 12–22 % rock fragments, no restriction
   above 165 cm; the official series description puts bedrock below 6 ft
-  and calls every horizon strongly acid). The soil column is 2 m in 14
-  layers with free drainage.
+  and calls every horizon strongly acid). The soil column is, by
+  decision, the base parameter file's default: 20 layers to 5 m with free
+  drainage.
 - **pH and OM per cell** from each cell's own map unit (dominant
   component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (646 cells); Wilbraham
   pH 5.5, OM 4.5 % (290 cells). pH is 1:1 water, so the model's
@@ -292,13 +295,16 @@ The same files are kept in two places:
   `Cell_Review_SSURGO_and_NLCD.csv` beside it (every cell's own SSURGO map
   unit and NLCD class areas); both written by `Run_Hamden_Field_Inputs`.
 - Site rows over the borrowed workbook case 5, in the same folder:
-  `Hamden_MOD_columns.csv` (location, the 2 m soil column, the vegetation
-  file `PFT_Hamden_Deciduous_Grass`, the CO2 and deposition records, the
+  `Hamden_MOD_columns.csv` (location, the vegetation file
+  `PFT_Hamden_Deciduous_Grass`, the CO2 and deposition records, the
   forcing and windows: ring 2015–2018, the 2019 handoff extension,
   handoff at 2020-01-01 for the simulation and validation runs,
-  2020-01-01 to 2026-09-29) and
+  2020-01-01 to 2026-09-29; the soil layers and rain chemistry are left
+  to the borrowed row, its default column and none) and
   `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
-  base saturation, pH by a 1:1 extract).
+  base saturation, pH by a 1:1 extract, the exchange selectivities of a
+  sandy loam -- Cheshire's USDA texture class, the key the ERW chemistry
+  tabulates them by).
 - The vegetation file sets the forcing reference height 2 m above the
   24 m canopy (26 m), loads the event deposition and empties
   `FertN_years`: the borrowed maize-soy row lists two years in three

@@ -25,9 +25,9 @@
 %% LAI 0.5; 90 % of the cut leaf and standing dead is removed, 10 % left
 %% as litter.  Trees are not cut.  No sowing, harvest or fertiliser.
 %%
-%% INITIAL STAND  The spin-up restarts the vegetation from this state at
-%% the start of every year (only the soil, its moisture and the plant
-%% reserves are carried), so the trees start as a mature, winter-dormant
+%% INITIAL STAND  The spin-up restarts the vegetation, its reserves
+%% included, from this state at the start of every year (only the soil and
+%% its moisture are carried), so the trees start as a mature, winter-dormant
 %% stand typical of Harvard Forest -- live wood ~110 Mg C/ha (sapwood 30,
 %% heartwood 80), fine roots 3, carbohydrate reserve 8 Mg C/ha, canopy
 %% 24 m, leafless -- and grow leaves, wood and litter within each year.
@@ -261,7 +261,7 @@ e_rel_H(1,:) = [1 0];      e_rel_L(1,:) = [1 1];
 %% height to work over.  The forcing's near-surface air and wind are
 %% applied at it.
 zatm = max([hc_H(1,:) hc_L(1,:)]) + 2;
-clear islot tree_B grass_B reserve_at res_H res_L hamden_rain rain_chem_file
+clear islot tree_B grass_B reserve_at res_H res_L hamden_dep deposition_file
 
 fprintf(['[PFT_Hamden_Deciduous_Grass] trees (Harvard Forest, ZR95 %d mm) over grass ' ...
     '(Fendt, ZR95 %d mm); cover %s; grass cut 1 Sep (90%% removed); CT15 wet + TDep dry deposition by event; ' ...
