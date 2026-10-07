@@ -237,12 +237,16 @@ else
     NupI_L_out = bg_state.NupI_L_out;
     O_out = bg_state.O_out;
     RexmyI_out = bg_state.RexmyI_out;
-    %% Respiration, the Na-seed water loss and the plant reserves start the
-    %% way the v0.9 driver starts them, from the run and the parameter file;
-    %% a perennial stand goes on from the state handed off (Veg_out,
-    %% Perennial_Vegetation_Apply).
+    %% Respiration and the plant reserves start the way the v0.9 driver
+    %% starts them, from the run and the parameter file. A perennial stand
+    %% goes on from the state handed off (Veg_out,
+    %% Perennial_Vegetation_Apply), and the rain Na seed divides by the
+    %% spin-up's long-term water loss (seed_water_loss_l_m2_d).
     if isfield(bg_state,'Veg_out') && isstruct(bg_state.Veg_out)
         Veg_out = bg_state.Veg_out;
+    end
+    if isfield(bg_state,'seed_water_loss_l_m2_d')
+        ERW_seed_water_loss_l_m2_d = bg_state.seed_water_loss_l_m2_d;
     end
     % Keep the converged exchange state for the transient pH inversion.
     if isfield(bg_state, 'spinup_erw_handoff_diagnostic') && ...
@@ -431,6 +435,12 @@ if ~IS_BG_SPINUP
     Ca = Load_CO2_Record(Date, Input_Directory, co2_record_file);
 end
 ERW_rain_chemistry = Load_Rain_Chemistry(MOD_PARAM_input, Input_Directory, id_location);
+if ~IS_BG_SPINUP && OPT_ERW == 1 && ~isempty(ERW_rain_chemistry.source_file) && ...
+        ~exist('ERW_seed_water_loss_l_m2_d','var')
+    error('TC_SMEW_N_run:NoSeedWaterLoss', ...
+        ['The rain record %s seeds Na from the spin-up''s long-term water loss, ' ...
+         'which %s does not carry: rerun the spin-up.'], ERW_rain_chemistry.source_file, bg_file);
+end
 
 %% ========================================================================
 %% DERIVE METEOROLOGICAL VARIABLES
@@ -630,56 +640,6 @@ if ~(isnumeric(value) && isreal(value) && isscalar(value) && ...
         'CELL_ID must be a positive integer.');
 end
 cell_id = double(value);
-end
-
-function S = Load_Rain_Chemistry(MOD_PARAM_input, Input_Directory, id_location)
-S = struct('rain_pH_vwm', NaN, ...
-    'rain_strong_anion_flux_umolc_m2_d', 0, ...
-    'rain_strong_anion_ueq_L', 0, ...
-    'rain_strong_anion_deposition_umolc_m2', 0, ...
-    'rain_Ca_flux_g_m2_d', 0, ...
-    'rain_Mg_flux_g_m2_d', 0, ...
-    'rain_K_flux_g_m2_d', 0, ...
-    'rain_Na_flux_g_m2_d', 0, ...
-    'rain_Na_flux_umol_m2_d', 0, ...
-    'source_file', '');
-rain_file = char(table_value(MOD_PARAM_input, 'rain_chem_file', ""));
-if isempty(strtrim(rain_file))
-    return
-end
-rain_mat = fullfile(Input_Directory, ['Rain_Chem_' char(string(id_location)) '.mat']);
-if ~isfile(rain_mat)
-    error('TC_SMEW_N_run:MissingRainChemistry', ...
-        'Rain chemistry file %s is configured, but %s is missing. Run Extract_NTN_Rain_Chemistry first.', ...
-        rain_file, rain_mat);
-end
-loaded = load(rain_mat, 'Rain_Chem');
-if ~isfield(loaded, 'Rain_Chem')
-    error('TC_SMEW_N_run:InvalidRainChemistry', '%s does not contain Rain_Chem.', rain_mat);
-end
-RC = loaded.Rain_Chem;
-required = {'pH_vwm','strong_anion_ueq_L','strong_anion_deposition_umolc_m2','strong_anion_flux_umolc_m2_d',...
-    'Ca_flux_g_m2_d','Mg_flux_g_m2_d','K_flux_g_m2_d','Na_flux_g_m2_d','Na_flux_umol_m2_d'};
-for ii = 1:numel(required)
-    if ~isfield(RC, required{ii}) || ~isfinite(RC.(required{ii}))
-        error('TC_SMEW_N_run:InvalidRainChemistry', ...
-            'Rain_Chem.%s must be finite in %s.', required{ii}, rain_mat);
-    end
-end
-if RC.pH_vwm <= 0
-    error('TC_SMEW_N_run:InvalidRainChemistry', ...
-        'Rain_Chem.pH_vwm must be positive in %s.', rain_mat);
-end
-S.rain_pH_vwm = RC.pH_vwm;
-S.rain_strong_anion_flux_umolc_m2_d = RC.strong_anion_flux_umolc_m2_d;
-S.rain_strong_anion_ueq_L = RC.strong_anion_ueq_L;
-S.rain_strong_anion_deposition_umolc_m2 = RC.strong_anion_deposition_umolc_m2;
-S.rain_Ca_flux_g_m2_d = RC.Ca_flux_g_m2_d;
-S.rain_Mg_flux_g_m2_d = RC.Mg_flux_g_m2_d;
-S.rain_K_flux_g_m2_d = RC.K_flux_g_m2_d;
-S.rain_Na_flux_g_m2_d = RC.Na_flux_g_m2_d;
-S.rain_Na_flux_umol_m2_d = RC.Na_flux_umol_m2_d;
-S.source_file = rain_file;
 end
 
 function dn = table_datenum(T,name,default)

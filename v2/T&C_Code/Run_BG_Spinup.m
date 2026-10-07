@@ -954,6 +954,9 @@ p3_slow_max_by_ring = nan(1, n_spinup_years);
 %%% still grows. Report full total-P drift per ring, but do not require it.
 p3_total_P_rel_by_ring = nan(1, n_spinup_years);
 p3_nutrient_budgets = struct();
+%%% Each ring year's ERW water loss [L m-2 d-1] (ERW_Mean_Water_Loss); the
+%%% ring's mean is handed off as the long-term water loss of the rain Na seed.
+p3_water_loss_by_ring = nan(1, n_spinup_years);
 
 if p3_done
     tmp = p3_resume_state;
@@ -969,6 +972,7 @@ if p3_done
     if isfield(tmp,'p3_dynamic_max_by_ring'); p3_dynamic_max_by_ring = tmp.p3_dynamic_max_by_ring; end
     if isfield(tmp,'p3_slow_max_by_ring'); p3_slow_max_by_ring = tmp.p3_slow_max_by_ring; end
     if isfield(tmp,'p3_total_P_rel_by_ring'); p3_total_P_rel_by_ring = tmp.p3_total_P_rel_by_ring; end
+    if isfield(tmp,'p3_water_loss_by_ring'); p3_water_loss_by_ring = tmp.p3_water_loss_by_ring; end
     if isfield(tmp,'p3_nutrient_budgets'); p3_nutrient_budgets = tmp.p3_nutrient_budgets; end
     B_out         = tmp.B_out;
     O_out         = tmp.O_out;
@@ -1120,6 +1124,7 @@ while ~p3_converged
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
+    p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk, Bio_Zs, RfH_Zs, RfL_Zs);
     p3_rows = 2:j;
     %%% The plants' nutrient stock on day 1, the state the parameter file sets.
     %%% The frame fills its tissue records (TNIT ... TSIL) from day 2, so their
@@ -1397,6 +1402,7 @@ while ~p3_converged
     bg_state.p3_dynamic_max_by_ring = p3_dynamic_max_by_ring;
     bg_state.p3_slow_max_by_ring = p3_slow_max_by_ring;
     bg_state.p3_total_P_rel_by_ring = p3_total_P_rel_by_ring;
+    bg_state.p3_water_loss_by_ring = p3_water_loss_by_ring;
     %%% Gated on by load_compatible_bg_checkpoint, so it must record the
     %%% constraint this loop actually ran under.
     bg_state.p3_observation_constraint = BG_SPINUP_CONSTRAINT;
@@ -1546,6 +1552,28 @@ bg_state_no_erw = build_bg_state([B_out; B_out], [O_out; O_out], ...
     [Mgreserve_H_out; Mgreserve_H_out], [Sireserve_H_out; Sireserve_H_out], id_location);
 if exist('Veg_out','var') && isstruct(Veg_out)
     bg_state_no_erw.Veg_out = Veg_out;   % a perennial stand, for the transient
+end
+%%% The long-term water loss of the ERW layer, which the rain Na seed divides
+%%% by (ERW_Seed_Water_Loss): the ring's mean, or a handed-in state's own.
+%%% The drivers seed on their second day, when their forcing series hold one
+%%% day of transpiration and drainage, so they take it from the state.
+if spinup_handoff_only
+    ERW_seed_water_loss_l_m2_d = NaN;
+    if isfield(p3_handoff_source,'seed_water_loss_l_m2_d')
+        ERW_seed_water_loss_l_m2_d = p3_handoff_source.seed_water_loss_l_m2_d;
+    end
+else
+    ERW_seed_water_loss_l_m2_d = mean(p3_water_loss_by_ring(isfinite(p3_water_loss_by_ring)));
+end
+if isscalar(ERW_seed_water_loss_l_m2_d) && isfinite(ERW_seed_water_loss_l_m2_d) && ...
+        ERW_seed_water_loss_l_m2_d > 0
+    bg_state_no_erw.seed_water_loss_l_m2_d = ERW_seed_water_loss_l_m2_d;
+elseif exist('ERW_rain_chemistry','var') && ~isempty(strtrim(ERW_rain_chemistry.source_file))
+    error('Run_BG_Spinup:NoSeedWaterLoss', ...
+        ['The rain record %s seeds Na from the long-term water loss, which this ' ...
+         'spin-up has not recorded: rerun Phase 3.'], ERW_rain_chemistry.source_file);
+else
+    clear ERW_seed_water_loss_l_m2_d
 end
 P_no_erw = bg_state_no_erw.B_out;
 O_no_erw = bg_state_no_erw.O_out;

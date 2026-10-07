@@ -239,11 +239,18 @@ end
 % Explicit non-negative Na_in from Excel takes precedence.
 if ~exist('Na_in','var') || ~(isfinite(Na_in) && Na_in > 0)
     Na_rain_src = zeros(size(Tw));
+    raw = [];
     if isfield(ERW_TC_const_input, 'I_Na_source') && ~isempty(ERW_TC_const_input.I_Na_source)
         raw = ERW_TC_const_input.I_Na_source(:);
-        Na_rain_src(1:min(end,numel(raw))) = raw(1:min(numel(raw),end));
     elseif isfield(ERW_TC_const_input, 'rain_Na_flux_umol_m2_d')
         raw = ERW_TC_const_input.rain_Na_flux_umol_m2_d(:);
+    end
+    %%% v1.0: a site record's Na flux is one long-term mean
+    %%% (Load_Rain_Chemistry) and holds at every step; padded with zeros to
+    %%% the forcing's length, as a series is, it averaged to almost nothing.
+    if isscalar(raw)
+        Na_rain_src(:) = raw;
+    else
         Na_rain_src(1:min(end,numel(raw))) = raw(1:min(numel(raw),end));
     end
     if any(~isfinite(Na_rain_src)) || any(Na_rain_src < 0)

@@ -65,6 +65,13 @@ if ~E.init
     if isfield(p,'Porg');   C.Porg  = p.Porg;   end
     if isfield(p,'Pcla');   C.Pcla  = p.Pcla;   end
     if isfield(p,'rain_pH_vwm'); C.rain_pH_vwm = p.rain_pH_vwm; end
+    %%% v1.0: a site's rain record and the spin-up's long-term water loss
+    %%% (MAIN_FRAME_BG_ERW_2D), as the 1-D driver hands them on.
+    if isfield(p,'rain_Na_flux_umol_m2_d')
+        C.rain_Na_flux_umol_m2_d = p.rain_Na_flux_umol_m2_d;
+        C.rain_strong_anion_flux_umolc_m2_d = p.rain_strong_anion_flux_umolc_m2_d;
+        C.seed_water_loss_l_m2_d = p.seed_water_loss_l_m2_d;
+    end
     if isfield(p,'bulk_pH_params'); C.bulk_pH_params = p.bulk_pH_params; end
     E.TC_const = C;
 
