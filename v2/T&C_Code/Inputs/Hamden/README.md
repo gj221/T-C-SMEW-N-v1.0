@@ -14,7 +14,7 @@ The same files are kept in two places:
 | Where | Purpose |
 |---|---|
 | `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/Hamden/` | source data the model setup reads (deposition, CO₂, soils, vegetation; NLDAS-2 meteo once downloaded) |
-| `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/` | model-ready records the loaders look for: `Data_Hamden.mat`, `Deposition_Hamden.mat`, `Ca_Data_NOAA_MLO_daily.mat`, and `Rain_Chem_Hamden.mat` (kept, not read; see below) |
+| `T&C-SMEW-N v1.0/v2/T&C_Code/Inputs/` | model-ready records the loaders look for: `Data_Hamden.mat`, `Deposition_Hamden.mat`, `Ca_Data_NOAA_MLO_daily.mat`, and `Rain_Chem_Hamden.mat` (the ERW chemistry's rain record; see below) |
 | `T&C-SMEW-N v1.0/v2/Spatial inputs/Hamden Blue Trail/` | site polygon, land-cover clip, DEM (when downloaded) |
 | `Documents/Model data/Hamden data/` | documentation copy of everything, by data type |
 
@@ -165,12 +165,17 @@ The same files are kept in two places:
   biogeochemistry's deposition terms (replacing the built-in global maps,
   which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus dry, older and
   coarse); P is measured by neither network and stays on the global map;
-  the ERW chemistry takes no rain record for now (the site row leaves
-  `rain_chem_file` empty): the 2-D transient never reads one, so with it
-  the spin-up's handoff check had seeded a rain Na the transient does not
-  use. CT15's Na and strong anions (`Rain_Chem_Hamden.mat`, above) wait on
-  the `keyword_add` decision; nitrate is not counted among the strong
-  anions because it is already N deposition.
+  rain pH, Na and the strong anions SO₄ + Cl through the ERW chemistry,
+  from CT15's record (`Rain_Chem_Hamden.mat`, above), which the site row
+  names (`rain_chem_file`) and both drivers read. Nitrate is not counted
+  among the strong anions because it is already N deposition. The record
+  sets the rain pH (5.20, in place of the default 5.6) and seeds the pore
+  water's Na at the rain steady state: 23.7 µmol m⁻² d⁻¹ over the spin-up
+  ring's water loss of the ERW layer (the transpiration drawn from it plus
+  the leakage), 1.6 L m⁻² d⁻¹ in a short test spin-up, so about 15 µmol/L.
+  After the first day the Na and SO₄ + Cl supply follows the steady
+  closure (`keyword_add` = 1), which holds the seeded inventories; see the
+  open items below for why it stays.
 
 ## Atmospheric CO₂
 
@@ -249,9 +254,15 @@ The same files are kept in two places:
   Phase 3 on, every year, the handoff and the transient start from the
   previous run's end state (`Perennial_Vegetation_*`).
   - The trees close their canopy within a decade and hold it: peak LAI
-    4.8-5.0 through twenty-five coupled years, near Harvard Forest's
-    measured 4.5-5. An open lawn settles at a peak LAI of about 1.2.
-    Beneath the trees, the sward is shaded out.
+    4.8-5.0 through 112 coupled years of a test class seed, near Harvard
+    Forest's measured 4.5-5. An open lawn settles at a peak LAI of about
+    1.2. Beneath the trees, the sward is shaded out.
+  - The carried stand slows Phase 3. After 112 loops that seed had passed
+    the dynamic pools' test but not the slow pools': the fixed Ca and Mg
+    (pools 62 and 70, which exchange with the solution over about 37
+    years) follow the stand's slow build-up of wood. Their drift per ring
+    fell with an e-folding of about 57 loops, so the seed should pass near
+    loop 180 (it passed at 56 when the stand restarted every year).
   - Phase 1 has no biogeochemistry, so the plants take up no nutrients
     there, yet growth still draws on their reserves. Carried through it,
     the grass starved within a year and the trees within four, so each
@@ -331,8 +342,8 @@ The same files are kept in two places:
   `PFT_Hamden_Deciduous_Grass`, the CO2 and deposition records, the
   forcing and windows: ring 2015–2018, the 2019 handoff extension,
   handoff at 2020-01-01 for the simulation and validation runs,
-  2020-01-01 to 2026-09-29; the soil layers and rain chemistry are left
-  to the borrowed row, its default column and none) and
+  2020-01-01 to 2026-09-29, and CT15's rain record; the soil layers are
+  left to the borrowed row, its default column) and
   `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
   base saturation, pH by a 1:1 extract, the exchange selectivities of a
   sandy loam -- Cheshire's USDA texture class, the key the ERW chemistry
@@ -351,7 +362,19 @@ The same files are kept in two places:
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
   output folder and submit again; every cell re-converges from its own
   converged state (Phase 3 only).
-- Open decisions: whether the 2-D transient takes its Na and
-  strong-anion inputs from CT15 rather than the steady closure
-  (`keyword_add`); the base parameter file's exchange constants are the
-  Energy Farm's calibration.
+- Open, and blocking the cluster run: the ERW handoff check refuses
+  Hamden's seed. A short test spin-up (Phase 3 stopped after its second
+  ring) reached the check on 2020-01-01 with dissolved Ca at 28.7 mM,
+  against the check's 20 mM ceiling. The biogeochemistry's own soil
+  solution held 0.06 mM; the rest came from the exchanger. The base
+  parameter file's exchange constants are the Energy Farm's calibration
+  (`bulk_pH_params.appelo`), and at Hamden's measured bulk pH (5.3) they
+  hold a base saturation of 0.70, not the measured 0.94. The seed keeps
+  the measured inventory, so it moves the difference, 4.6 molc m⁻² of Ca
+  and 2.3 of Mg, into the 80 L m⁻² of pore water, and the charge balance
+  then closes with 91 meq/L of strong anions, where CT15's SO₄ + Cl would
+  sustain 28 µeq/L. The Energy Farm's own remedy fits: exchange affinities
+  shifted until the measured base saturation holds at the measured pH.
+  `keyword_add` waits on it: under the closure the seeded anions stay;
+  with CT15's supply alone they would drain on a seven-week timescale and
+  take the pore pH up with them.
