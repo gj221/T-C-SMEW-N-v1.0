@@ -36,10 +36,12 @@
 %% sink of an aggrading forest.  The grass starts from seed, as a sown
 %% crop does.
 %%
-%% DEPOSITION  NADP CT15 wet deposition (Inputs/Rain_Chem_Hamden.mat,
-%% Extract_NTN_Rain_Chemistry: CT15's concentrations times the site's own
-%% NLDAS precipitation) replaces the built-in global maps for N, K, Ca and
-%% Mg; P, which NADP does not measure, keeps the global map.
+%% DEPOSITION  replaces the built-in global maps for N, K, Ca and Mg, year
+%% by year (Inputs/Deposition_Hamden.mat, Build_Site_Deposition): NADP CT15
+%% wet deposition arrives with each day's precipitation (the year's
+%% concentration times the day's rain or snow) and TDep dry deposition
+%% every day (Deposition_Day).  P, which neither measures, keeps the global
+%% map.  No fertiliser, and no fertiliser years.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if ~(numel(Ccrown) == 2 && sum(Ccrown) > 0)
@@ -199,20 +201,29 @@ Mpar_H(2).NPK_res_ini = [0 0 0 0 0 0];
 Mpar_L(1).NPK_res_ini = [18 2.5 18 5 2 10];
 Mpar_L(2).NPK_res_ini = [18 2.5 18 5 2 10];
 
-%% --- No fertiliser; NADP CT15 wet deposition in place of the global maps
-rain_chem_file = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    'Inputs','Rain_Chem_Hamden.mat');
-if ~isfile(rain_chem_file)
-    error('PFT_Hamden_Deciduous_Grass:MissingDeposition', ...
-        'Hamden wet deposition not found: %s (Extract_NTN_Rain_Chemistry).',rain_chem_file);
-end
-hamden_rain = load(rain_chem_file,'Rain_Chem');
+%% --- No fertiliser.  The borrowed maize-soy row lists its maize years in
+%% FertN_years, and the plot-scale frame (MAIN_FRAME_BG_ERW_10mins, every
+%% spin-up stage) refills FertN with 202 kg N/ha in each of them; a stand
+%% that is never fertilised lists none.
 B_IO.FertN = zeros(1,366);  B_IO.FertP = zeros(1,366);  B_IO.FertK = zeros(1,366);
 B_IO.FertCa = zeros(1,366); B_IO.FertMg = zeros(1,366); B_IO.FertSi = zeros(1,366);
-B_IO.DepN = hamden_rain.Rain_Chem.N_flux_g_m2_d;
-B_IO.DepK = hamden_rain.Rain_Chem.K_flux_g_m2_d;
-B_IO.DepCa = hamden_rain.Rain_Chem.Ca_flux_g_m2_d;
-B_IO.DepMg = hamden_rain.Rain_Chem.Mg_flux_g_m2_d;
+B_IO.FertN_years = [];
+%% --- Deposition in place of the global maps for N, K, Ca and Mg: NADP CT15
+%% wet deposition with each day's precipitation and TDep dry deposition
+%% every day, both year by year (Build_Site_Deposition, Deposition_Day);
+%% the constant rates are the 2015-2025 means.
+deposition_file = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
+    'Inputs','Deposition_Hamden.mat');
+if ~isfile(deposition_file)
+    error('PFT_Hamden_Deciduous_Grass:MissingDeposition', ...
+        'Hamden deposition not found: %s (Build_Site_Deposition).',deposition_file);
+end
+hamden_dep = load(deposition_file,'Deposition');
+B_IO.DepN = hamden_dep.Deposition.mean_g_m2_d(1);
+B_IO.DepK = hamden_dep.Deposition.mean_g_m2_d(2);
+B_IO.DepCa = hamden_dep.Deposition.mean_g_m2_d(3);
+B_IO.DepMg = hamden_dep.Deposition.mean_g_m2_d(4);
+B_IO.Dep_events = hamden_dep.Deposition.events;
 
 %% --- Plant reserves: each element at the storage capacity of the stand's
 %% carbohydrate reserve, reserve x (1/leaf - 1/storage) -- the state
@@ -253,5 +264,5 @@ zatm = max([hc_H(1,:) hc_L(1,:)]) + 2;
 clear islot tree_B grass_B reserve_at res_H res_L hamden_rain rain_chem_file
 
 fprintf(['[PFT_Hamden_Deciduous_Grass] trees (Harvard Forest, ZR95 %d mm) over grass ' ...
-    '(Fendt, ZR95 %d mm); cover %s; grass cut 1 Sep (90%% removed); CT15 deposition; ' ...
+    '(Fendt, ZR95 %d mm); cover %s; grass cut 1 Sep (90%% removed); CT15 wet + TDep dry deposition by event; ' ...
     'reference height %g m\n'],ZR95_H(1),ZR95_L(1),mat2str(Ccrown,4),zatm);

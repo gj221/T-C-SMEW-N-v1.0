@@ -112,15 +112,57 @@ The same files are kept in two places:
   Extract_NTN_Rain_Chemistry(ntn,'Inputs/Rain_Chem_Hamden.mat',[],[], ...
       sum(F.Pr(in))/(w(2)-w(1))*365.25);
   ```
-- In the model each element enters once: N, P, K, Ca, Mg through the
-  biogeochemistry's deposition terms (these CT15 values replace the
-  built-in global maps, which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus
-  dry, older and coarse); Na and the strong anions through the ERW
-  chemistry; nitrate is not counted among the strong anions because it
-  is already N deposition. P is not measured by NADP and stays on the
-  global map.
-- NTN is **wet deposition only**. Dry deposition (EPA TDep maps, or CASTNET
-  site ABT147 at Abington) would add to it without overlap; not included.
+- `Deposition_Hamden.mat` (in `Inputs`) — what the biogeochemistry uses,
+  event by event and year by year (`Inputs/Preprocess/Build_Site_Deposition.m`;
+  the model applies it day by day with `Deposition_Day`):
+  - **wet** — CT15's precipitation-weighted mean concentration of each
+    calendar year's valid samples (`Deposition/CT15_wet_concentration_by_year.csv`)
+    times each day's NLDAS precipitation, rain or snow, so it comes with
+    the storms and wet years deposit more. A year counts when its samples
+    span at least 90 % of it and its valid samples caught at least 75 % of
+    its precipitation (NADP's completeness criteria); 2015 (74.5 %), 2019
+    (69 %) and 2020 (50 %) fall short, and they and the record's ends,
+    2014 and 2026, take the pooled concentration of the three nearest
+    complete years;
+  - **dry** — the NADP Total Deposition (TDep, MMF version 2025.01) dry
+    deposition of the 4 km cell holding the parcel (NAD83 / Conus Albers,
+    row 224, column 1066), each year spread evenly over its days
+    (`Deposition/TDep_dry_deposition_parcel_cell_by_year.csv`): measured
+    CASTNET air concentrations times CMAQ deposition velocities, N
+    including HNO₃, particulate NO₃ and NH₄, NH₃ and the modelled gases
+    (NO₂, PAN, N₂O₅, HONO, organic nitrate), S as SO₂ + SO₄. The grids,
+    `{n,s,ca,mg,k,na,cl}_dw-2015.zip` to `-2024.zip` (70 zipped GeoTIFFs,
+    95 MB, from gaftp.epa.gov/castnet/tdep/CURRENT_grids, downloaded
+    6 October 2026), are in the documentation copy
+    (`Atmospheric deposition/TDep dry deposition`); 2025 and 2026 take the
+    2022-2024 mean.
+
+  The year-by-year totals at the site's precipitation are in
+  `Deposition/Hamden_deposition_by_year.csv`. Over 2015-2025
+  (kg ha⁻¹ yr⁻¹):
+
+  | | N | S | Ca | Mg | K | Na | Cl |
+  |---|---|---|---|---|---|---|---|
+  | wet | 2.56 | 0.99 | 0.57 | 0.30 | 0.27 | 2.14 | 3.81 |
+  | dry | 4.03 | 0.61 | 0.28 | 0.13 | 0.09 | 0.74 | 0.70 |
+  | total | 6.59 | 1.59 | 0.85 | 0.42 | 0.36 | 2.89 | 4.51 |
+
+  Dry N falls from 4.6 (2015) to 3.7 (2024) and dry S halves (0.97 to
+  0.45); wet N follows the year's rain, 1.6 in 2015 (764 mm) to 3.4 in
+  2021. To rebuild, from `v2/T&C_Code`, with the TDep zips in `tdep`:
+
+  ```matlab
+  Build_Site_Deposition('Inputs/Hamden/Deposition/NTN-ct15-w-s-mg.csv', tdep, ...
+      'Inputs/Data_Hamden.mat', 41.437, -72.866, 2014:2026, 'Inputs/Deposition_Hamden.mat');
+  ```
+- In the model each element enters once: N, K, Ca and Mg through the
+  biogeochemistry's deposition terms (replacing the built-in global maps,
+  which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus dry, older and
+  coarse); P is measured by neither network and stays on the global map;
+  Na and the strong anions reach the ERW chemistry, for now as CT15's
+  long-term wet values above (`Rain_Chem_Hamden.mat`), pending the
+  `keyword_add` decision; nitrate is not counted among the strong anions
+  because it is already N deposition.
 
 ## Atmospheric CO₂
 
@@ -258,7 +300,10 @@ The same files are kept in two places:
   `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
   base saturation, pH by a 1:1 extract).
 - The vegetation file sets the forcing reference height 2 m above the
-  24 m canopy (26 m).
+  24 m canopy (26 m), loads the event deposition and empties
+  `FertN_years`: the borrowed maize-soy row lists two years in three
+  there, and the plot-scale driver every spin-up stage runs would refill
+  202 kg N ha⁻¹ of fertiliser in each of them.
 - `v2/cluster/field_spinup_hamden.env.example` submits the flux-tracking
   spin-up (one class seed, 94 tracked and replayed cells, 842 from the
   forest); its header lists what must exist first (the forcing and the

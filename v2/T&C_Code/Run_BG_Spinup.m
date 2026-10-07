@@ -520,6 +520,16 @@ if ~spinup_handoff_only && ~p2_done && ~p3_done
     Ca = 400;  % placeholder; Phase 2 does not use Ci/Ca (no VEGGIE_UNIT)
     cd(Directory);
     run(fullfile(Parameter_Directory, [char(MOD_PARAM_input.MOD_PARAM), '.m']));
+    %%% The row's vegetation override, as MAIN_FRAME_BG_ERW_10mins applies it in
+    %%% Phases 1 and 3: Phase 2 then equilibrates with the site's own roots,
+    %%% deposition and management, not the borrowed row's.  A row without one
+    %%% runs as before.
+    if istable(MOD_PARAM_input) && ...
+            ismember('pft_override',MOD_PARAM_input.Properties.VariableNames) && ...
+            strlength(strtrim(string(MOD_PARAM_input.pft_override))) > 0
+        run(fullfile(Parameter_Directory, ...
+            [char(strtrim(string(MOD_PARAM_input.pft_override))) '.m']));
+    end
     cd(current_directory);
     %%% The legacy standalone spin-up runs at unit crown (Biogeo_Spin_Up.m sets
     %%% Ccrown=1) so prescribed litter return and plant uptake are both active.
@@ -549,6 +559,28 @@ if ~spinup_handoff_only && ~p2_done && ~p3_done
     if isfield(B_IO_p2,'fert_frac_NO3'); B_IO_p2.fert_frac_NO3 = zeros(1,366); end
     if isfield(B_IO_p2,'fert_frac_NH4'); B_IO_p2.fert_frac_NH4 = zeros(1,366); end
     if isfield(B_IO_p2,'fert_frac_urea'); B_IO_p2.fert_frac_urea = zeros(1,366); end
+    %%% Event deposition (B_IO.Dep_events, Deposition_Day): Phase 2 runs at the
+    %%% ring's constant mean forcing, so it takes the ring's mean daily
+    %%% deposition -- each ring year's dry deposition over its days and its wet
+    %%% deposition on its precipitation, weighted as Phase 1's averages are.
+    if isfield(B_IO_p2,'Dep_events') && ~isempty(B_IO_p2.Dep_events)
+        p2_dep_total = zeros(1,6);
+        p2_dep_days = 0;
+        for p2_dep_year = reshape(spinup_cycle_years,1,[])
+            p2_dep_mask = (spinup_all_yr == p2_dep_year);
+            p2_dep_n = nnz(p2_dep_mask)*dth/24;
+            [~,p2_dep_rate] = Deposition_Day(B_IO_p2,[p2_dep_year 1 1 0 0 0], ...
+                sum(spinup_all_met.Pr(p2_dep_mask))*dth,p2_dep_n);
+            p2_dep_total = p2_dep_total+p2_dep_n*p2_dep_rate;
+            p2_dep_days = p2_dep_days+p2_dep_n;
+        end
+        p2_dep_rate = p2_dep_total/p2_dep_days;
+        B_IO_p2.DepN = p2_dep_rate(1);  B_IO_p2.DepK = p2_dep_rate(3);
+        B_IO_p2.DepCa = p2_dep_rate(4); B_IO_p2.DepMg = p2_dep_rate(5);
+        B_IO_p2 = rmfield(B_IO_p2,'Dep_events');
+        fprintf(['  Phase 2 deposition, the ring''s daily mean [g/m2/d]: N %.4g, ' ...
+            'K %.4g, Ca %.4g, Mg %.4g\n'],p2_dep_rate([1 3 4 5]));
+    end
 
     if any(logical(Ccrown))
         OPT_BfixN_p2 = max(ParEx_L(logical(Ccrown)).bfix);
@@ -1073,7 +1105,12 @@ while ~p3_converged
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
-    p3_rows = 2:j;
+    %%% The budget runs from the first day the frame computes (row 2) to the
+    %%% last.  Row 1 is the parameter file's initial state, whose tissue
+    %%% nutrients (TNIT ... TSIL) the frame never fills, so a stand that starts
+    %%% with wood would otherwise gain its whole nutrient stock on day 2.
+    p3_r0 = 2;
+    p3_rows = p3_r0+1:j;
     p3_cover = Ccrown_t(p3_rows,:);
     p3_litter_P = sum(ISOIL_H(p3_rows,:,13:15),3) + sum(ISOIL_L(p3_rows,:,13:15),3);
     p3_reserve_harvest_P = reshape(AgrHarNut_H(p3_rows,:,2),numel(p3_rows),cc) + ...
@@ -1088,10 +1125,10 @@ while ~p3_converged
     p3_p_terms.harvest = sum(p3_cover.*(TexP_H(p3_rows,:) + TexP_L(p3_rows,:) - ...
         p3_litter_P + p3_reserve_harvest_P),'all');
     p3_p_terms.leaching = sum(LEAK_P(p3_rows) + LEAK_DOP(p3_rows));
-    p3_p_terms.soil_start = sum(P(1,35:47));
+    p3_p_terms.soil_start = sum(P(p3_r0,35:47));
     p3_p_terms.soil_end = sum(P(j,35:47));
-    p3_p_terms.plant_start = sum(CcrownFIX.*(TPHO_H(1,:) + TPHO_L(1,:) + ...
-        Preserve_H(1,:) + Preserve_L(1,:)));
+    p3_p_terms.plant_start = sum(CcrownFIX.*(TPHO_H(p3_r0,:) + TPHO_L(p3_r0,:) + ...
+        Preserve_H(p3_r0,:) + Preserve_L(p3_r0,:)));
     p3_p_terms.plant_end = sum(Ccrown_t(j,:).*(TPHO_H(j,:) + TPHO_L(j,:) + ...
         Preserve_H(j,:) + Preserve_L(j,:)));
     if lateral_replay_spinup
@@ -1119,6 +1156,12 @@ while ~p3_converged
         Spinup_Fertilizer_Series(B_IO.FertMg,jDay(p3_rows),cycle_year,'Mgrate'), ...
         Spinup_Fertilizer_Series(B_IO.FertSi,jDay(p3_rows),cycle_year,'Sirate')};
     p3_dep = [B_IO.DepN B_IO.DepK B_IO.DepCa B_IO.DepMg B_IO.DepSi];
+    %%% With an event record the deposition varies day by day (Deposition_Day);
+    %%% the budget takes what the frame applied (Dep_d: N P K Ca Mg Si).
+    p3_event_dep = isfield(B_IO,'Dep_events') && ~isempty(B_IO.Dep_events);
+    if p3_event_dep
+        p3_dep_sum = sum(Dep_d(p3_rows,[1 3 4 5 6]),1);
+    end
     p3_uplift = [0 B_IO.Tup_K B_IO.Tup_Ca B_IO.Tup_Mg B_IO.Tup_Si];
     p3_tex_h = {TexN_H,TexK_H,TexCa_H,TexMg_H,TexSi_H};
     p3_tex_l = {TexN_L,TexK_L,TexCa_L,TexMg_L,TexSi_L};
@@ -1139,7 +1182,11 @@ while ~p3_converged
                 p3_names{p3_x});
         end
         p3_terms.fertilizer = sum(p3_fert{p3_x});
-        p3_terms.deposition = numel(p3_rows)*p3_dep(p3_x);
+        if p3_event_dep
+            p3_terms.deposition = p3_dep_sum(p3_x);
+        else
+            p3_terms.deposition = numel(p3_rows)*p3_dep(p3_x);
+        end
         p3_terms.uplift = numel(p3_rows)*p3_uplift(p3_x);
         p3_terms.planting = sum(p3_cover.*(PlantingNut_H(p3_rows,:,p3_n_i) + PlantingNut_L(p3_rows,:,p3_n_i)),'all');
         p3_terms.fixation = strcmp(p3_names{p3_x},'N')*sum(BfixN(p3_rows));
@@ -1150,9 +1197,9 @@ while ~p3_converged
         %%% v1.0 gas partition (BIOGEOCHEMISTRY_DYNAMIC3): N2 from denitrification and
         %%% total N2O (nitrification + denitrification); there is no NO pathway.
         p3_terms.gaseous_loss = strcmp(p3_names{p3_x},'N')*sum(VOL(p3_rows)+N2flx(p3_rows)+N2Oflx(p3_rows));
-        p3_terms.soil_start = sum(P(1,p3_soil_idx{p3_x}));
+        p3_terms.soil_start = sum(P(p3_r0,p3_soil_idx{p3_x}));
         p3_terms.soil_end = sum(P(j,p3_soil_idx{p3_x}));
-        p3_terms.plant_start = sum(CcrownFIX.*(p3_plant_h{p3_x}(1,:) + p3_plant_l{p3_x}(1,:) + p3_reserve_h{p3_x}(1,:) + p3_reserve_l{p3_x}(1,:)));
+        p3_terms.plant_start = sum(CcrownFIX.*(p3_plant_h{p3_x}(p3_r0,:) + p3_plant_l{p3_x}(p3_r0,:) + p3_reserve_h{p3_x}(p3_r0,:) + p3_reserve_l{p3_x}(p3_r0,:)));
         p3_terms.plant_end = sum(Ccrown_t(j,:).*(p3_plant_h{p3_x}(j,:) + p3_plant_l{p3_x}(j,:) + p3_reserve_h{p3_x}(j,:) + p3_reserve_l{p3_x}(j,:)));
         if lateral_replay_spinup
             p3_lat_is = ismember(lat_rep.pool_idx,p3_soil_idx{p3_x});
@@ -1163,7 +1210,15 @@ while ~p3_converged
             p3_terms,P3_NUTRIENT_BUDGET_ABS_TOL,P3_NUTRIENT_BUDGET_REL_TOL);
         p3_nutrient_budgets.(p3_names{p3_x}).terms = p3_terms;
         if ~p3_nutrient_budgets.(p3_names{p3_x}).closed
-            error('Run_BG_Spinup:NutrientBudgetNotClosed','Phase 3 loop %d %s residual %.6g g m-2 exceeds %.6g.',p3_loop,p3_names{p3_x},p3_nutrient_budgets.(p3_names{p3_x}).residual,p3_nutrient_budgets.(p3_names{p3_x}).tolerance);
+            error('Run_BG_Spinup:NutrientBudgetNotClosed', ...
+                ['Phase 3 loop %d %s residual %.6g g m-2 exceeds %.6g (inputs: fertiliser %.6g, ' ...
+                 'deposition %.6g, uplift %.6g, planting %.6g, fixation %.6g; outputs: harvest %.6g, ' ...
+                 'leaching %.6g, gas %.6g; soil %.6g -> %.6g; plant %.6g -> %.6g).'], ...
+                p3_loop,p3_names{p3_x},p3_nutrient_budgets.(p3_names{p3_x}).residual, ...
+                p3_nutrient_budgets.(p3_names{p3_x}).tolerance,p3_terms.fertilizer, ...
+                p3_terms.deposition,p3_terms.uplift,p3_terms.planting,p3_terms.fixation, ...
+                p3_terms.harvest,p3_terms.leaching,p3_terms.gaseous_loss,p3_terms.soil_start, ...
+                p3_terms.soil_end,p3_terms.plant_start,p3_terms.plant_end);
         end
     end
     if ~p3_p_budget.closed

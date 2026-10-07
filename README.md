@@ -1163,7 +1163,19 @@ drivers alike (the pattern of `PFT_Prairie_Margin`); and a non-empty
 `rain_chem_file` makes the 10-minute driver pass the record's Na and
 strong-anion (SO4 + Cl) deposition, `Rain_Chem_<Location>.mat`, to the
 ERW chemistry. N, K, Ca and Mg enter through the biogeochemistry's
-deposition terms only, so each element enters once. `Tests/test_spinup_meteo_loader.m` (10
+deposition terms only, so each element enters once. They are constant
+daily rates unless the vegetation script gives `B_IO.Dep_events`, a
+year-by-year event record (`Build_Site_Deposition`): then they arrive wet
+with each day's precipitation (the year's precipitation-weighted mean
+concentration times the day's rain or snow) and dry every day (the
+year's dry deposition spread over its days), `Deposition_Day`. Both
+frames hand `BIOGEO_UNIT` the day's rates and record them (`Dep_d`),
+Phase 2 takes the ring's mean, and the Phase 3 budgets take what the
+frame applied; every other site keeps its constant rates
+(`test_event_deposition`). A vegetation script for a stand that is never
+fertilised must also empty `B_IO.FertN_years`: the 10-minute driver
+refills `FertN` with 202 kg N ha-1 in every year the borrowed maize-soy
+row lists there, two years in three. `Tests/test_spinup_meteo_loader.m` (10
 checks) covers the slicing, complete-year detection, the cycle-year
 validator and the refusals. The topographically stratified subsample
 (`Select_Topographic_Subsample`) uses three quantile bins per terrain
@@ -1243,6 +1255,24 @@ the MOD and ERW rows with their forcing, meteo and transient windows, and
 the seed), so a task resumes only its own work and reuses only a state
 of the same run, and a state records the instant it hands off at, which
 `Run_One_Subfield` checks against its own first hour.
+
+The first spin-up of a site with its own vegetation (Hamden: a mature
+forest over grass on a 2 m, 14-layer column) surfaced three more, all
+fixed; the first two change nothing on the Kantola rows, the third only
+the day the budgets start. The base parameter file's default
+initial soil moisture is a 20-layer profile, so a cold start on any other
+column stopped in its first hour; such a column now starts at its
+layers' field capacity. Phase 2 ran only the base parameter file, not
+the row's vegetation override that the driver runs in Phases 1 and 3, so
+it equilibrated with the borrowed maize-soy roots, deposition and
+fertiliser years; it now runs the override as the driver does. And the
+Phase-3 nutrient budgets took their starting storage from row 1, the
+parameter file's initial state, whose tissue nutrients (`TNIT` ... `TSIL`)
+the driver never fills: harmless for a crop sown into bare soil, but a
+stand that starts with wood (Hamden's 11 kg C m-2) gained its whole
+nutrient stock, 72 g N m-2, on the second day. The budgets now run from
+the first day the driver computes (row 2), as the driver's own nutrient
+check does, and a budget that fails reports every term.
 
 **Cost, measured on one Control 2 cell with the Kantola case (six cycle
 years 2009-2014, a 2016-01-01 handoff after the 2015 extension), single
@@ -1330,7 +1360,9 @@ window and, once downloaded, the 1 m DEM tile are in
   Cheshire-Holyoke units, Wilbraham (pH 5.5, OM 4.5 %) on the 290 cells
   of the wet Wilbraham-Menlo unit (`Cell_Review_SSURGO_and_NLCD.csv`).
   Cheshire is very deep and well drained (bedrock below 1.8 m), so the
-  soil column is 2 m in 14 layers with free drainage.
+  soil column is 2 m in 14 layers with free drainage; a cold start fills
+  it at each layer's field capacity, where the borrowed row's default
+  moisture profile has 20 layers and had stopped the spin-up's first hour.
 - **Soil chemistry**: SSURGO cannot supply the exchanger (Cheshire has
   no CEC7, and an ECEC of 1.6 cmolc kg-1 below its own sum of bases, 10)
   and SoilGrids has CEC at pH 7 but no base saturation, so the
@@ -1362,15 +1394,24 @@ window and, once downloaded, the 1 m DEM tile are in
   to LAI 0.5 on 1 September with 90 % of the cut removed; and the forcing
   reference height 2 m above the 24 m canopy (`zatm` 26 m, where the
   base file's 8 m would put it below the zero-plane displacement).
-- **Deposition**: NADP NTN CT15 wet deposition
-  (`Extract_NTN_Rain_Chemistry`: the precipitation-weighted mean
-  concentration of the valid samples times the site's own precipitation
-  over the same window, the NLDAS forcing's 1,098 mm/yr, not the Abington
-  gauge's 1,415, so the deposition rides on the rain the model receives:
-  N 2.68, S 0.99, Ca 0.57, Mg 0.28, K 0.26 and Na 1.99 kg ha-1 yr-1)
-  replaces the global maps for N, K, Ca and Mg; Na and the strong anions
-  reach the ERW chemistry; P keeps the global map; dry deposition is not
-  included.
+- **Deposition**, event by event and year by year in place of the global
+  maps for N, K, Ca and Mg (`Inputs/Deposition_Hamden.mat`,
+  `Build_Site_Deposition`, `Deposition_Day`). Wet: NADP NTN CT15's
+  precipitation-weighted mean concentration of each year's valid samples
+  times each day's NLDAS precipitation, so it comes with the storms and
+  wet years deposit more; a year short of NADP's completeness criteria
+  (2015, 2019, 2020, and 2014 and 2026 at the record's ends) pools the
+  three nearest complete years. Dry: TDep's (MMF 2025.01) dry deposition
+  of the parcel's 4 km cell, measured air concentrations times modelled
+  deposition velocities, NH3 and the gaseous N included, spread evenly
+  over each day; 2025-2026 take the 2022-2024 mean. Over 2015-2025
+  (kg ha-1 yr-1): N 6.6 (wet 2.6, dry 4.0), S 1.6 (1.0, 0.6), Ca 0.85,
+  Mg 0.42, K 0.36; dry S halves over the decade (0.97 to 0.45) and dry N
+  falls a fifth. The wet-only record had given N 2.7. P keeps the global
+  map. The ERW chemistry's Na and strong anions still take CT15's
+  long-term wet values at the site's precipitation (`Rain_Chem_Hamden.mat`)
+  pending the `keyword_add` decision. No fertiliser, and no fertiliser
+  year (`FertN_years` empty).
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
