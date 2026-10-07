@@ -86,18 +86,9 @@ The same files are kept in two places:
     narrower and its dew point 2.5 C higher, so its summer maximum vapour
     pressure deficit is about 40 % lower.
   - Its shortwave is 15 % higher.
-- **For the Bouchet run: CW3E**, the 1-km, 1-hourly forcing downscaled
-  from NLDAS-2/HRRR with Stage IV and PRISM (Pan 2025,
-  doi:10.5281/zenodo.14714512).
-  - It is fetched for the parcel's 1 km cell from HydroFrame's
-    `hf_hydrodata` service, 2015-01-01 to 2026-09-30, by
-    `Inputs/Preprocess/Fetch_CW3E_Point.py`. That needs the account
-    holder's HydroFrame API PIN, registered on the machine.
-  - The fetch writes the converter's point-series format. The hour labels
-    and units are checked against NLDAS-2 before `Data_Hamden.mat` and the
-    deposition record are rebuilt from it.
-  - Local tests keep NLDAS-2. NLDAS-3 (1 km) is set aside while it is in
-    beta.
+- **NLDAS-2 for every run**, the Bouchet field run included. The 1 km
+  alternatives are set aside: NLDAS-3 while it is in beta, and CW3E,
+  which does not cover Connecticut.
 
 ## Atmospheric deposition
 
