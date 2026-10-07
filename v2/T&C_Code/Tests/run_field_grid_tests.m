@@ -21,5 +21,6 @@ test_spinup_handoff_only;
 test_field_spinup_warm_start;
 test_cell_land_cover_and_soil;
 test_hamden_field_configuration;
+test_event_deposition;
 test_build_tc_forcing_from_nldas2;
 end
