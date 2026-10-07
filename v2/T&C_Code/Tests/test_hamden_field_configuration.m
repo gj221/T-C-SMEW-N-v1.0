@@ -9,6 +9,9 @@ function test_hamden_field_configuration()
 %%   2  a per-cell file without base saturation is refused: the site seeds
 %%      the exchanger from it (f_CEC_inventory), and the Kantola row's 80 %
 %%      would otherwise stand in
+%%   0  the process grid: 4.5 m squares kept by the majority rule on the
+%%      lattice of least misrepresented area, as the cluster builds it
+%%      (the environment example's TC_CELL_M and TC_MIN_COVERAGE)
 %%   3  the site's own per-cell file: every cell runs the site's settings
 %%      over the borrowed case (location, 2 m soil column with free
 %%      drainage, vegetation file, CO2 and deposition records, the 2020
@@ -46,10 +49,25 @@ n_pass = 0; n_fail = 0;
         end
     end
 
-grid_dir = fullfile(code,'Inputs','Field_Spinup','Hamden_calibrated_grid');
+grid_dir = fullfile(code,'Inputs','Field_Spinup','Hamden');
 shp = fullfile(v2,'Spatial inputs','Hamden Blue Trail','Hamden_Blue_Trail_Parcel.shp');
 agro = fullfile(grid_dir,'Cell_Agronomic_Hamden_Blue_Trail_Parcel_polygon_01.csv');
 tmp = tempname; mkdir(tmp); cleanup = onCleanup(@() rmdir(tmp,'s'));
+grid = {'GridCellSizeM',4.5,'MinCoverage','majority'};
+
+%% --- 0 --------------------------------------------------------------------
+env = fileread(fullfile(v2,'cluster','field_spinup_hamden.env.example'));
+check('the cluster builds the same grid (TC_CELL_M=4.5, TC_MIN_COVERAGE=majority)', ...
+    ~isempty(regexp(env,'(?m)^TC_CELL_M=4\.5\s','once')) && ...
+    ~isempty(regexp(env,'(?m)^TC_MIN_COVERAGE=majority\s','once')) && ...
+    contains(env,'Inputs/Field_Spinup/Hamden/Cell_Agronomic_'));
+setups = Build_Shapefile_Grid_Setups(shp,4.5,[],'majority'); topo = setups(1);
+g = topo.grid_calibration;
+check('the grid: every kept square more than half in the parcel, 2.1 % misrepresented', ...
+    topo.N_cells == 1156 && all(topo.cell_overlap_fraction > 0.5) && ...
+    abs(g.misrepresented_area_m2-498.1) < 0.5 && abs(g.missed_field_area_m2-244.0) < 0.5 && ...
+    abs(sum(topo.cell_overlap_area_m2)+topo.field_missed_area_m2-topo.field_area_m2) < 1e-6, ...
+    sprintf('%d cells, misrepresented %.1f m2',topo.N_cells,g.misrepresented_area_m2));
 
 %% --- 1 --------------------------------------------------------------------
 M = Read_Parameter_Columns(fullfile(grid_dir,'Hamden_MOD_columns.csv'));
@@ -68,8 +86,8 @@ check('a column file without a value is refused', raises(@() ...
     'Read_Parameter_Columns:BadFile'));
 
 %% --- 2 --------------------------------------------------------------------
-dry = {'Method','per_cell','MODParamColumns',M,'ERWParamColumns',E, ...
-    'OutputFile',fullfile(tmp,'CellBGStates.mat'),'DryRun',true};
+dry = [grid {'Method','per_cell','MODParamColumns',M,'ERWParamColumns',E, ...
+    'OutputFile',fullfile(tmp,'CellBGStates.mat'),'DryRun',true}];
 T = readtable(agro);
 no_bs = removevars(T,{'baseline_bs_Ca_fraction','baseline_bs_Mg_fraction','baseline_bs_K_fraction'});
 agro_no_bs = fullfile(tmp,'agronomic_no_bs.csv'); writetable(no_bs,agro_no_bs);
@@ -100,7 +118,7 @@ for c = 1:N
         m.Psan == r.baseline_sand_fraction && ...   % the row holds the cover to 12 digits
         max(abs(str2num(char(m.Ccrown)) - [r.cover_tree r.cover_grass])) < 1e-11; %#ok<ST2NM>
 end
-check(sprintf('all %d cells run the site''s MOD settings',N),N == 1224 && mod_ok);
+check(sprintf('all %d cells run the site''s MOD settings',N),N == topo.N_cells && mod_ok);
 check('every cell''s exchanger is the representative one, pH by a 1:1 extract, no rock',erw_ok);
 check('every cell keeps its own map unit''s pH and OM and its own land cover',own_ok);
 pHs = arrayfun(@(ci) ci.MOD_PARAM.PH,CI);
@@ -160,9 +178,9 @@ check('the Hamden vegetation, mowing and CT15 deposition are assembled', ...
 dem = fullfile(v2,'Spatial inputs','Hamden Blue Trail','DEM');
 if isfolder(dem) && ~isempty(dir(fullfile(dem,'*.tif')))
     plan_dir = fullfile(tmp,'plan');
-    plan = readtable(Run_Field_Cell_Spinup(shp,agro,'MODParamColumns',M,'ERWParamColumns',E, ...
-        'FieldDEM',dem,'OutputFile',fullfile(plan_dir,'CellBGStates.mat'),'Stage','plan'), ...
-        'TextType','string');
+    plan = readtable(Run_Field_Cell_Spinup(shp,agro,grid{:},'MODParamColumns',M, ...
+        'ERWParamColumns',E,'FieldDEM',dem,'OutputFile',fullfile(plan_dir,'CellBGStates.mat'), ...
+        'Stage','plan'),'TextType','string');
     tracked = logical(plan.is_tracked);
     check('the flux-tracking plan: one class, ~10 % tracked, the rest to the forest', ...
         height(plan) == N && all(plan.class_index == 1) && nnz(plan.is_class_seed) == 1 && ...

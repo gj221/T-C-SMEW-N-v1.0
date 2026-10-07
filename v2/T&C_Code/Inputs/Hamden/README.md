@@ -90,13 +90,28 @@ The same files are kept in two places:
   (Abington, CT), weekly wet-only samples, concentrations in mg/L
   (−9 = missing), 2014-12-30 to 2026-05-19, 594 weeks.
 - `Deposition/CT15_wet_deposition_summary.csv` and `Rain_Chem_Hamden.mat` —
-  derived with `Inputs/Preprocess/Extract_NTN_Rain_Chemistry.m` by NADP's
-  convention: precipitation-weighted mean concentration of the 424 valid
-  samples (validity code `w`, all ions and pH present) × all gauge
-  precipitation (1,415 mm/yr; 82 % of it sampled validly).
-  Rain pH 5.20. Wet deposition (kg ha⁻¹ yr⁻¹): N 3.45 (NH₄-N + NO₃-N),
-  S 1.28, Ca 0.74, Mg 0.36, K 0.33, Na 2.57. Strong-acid anions
-  (SO₄ + Cl) 14.7 µeq/L = 56.9 µmolc m⁻² d⁻¹.
+  derived with `Inputs/Preprocess/Extract_NTN_Rain_Chemistry.m`: the
+  precipitation-weighted mean concentration of the 424 valid samples
+  (validity code `w`, all ions and pH present), NADP's convention, times
+  the site's own precipitation over the same window (30 December 2014 to
+  19 May 2026): 1,098 mm/yr from the NLDAS-2 forcing, `Data_Hamden.mat`,
+  where CT15's gauge, in north-eastern Connecticut, caught 1,415 mm/yr
+  (82 % of it sampled validly). The concentrations are regional and the
+  amount local, as in NADP's own deposition maps, and the deposition then
+  rides on the rain the model receives. Rain pH 5.20. Wet deposition
+  (kg ha⁻¹ yr⁻¹): N 2.68 (NH₄-N + NO₃-N), S 0.99, Ca 0.57, Mg 0.28,
+  K 0.26, Na 1.99 (at the gauge's precipitation: N 3.45, S 1.28, Ca 0.74,
+  Mg 0.36, K 0.33, Na 2.57). Strong-acid anions (SO₄ + Cl) 14.7 µeq/L =
+  44.1 µmolc m⁻² d⁻¹. To rebuild, from `v2/T&C_Code`:
+
+  ```matlab
+  ntn = 'Inputs/Hamden/Deposition/NTN-ct15-w-s-mg.csv';
+  w = Extract_NTN_Rain_Chemistry(ntn,'').window;
+  F = load('Inputs/Data_Hamden.mat','Date','Pr');
+  in = F.Date > w(1) & F.Date <= w(2);
+  Extract_NTN_Rain_Chemistry(ntn,'Inputs/Rain_Chem_Hamden.mat',[],[], ...
+      sum(F.Pr(in))/(w(2)-w(1))*365.25);
+  ```
 - In the model each element enters once: N, P, K, Ca, Mg through the
   biogeochemistry's deposition terms (these CT15 values replace the
   built-in global maps, which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus
@@ -136,8 +151,8 @@ The same files are kept in two places:
   and calls every horizon strongly acid). The soil column is 2 m in 14
   layers with free drainage.
 - **pH and OM per cell** from each cell's own map unit (dominant
-  component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (854 cells); Wilbraham
-  pH 5.5, OM 4.5 % (370 cells). pH is 1:1 water, so the model's
+  component, 0-30 cm): Cheshire pH 5.3, OM 2.7 % (798 cells); Wilbraham
+  pH 5.5, OM 4.5 % (358 cells). pH is 1:1 water, so the model's
   extraction ratio is 1.
 - **Exchanger (CEC and base saturation)**, one representative set for
   every cell, `Soils/Representative_soil_chemistry.csv`, derived by
@@ -192,9 +207,10 @@ The same files are kept in two places:
 - Per-cell cover (tree crown, open grass, urban, water, bare, rock) comes
   from this map by exact area overlap of each grid cell with every pixel
   it touches (`Cell_Land_Cover`, classes split by `NLCD_Cover_Class_Table`),
-  or is set by hand (`Cell_Land_Cover(...,'manual',...)`). On the
-  calibrated grid: tree 0.980, grass 0.018, urban 0.002 (area-weighted),
-  matching the parcel's shares.
+  or is set by hand (`Cell_Land_Cover(...,'manual',...)`). The parcel:
+  tree 0.980, grass 0.018, urban 0.002; the grid's kept squares, inside
+  the parcel: 0.982, 0.016, 0.002 (the 1 % of the parcel in dropped
+  boundary squares is grassier than the rest).
 
 ## DEM
 
@@ -213,9 +229,19 @@ The same files are kept in two places:
 
 ## Model configuration (Bouchet)
 
-- Grid: the calibrated grid (95 % coverage rule), 4.48 m, 1,224 cells.
+- Grid: 4.5 m squares, each kept when more than half of it lies in the
+  parcel, on the lattice (rotation 19.31 degrees, along the parcel's
+  115 m and 71 m sides, and offset) that minimises the misrepresented
+  area: 1,156 squares, 254 m2 of outside land taken in and 244 m2 of the
+  parcel left out, 2.1 % of the parcel (the 95 % coverage rule: 1,224
+  squares of 4.48 m, 1,179 m2 taken in, 5.0 %). 4.5 m is inside the
+  terrain's converged range: the mean slope, its spread, the wetness
+  index's spread and the relief change by less than 5 % at every
+  refinement below 5 m (`Run_Topographic_Grid_Convergence`). The cluster
+  builds the same grid (`TC_CELL_M=4.5`, `TC_MIN_COVERAGE=majority`); the
+  per-cell file is tied to it by cell id and centre.
 - Per-cell file:
-  `Inputs/Field_Spinup/Hamden_calibrated_grid/Cell_Agronomic_Hamden_Blue_Trail_Parcel_polygon_01.csv`
+  `Inputs/Field_Spinup/Hamden/Cell_Agronomic_Hamden_Blue_Trail_Parcel_polygon_01.csv`
   (Cheshire texture, each map unit's pH and OM, the representative
   exchanger, NLCD cover), with
   `Cell_Review_SSURGO_and_NLCD.csv` beside it (every cell's own SSURGO map
@@ -231,7 +257,7 @@ The same files are kept in two places:
 - The vegetation file sets the forcing reference height 2 m above the
   24 m canopy (26 m).
 - `v2/cluster/field_spinup_hamden.env.example` submits the flux-tracking
-  spin-up (one class seed, 122 tracked and replayed cells, 1,102 from the
+  spin-up (one class seed, 116 tracked and replayed cells, 1,040 from the
   forest); its header lists what must exist first (the forcing and the
   DEM window).
 - **Warm start** once the site observations arrive: put them in the
@@ -239,10 +265,7 @@ The same files are kept in two places:
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
   output folder and submit again; every cell re-converges from its own
   converged state (Phase 3 only).
-- Open decisions: whether the wet deposition should be CT15's
-  concentrations times the site's own precipitation (NLDAS mean 1,111
-  mm/yr) rather than CT15's gauge (1,415 mm/yr); whether the 2-D
-  transient takes its Na and strong-anion inputs from CT15 rather than
-  the steady closure
+- Open decisions: whether the 2-D transient takes its Na and
+  strong-anion inputs from CT15 rather than the steady closure
   (`keyword_add`); the base parameter file's exchange constants are the
   Energy Farm's calibration.

@@ -1,9 +1,10 @@
 function files = Write_Field_Agronomic_Templates(shape_file,output_directory, ...
-        cell_size_m,feature_indices,required_field_fraction)
-%% required_field_fraction: optional grid coverage rule passed to
-%% Build_Shapefile_Grid_Setups (default 0.95; lower only for a coarse
-%% diagnostic grid, and then use the same value everywhere downstream).
-if nargin < 5; required_field_fraction = []; end
+        cell_size_m,feature_indices,coverage_rule)
+%% coverage_rule: optional grid coverage rule passed to
+%% Build_Shapefile_Grid_Setups (default 0.95; 'majority' with a prescribed
+%% width; lower fractions only for a coarse diagnostic grid), and then the
+%% same rule everywhere downstream.
+if nargin < 5; coverage_rule = []; end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Write one cell input template for each disconnected shapefile polygon.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -32,7 +33,7 @@ spinup_directory = fileparts(mfilename('fullpath'));
 code_directory = fullfile(fileparts(spinup_directory),'T&C_Code');
 addpath(code_directory);
 setups = Build_Shapefile_Grid_Setups(shape_file,cell_size_m,feature_indices, ...
-    required_field_fraction);
+    coverage_rule);
 [~,shape_name] = fileparts(shape_file);
 files = cell(numel(setups),1);
 for p = 1:numel(setups)

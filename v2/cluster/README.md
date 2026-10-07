@@ -122,7 +122,12 @@ the `TC_FORCING_FILE` ... `TC_TRANSIENT_END` variables still take
 precedence. Each cell's own soil and land cover come only from
 `TC_AGRONOMIC_FILE`: a column file that sets them is refused, and so is a
 column nothing reads. `field_spinup_hamden.env.example` is the Hamden
-site set up this way.
+site set up this way, on a 4.5 m grid under the majority rule
+(`TC_CELL_M=4.5`, `TC_MIN_COVERAGE=majority`: each square kept when more
+than half of it lies in the field, on the lattice of least misrepresented
+area; main README, *The majority rule*). The per-cell file must be
+written on the same grid (`Run_Hamden_Field_Inputs`); the plan refuses
+one whose cell ids or centres differ.
 
 Once site observations replace a field's provisional soil inputs, point
 `TC_WARM_START_STATES` at the first run's `CellBGStates.mat` (copied out

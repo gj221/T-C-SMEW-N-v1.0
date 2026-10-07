@@ -1,4 +1,5 @@
-function Rain_Chem = Extract_NTN_Rain_Chemistry(ntn_file, out_file, start_dn, end_dn)
+function Rain_Chem = Extract_NTN_Rain_Chemistry(ntn_file, out_file, start_dn, end_dn, ...
+    site_precip_mm_yr)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Extract_NTN_Rain_Chemistry
 %%
@@ -19,6 +20,13 @@ function Rain_Chem = Extract_NTN_Rain_Chemistry(ntn_file, out_file, start_dn, en
 %%
 %% start_dn, end_dn (optional) restrict the window to whole samples whose
 %% collection began and ended inside it.
+%%
+%% site_precip_mm_yr (optional): the site's own mean precipitation over the
+%% same window [mm/yr].  The concentrations are regional and the amount is
+%% local -- NADP's deposition maps take the concentration from the network
+%% and the precipitation from the place -- so the fluxes become the PWM
+%% concentrations times this precipitation, the rain the model receives,
+%% instead of the gauge's.  Both precipitations are recorded.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 opts = detectImportOptions(ntn_file, 'Delimiter', ',');
 opts = setvartype(opts, intersect({'dateOn','dateOff','valcode','invalcode','siteID'}, ...
@@ -52,7 +60,18 @@ w = ppt(valid);
 pwm = sum(conc(valid,:).*w, 1) ./ sum(w);           % [mg/L]
 H_pwm = sum(10.^(-T.ph(valid)).*w) / sum(w);        % [mol/L]
 days = max(off) - min(on);
-P_total = sum(ppt);                                 % [mm] = [L/m2]
+P_gauge = sum(ppt);                                 % [mm] = [L/m2]
+P_total = P_gauge;
+amount = 'all gauge precipitation';
+if nargin >= 5 && ~isempty(site_precip_mm_yr)
+    if ~(isnumeric(site_precip_mm_yr) && isscalar(site_precip_mm_yr) && ...
+            isfinite(site_precip_mm_yr) && site_precip_mm_yr > 0)
+        error('Extract_NTN_Rain_Chemistry:BadSitePrecipitation', ...
+            'site_precip_mm_yr must be a finite positive scalar [mm/yr].');
+    end
+    P_total = site_precip_mm_yr * days / 365.25;    % the site's, over the window
+    amount = sprintf('the site''s %.1f mm/yr', site_precip_mm_yr);
+end
 
 mw = struct('Ca',40.078,'Mg',24.305,'K',39.098,'Na',22.990, ...
     'NH4',18.038,'NO3',62.004,'Cl',35.453,'SO4',96.06);
@@ -68,7 +87,8 @@ Rain_Chem.window = [min(on) max(off)];
 Rain_Chem.n_samples = height(T);
 Rain_Chem.n_valid = nnz(valid);
 Rain_Chem.precip_mm_yr = P_total / days * 365.25;
-Rain_Chem.valid_precip_fraction = sum(w) / P_total;
+Rain_Chem.gauge_precip_mm_yr = P_gauge / days * 365.25;
+Rain_Chem.valid_precip_fraction = sum(w) / P_gauge;
 Rain_Chem.pwm_mg_L = c;
 Rain_Chem.pH_vwm = -log10(H_pwm);
 Rain_Chem.strong_anion_ueq_L = ueq('SO4') + ueq('Cl');
@@ -83,8 +103,8 @@ Rain_Chem.NH4_N_flux_g_m2_d = flux_g('NH4') * 14.007 / mw.NH4;
 Rain_Chem.NO3_N_flux_g_m2_d = flux_g('NO3') * 14.007 / mw.NO3;
 Rain_Chem.N_flux_g_m2_d = Rain_Chem.NH4_N_flux_g_m2_d + Rain_Chem.NO3_N_flux_g_m2_d;
 Rain_Chem.S_flux_g_m2_d = flux_g('SO4') * 32.06 / mw.SO4;
-Rain_Chem.method = ['NADP precipitation-weighted mean of valid samples x all ' ...
-    'gauge precipitation; strong anions = SO4 + Cl (NO3 enters as N deposition)'];
+Rain_Chem.method = ['NADP precipitation-weighted mean of valid samples x ' ...
+    amount '; strong anions = SO4 + Cl (NO3 enters as N deposition)'];
 if nargin >= 2 && ~isempty(out_file)
     save(out_file, 'Rain_Chem', '-v7');
 end

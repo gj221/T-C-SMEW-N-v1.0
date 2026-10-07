@@ -1,14 +1,16 @@
 function setups = Build_Shapefile_Grid_Setups( ...
-        shape_file,cell_size_m,feature_indices,required_field_fraction)
+        shape_file,cell_size_m,feature_indices,coverage_rule)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Build one independent full-grid setup per connected polygon region.
+%% coverage_rule: a fraction (default 0.95) or 'majority'
+%% (Build_Projected_Field_Topology).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if nargin < 2; cell_size_m = []; end
 if nargin < 3; feature_indices = []; end
-if nargin < 4; required_field_fraction = []; end
+if nargin < 4; coverage_rule = []; end
 cache_key = setup_cache_key(shape_file,cell_size_m,feature_indices, ...
-    required_field_fraction);
+    coverage_rule);
 persistent cache_keys cache_values
 if ~isempty(cache_keys)
     cache_index = find(strcmp(cache_keys,cache_key),1);
@@ -33,7 +35,7 @@ for k = 1:numel(field_regions)
     source_feature_indices = region_feature_indices{k};
     setup_cell{k} = Build_Projected_Field_Topology( ...
         region,cell_size_m,metadata,source_feature_indices, ...
-        required_field_fraction);
+        coverage_rule);
     [center_x,center_y] = centroid(region);
     sort_key(k,:) = [min(source_feature_indices) center_x center_y];
 end
@@ -54,14 +56,14 @@ end
 end
 
 function key = setup_cache_key(shape_file,cell_size_m,feature_indices, ...
-    required_field_fraction)
+    coverage_rule)
 [shape_directory,shape_name] = fileparts(shape_file);
 components = cellfun(@(extension) fullfile(shape_directory, ...
     [shape_name extension]),{'.shp','.shx','.dbf','.prj'}, ...
     'UniformOutput',false);
 runtime_identity = sprintf('cell_size=%s;features=%s;coverage=%s', ...
     mat2str(cell_size_m,17),mat2str(feature_indices,17), ...
-    mat2str(required_field_fraction,17));
+    mat2str(coverage_rule,17));
 key = ERW_Checkpoint_Fingerprint(0,0,runtime_identity,components{:});
 end
 

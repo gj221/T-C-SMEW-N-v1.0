@@ -1,12 +1,21 @@
-function [oriented_polygon,geometry] = Orient_Field_Polygon_Grid(field_polygon,cell_size_m)
+function [oriented_polygon,geometry] = Orient_Field_Polygon_Grid( ...
+        field_polygon,cell_size_m,rotation_degrees)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Align a square grid to minimize padded area outside a field polygon.
+%% rotation_degrees (optional): rotate the grid by this angle instead
+%% (Place_Field_Polygon_Grid).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+if nargin < 3; rotation_degrees = []; end
 if ~(isa(field_polygon,'polyshape') && isscalar(field_polygon)) || ...
         isempty(field_polygon.Vertices) || area(field_polygon) <= 0
     error('Orient_Field_Polygon_Grid:EmptyField', ...
         'field_polygon must have finite positive area.');
+end
+if ~isempty(rotation_degrees) && ~(isnumeric(rotation_degrees) && ...
+        isscalar(rotation_degrees) && isfinite(rotation_degrees))
+    error('Orient_Field_Polygon_Grid:BadRotation', ...
+        'rotation_degrees must be a finite scalar.');
 end
 
 vertices = field_polygon.Vertices;
@@ -75,6 +84,9 @@ end
 candidate_angle = unique(round(candidate_angle,12));
 candidate_angle = unique([candidate_angle; ...
     0.5*(candidate_angle(1:end-1)+candidate_angle(2:end))]);
+if ~isempty(rotation_degrees)
+    candidate_angle = deg2rad(double(rotation_degrees));
+end
 
 best_grid_area = Inf;
 best_bounds_area = Inf;
@@ -135,6 +147,9 @@ geometry.field_area_m2 = area(field_polygon);
 geometry.outside_grid_area_m2 = best_grid_area-geometry.field_area_m2;
 geometry.outside_grid_fraction = geometry.outside_grid_area_m2/best_grid_area;
 geometry.orientation_objective = 'minimum_full_grid_area';
+if ~isempty(rotation_degrees)
+    geometry.orientation_objective = 'prescribed_rotation';
+end
 geometry.orientation_candidate_count = numel(candidate_angle);
 
 end

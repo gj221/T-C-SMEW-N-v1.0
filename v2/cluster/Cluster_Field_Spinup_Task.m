@@ -29,7 +29,8 @@ function out = Cluster_Field_Spinup_Task(task, index)
 %%   TC_FEATURES       polygon features, e.g. "1 2 3"        (default all)
 %%   TC_POLYGON        polygon index                         (default 1)
 %%   TC_CELL_M         process-grid width [m]                (default: calibrated)
-%%   TC_MIN_COVERAGE   coverage rule, e.g. 0.5 (diagnostic)  (default 0.95)
+%%   TC_MIN_COVERAGE   coverage rule: majority (with TC_CELL_M), or a
+%%                     fraction, e.g. 0.5 (diagnostic)       (default 0.95)
 %%   TC_DEM            DEM directory / GeoTIFF (flux_tracking, validate)
 %%   TC_SUBSAMPLE      tracked fraction                      (default 0.10)
 %%   TC_CLASS_COLUMNS  agronomic columns defining the land cover x soil
@@ -70,7 +71,7 @@ method  = getenv_default('TC_METHOD','flux_tracking');
 feats   = str2num(getenv_default('TC_FEATURES','')); %#ok<ST2NM>
 poly    = str2double(getenv_default('TC_POLYGON','1'));
 cell_m  = str2double(getenv_default('TC_CELL_M','NaN'));
-cov     = str2double(getenv_default('TC_MIN_COVERAGE','NaN'));
+cov     = coverage_rule(getenv_default('TC_MIN_COVERAGE',''));
 dem     = getenv_default('TC_DEM','');
 frac    = str2double(getenv_default('TC_SUBSAMPLE','0.10'));
 classes = strsplit(strtrim(getenv_default('TC_CLASS_COLUMNS','')));
@@ -97,7 +98,7 @@ common = {'FieldFeatureIndices',feats,'FieldPolygonIndex',poly, ...
     'SubsampleFraction',frac,'MODParamColumns',cols,'ERWParamColumns',erw_cols, ...
     'ClassColumns',classes,'WarmStartStates',warm};
 if isfinite(cell_m); common = [common, {'GridCellSizeM',cell_m}]; end
-if isfinite(cov);    common = [common, {'MinCoverage',cov}]; end
+if ischar(cov) || isfinite(cov); common = [common, {'MinCoverage',cov}]; end
 if ~isempty(dem);    common = [common, {'FieldDEM',dem}]; end
 
 fprintf('Cluster_Field_Spinup_Task %s: %s, polygon %d, method %s, output %s\n', ...
@@ -121,13 +122,22 @@ switch lower(task)
             'CaseNumber',casenum,'TruthStateFile',state_file,'FieldDEM',dem, ...
             'Fractions',fr,'Seeds',sd,'OutputDirectory',outdir,'MODParamColumns',cols};
         if isfinite(cell_m); vopts = [vopts, {'GridCellSizeM',cell_m}]; end
-        if isfinite(cov);    vopts = [vopts, {'MinCoverage',cov}]; end
+        if ischar(cov) || isfinite(cov); vopts = [vopts, {'MinCoverage',cov}]; end
         if ~isempty(rfdir);  vopts = [vopts, {'RFStatesDirectory',rfdir}]; end
         out = Run_RF_Validation_Experiment(shp,agro,vopts{:});
     otherwise
         error('Cluster_Field_Spinup_Task:BadTask', ...
             ['task must be plan | class_seed | track | replay | reconstruct | ' ...
              'cell | assemble | validate (got %s).'], task);
+end
+end
+
+function rule = coverage_rule(text)
+%% TC_MIN_COVERAGE: 'majority', a fraction, or unset (NaN: the default rule).
+if strcmpi(strtrim(text),'majority')
+    rule = 'majority';
+else
+    rule = str2double(text);
 end
 end
 

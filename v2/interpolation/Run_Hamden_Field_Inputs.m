@@ -1,8 +1,11 @@
 function files = Run_Hamden_Field_Inputs(varargin)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% The per-cell inputs of the Hamden (145 Blue Trail, CT) field spin-up on
-%% its calibrated grid (95 % coverage rule), written to
-%% T&C_Code/Inputs/Field_Spinup/Hamden_calibrated_grid:
+%% its process grid -- 4.5 m squares, the width at which the parcel's
+%% terrain statistics have converged (Run_Topographic_Grid_Convergence),
+%% kept by the majority rule on the lattice that minimises the
+%% misrepresented area (Build_Projected_Field_Topology) -- written to
+%% T&C_Code/Inputs/Field_Spinup/Hamden:
 %%   texture    Cheshire in every cell (SSURGO, 0-30 cm, depth-weighted
 %%              mineral horizons): the sand and clay baselines;
 %%   pH, OM     each cell's own SSURGO map unit, its dominant component
@@ -24,10 +27,13 @@ function files = Run_Hamden_Field_Inputs(varargin)
 %% component and its NLCD class areas.
 %%
 %% Name/value
-%%   'Chemistry'  a one-row representative set to use instead of the
-%%                derived one (columns CEC_cmolc_kg, bs_Ca_fraction,
-%%                bs_Mg_fraction, bs_K_fraction)
-%%   'Output'     another output folder
+%%   'Chemistry'     a one-row representative set to use instead of the
+%%                   derived one (columns CEC_cmolc_kg, bs_Ca_fraction,
+%%                   bs_Mg_fraction, bs_K_fraction)
+%%   'CellSizeM', 'CoverageRule'
+%%                   another grid (default 4.5 and 'majority'; the spin-up's
+%%                   TC_CELL_M and TC_MIN_COVERAGE must match)
+%%   'Output'        another output folder
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 here = fileparts(mfilename('fullpath'));
 v2 = fileparts(here);
@@ -35,7 +41,8 @@ code = fullfile(v2,'T&C_Code');
 addpath(code,here,fullfile(v2,'spinup'));
 site = fullfile(v2,'Spatial inputs','Hamden Blue Trail');
 soil_dir = fullfile(code,'Inputs','Hamden','Soils');
-opt = struct('Chemistry','','Output',fullfile(code,'Inputs','Field_Spinup','Hamden_calibrated_grid'));
+opt = struct('Chemistry','','CellSizeM',4.5,'CoverageRule','majority', ...
+    'Output',fullfile(code,'Inputs','Field_Spinup','Hamden'));
 for k = 1:2:numel(varargin)
     if ~isfield(opt,char(varargin{k}))
         error('Run_Hamden_Field_Inputs:BadOptions','Unknown option %s.',char(varargin{k}));
@@ -45,7 +52,8 @@ end
 
 shp = fullfile(site,'Hamden_Blue_Trail_Parcel.shp');
 tif = fullfile(site,'Land cover','NLCD_2020_Hamden_Blue_Trail_window.tif');
-setups = Build_Shapefile_Grid_Setups(shp,[],[],[]); topo = setups(1);
+setups = Build_Shapefile_Grid_Setups(shp,opt.CellSizeM,[],opt.CoverageRule);
+topo = setups(1);
 mapunits = readtable(fullfile(soil_dir,'SSURGO_mapunit_polygons_parcel_buffer.csv'), ...
     'TextType','string','Delimiter',',');
 hz = readtable(fullfile(soil_dir,'SSURGO_parcel_horizons.csv'),'TextType','string');
@@ -80,7 +88,8 @@ v = cellfun(@(n) double(chem.(n)),need);
 %% the blank template (it never overwrites, so it is written aside), filled
 %% here and written over this builder's previous output
 blank = tempname; cleanup = onCleanup(@() rmdir(blank,'s'));
-template = Write_Field_Agronomic_Templates(shp,blank,[],[],[]);
+template = Write_Field_Agronomic_Templates(shp,blank,opt.CellSizeM,[], ...
+    opt.CoverageRule);
 T = readtable(template{1});
 if ~isequal(T.cell_id(:),topo.cell_id(:))
     error('Run_Hamden_Field_Inputs:GridMismatch','The template and the grid disagree.');

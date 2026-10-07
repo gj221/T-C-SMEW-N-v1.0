@@ -24,6 +24,19 @@ field_pH = pH_Area_Weighted([6 7 9],weights);
 expected_pH = -log10(0.75*10^-6+0.25*10^-7);
 assert(abs(field_pH-expected_pH) < 1e-12);
 
+%% A majority-rule grid leaves field land in its dropped squares; the
+%% totals carry it at the field mean, the mean and weights are unchanged.
+majority = topo;
+majority.field_missed_area_m2 = 20;
+[majority_mean,majority_total] = Field_Aggregate_Areal(cell_values,majority);
+[~,majority_weights,~,majority_area] = Field_Aggregation_Areas(majority);
+assert(abs(majority_area-120) < 1e-12);
+assert(max(abs(majority_weights-weights)) < 1e-12);
+assert(max(abs(majority_mean-field_mean)) < 1e-12);
+assert(max(abs(majority_total-field_mean*120)) < 1e-12);
+[~,~,~,overlap_area] = Field_Aggregation_Areas(topo);
+assert(overlap_area == 100);
+
 legacy.cell_area_m2 = [3;1];
 [legacy_mean,legacy_total] = Field_Aggregate_Areal([2 6],legacy);
 assert(abs(legacy_mean-3) < 1e-12);

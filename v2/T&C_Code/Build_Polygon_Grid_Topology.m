@@ -1,12 +1,20 @@
-function topo = Build_Polygon_Grid_Topology(field_polygon,cell_size_m)
+function topo = Build_Polygon_Grid_Topology(field_polygon,cell_size_m, ...
+        inclusion,grid_offset_m)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Build_Polygon_Grid_Topology
 %%
-%% Construct equal full square cells over a metric field polygon. Every
-%% square with positive polygon overlap is retained and simulated in full.
+%% Construct equal full square cells over a metric field polygon.
+%% inclusion 'any' (default): every square with positive polygon overlap is
+%% retained and simulated in full.  'majority': only the squares more than
+%% half inside the polygon; the field land in the dropped squares is left
+%% unsimulated and recorded as field_missed_area_m2.  grid_offset_m [dx dy]
+%% in [0,h) shifts the lattice's lower-left corner below and left of the
+%% polygon's bounding box (default [0 0]; Place_Field_Polygon_Grid).
 %% Polygon-cell intersections are stored separately for field accounting.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+if nargin < 3 || isempty(inclusion); inclusion = 'any'; end
+if nargin < 4 || isempty(grid_offset_m); grid_offset_m = [0 0]; end
 if ~(isa(field_polygon,'polyshape') && isscalar(field_polygon)) || ...
         isempty(field_polygon.Vertices) || area(field_polygon) <= 0
     error('Build_Polygon_Grid_Topology:EmptyField', ...
@@ -17,6 +25,19 @@ if ~(isnumeric(cell_size_m) && isscalar(cell_size_m) && ...
     error('Build_Polygon_Grid_Topology:BadCellSize', ...
         'cell_size_m must be a finite positive scalar in metres.');
 end
+if ~((ischar(inclusion) || (isstring(inclusion) && isscalar(inclusion))) && ...
+        any(strcmp(char(inclusion),{'any','majority'})))
+    error('Build_Polygon_Grid_Topology:BadInclusion', ...
+        'inclusion must be ''any'' or ''majority''.');
+end
+majority = strcmp(char(inclusion),'majority');
+if ~(isnumeric(grid_offset_m) && numel(grid_offset_m) == 2 && ...
+        all(isfinite(grid_offset_m)) && all(grid_offset_m >= 0) && ...
+        all(grid_offset_m < cell_size_m))
+    error('Build_Polygon_Grid_Topology:BadOffset', ...
+        'grid_offset_m must be two offsets in [0,cell_size_m) metres.');
+end
+grid_offset_m = reshape(double(grid_offset_m),1,2);
 
 vertices = field_polygon.Vertices;
 finite_vertex = all(isfinite(vertices),2);
@@ -27,9 +48,9 @@ if any(~finite_vertex & ~separator)
 end
 vertices = vertices(finite_vertex,:);
 
-x_min = min(vertices(:,1));
+x_min = min(vertices(:,1))-grid_offset_m(1);
 x_max = max(vertices(:,1));
-y_min = min(vertices(:,2));
+y_min = min(vertices(:,2))-grid_offset_m(2);
 y_max = max(vertices(:,2));
 nx = Grid_Cell_Count(x_max-x_min,cell_size_m);
 ny = Grid_Cell_Count(y_max-y_min,cell_size_m);
@@ -65,6 +86,24 @@ retain = cell_overlap_area_m2 > 0;
 if ~any(retain)
     error('Build_Polygon_Grid_Topology:EmptyGrid', ...
         'No full grid cells intersect the field polygon.');
+end
+field_area_m2 = area(field_polygon);
+overlap_tol = max(1e-6,1e-7*field_area_m2);
+if majority
+    %% The intersections of every touching square, kept or not, partition
+    %% the field; what the dropped squares hold is left unsimulated.
+    overlap_area_error_m2 = sum(cell_overlap_area_m2)-field_area_m2;
+    if abs(overlap_area_error_m2) >= overlap_tol
+        error('Build_Polygon_Grid_Topology:AreaMismatch', ...
+            ['Polygon-cell intersections differ from the field area by %.17g m2 ' ...
+             'for %.17g m cells.'],overlap_area_error_m2,cell_size_m);
+    end
+    retain = cell_overlap_area_m2 > 0.5*cell_size_m^2;
+    if ~any(retain)
+        error('Build_Polygon_Grid_Topology:EmptyGrid', ...
+            'No %.6g m grid cell lies more than half inside the field polygon.', ...
+            cell_size_m);
+    end
 end
 cell_grid_slot = find(retain);
 cell_row = cell_row(retain);
@@ -127,16 +166,19 @@ for c = 1:N_cells
     end
 end
 
-field_area_m2 = area(field_polygon);
-overlap_tol = max(1e-6,1e-7*field_area_m2);
 simulated_area_m2 = sum(cell_area_m2);
 grid_area_tol = max(1e-9,1e-13*field_area_m2);
-if simulated_area_m2 < field_area_m2 || ...
+if (~majority && simulated_area_m2 < field_area_m2) || ...
         any(cell_overlap_area_m2 > cell_area_m2+grid_area_tol)
     error('Build_Polygon_Grid_Topology:AreaMismatch', ...
         'Retained full-cell area does not contain the complete field polygon.');
 end
-overlap_area_error_m2 = sum(cell_overlap_area_m2)-field_area_m2;
+if majority
+    overlap_area_error_m2 = 0;
+    field_missed_area_m2 = max(0,field_area_m2-sum(cell_overlap_area_m2));
+else
+    overlap_area_error_m2 = sum(cell_overlap_area_m2)-field_area_m2;
+end
 if abs(overlap_area_error_m2) >= overlap_tol
     error('Build_Polygon_Grid_Topology:AreaMismatch', ...
         ['Polygon-cell intersections differ from the field area by %.17g m2 ' ...
@@ -209,5 +251,10 @@ topo.edge_face_distance_b_m = edge_face_distance_b_m;
 topo.edge_active = edge_active;
 topo.adj = adj;
 topo.outer_face_width_m = outer_face_width_m;
+if majority
+    topo.cell_inclusion = 'majority';
+    topo.grid_offset_m = grid_offset_m;
+    topo.field_missed_area_m2 = field_missed_area_m2;
+end
 
 end

@@ -37,8 +37,9 @@
 %% crop does.
 %%
 %% DEPOSITION  NADP CT15 wet deposition (Inputs/Rain_Chem_Hamden.mat,
-%% Extract_NTN_Rain_Chemistry) replaces the built-in global maps for N, K,
-%% Ca and Mg; P, which NADP does not measure, keeps the global map.
+%% Extract_NTN_Rain_Chemistry: CT15's concentrations times the site's own
+%% NLDAS precipitation) replaces the built-in global maps for N, K, Ca and
+%% Mg; P, which NADP does not measure, keeps the global map.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if ~(numel(Ccrown) == 2 && sum(Ccrown) > 0)

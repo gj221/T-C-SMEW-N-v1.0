@@ -45,6 +45,10 @@ function out = Run_Topographic_Grid_Convergence(shape_file, dem_source, varargin
 %%                        [20 10 5 3.5 2.5 1.5 1]); widths below the DEM's
 %%                        native spacing are dropped
 %%   'Tolerance'          relative change that counts as converged (0.05)
+%%   'CoverageRule'       the grid rule of the graph metrics and the
+%%                        redistribution runs (Build_Shapefile_Grid_Setups;
+%%                        default the 95 % rule, 'majority' builds every
+%%                        width)
 %%   'RedistributionDays' 0 (default) = attributes only
 %%   'RunId'              Run_Matrix_12 id for the redistribution runs (1)
 %%   'OutputDirectory'    default v2/figures
@@ -61,7 +65,7 @@ addpath(here, fullfile(v2,'T&C_Code'), fullfile(v2,'run'));
 
 opt = struct('FeatureIndices',[],'PolygonIndex',1,'Widths',[20 10 5 3.5 2.5 1.5 1], ...
     'Tolerance',0.05,'RedistributionDays',0,'RunId',1, ...
-    'OutputDirectory',fullfile(v2,'figures'));
+    'OutputDirectory',fullfile(v2,'figures'),'CoverageRule',[]);
 for k = 1:2:numel(varargin); opt.(varargin{k}) = varargin{k+1}; end
 if ~exist(opt.OutputDirectory,'dir'); mkdir(opt.OutputDirectory); end
 widths = sort(opt.Widths(:).','descend');
@@ -109,7 +113,8 @@ for i = 1:numel(widths)
     rows(i,8) = nnz(in);
     %% --- graph metrics only where the polygon grid can be built -------
     try
-        setups = Build_Shapefile_Grid_Setups(shape_file,h,opt.FeatureIndices);
+        setups = Build_Shapefile_Grid_Setups(shape_file,h,opt.FeatureIndices, ...
+            opt.CoverageRule);
         topo = Attach_Topography_To_Topology(setups(opt.PolygonIndex),dem);
         [~,~,ff] = Field_Aggregation_Areas(topo);
         w = ff(:).*topo.cell_area_m2(:); w = w/sum(w);
@@ -251,6 +256,7 @@ function [lat_per_area_day,profile_cv] = redistribution_metrics(shape_file,dem_s
 result_file = Run_One_Subfield(opt.RunId,'FieldShapefile',shape_file, ...
     'FieldFeatureIndices',opt.FeatureIndices,'FieldPolygonIndex',opt.PolygonIndex, ...
     'GridCellSizeM',h,'FieldDEM',dem_source,'DEMResolutionM',h, ...
+    'FieldMinCoverage',opt.CoverageRule, ...
     'NDays',opt.RedistributionDays,'SaveResults',true);
 S = load(result_file,'Domain','V');
 %% net subsurface lateral redistribution: the water that changed cells,
