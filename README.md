@@ -1504,11 +1504,11 @@ window and, once downloaded, the 1 m DEM tile are in
   (kg ha-1 yr-1): N 6.6 (wet 2.6, dry 4.0), S 1.6 (1.0, 0.6), Ca 0.85,
   Mg 0.42, K 0.36; dry S halves over the decade (0.97 to 0.45) and dry N
   falls a fifth. The wet-only record had given N 2.7. P keeps the global
-  map. The ERW chemistry takes no rain record (`rain_chem_file` empty):
-  the 2-D transient never reads one, so with it the spin-up's handoff
-  check had seeded a rain Na the transient does not use. CT15's Na and
-  strong anions (`Rain_Chem_Hamden.mat`) wait on the `keyword_add`
-  decision. No fertiliser, and no fertiliser year (`FertN_years` empty).
+  map. The ERW chemistry takes CT15's rain record (`Rain_Chem_Hamden.mat`,
+  `rain_chem_file`): rain pH 5.20 and a pore-water Na seeded at the rain
+  steady state; after the first day the Na and SO4 + Cl supply follows the
+  steady closure (`keyword_add` = 1). No fertiliser, and no fertiliser
+  year (`FertN_years` empty).
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
@@ -1558,13 +1558,21 @@ window and, once downloaded, the 1 m DEM tile are in
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
 mapping on the parcel's grid; `test_hamden_field_configuration` (23) the
 site as the cluster configures it, from the grid down to one cell's
-assembled parameters and, with the DEM, the cluster's plan. Open: whether
-the 2-D transient should take its Na and anion inputs from CT15 rather
-than the steady closure (`keyword_add`). The
-base parameter file also carries the Energy Farm's exchange calibration
-(`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which
-partitions the seeded exchanger against the pore water at every site
-that borrows case 5.
+assembled parameters and, with the DEM, the cluster's plan.
+
+Open, and blocking the cluster run: the ERW handoff check refuses
+Hamden's seed (dissolved Ca 28.7 mM against its 20 mM ceiling, in a short
+test spin-up that reached the 2020-01-01 handoff). The base parameter
+file carries the Energy Farm's exchange calibration
+(`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which at
+Hamden's measured bulk pH 5.3 holds a base saturation of 0.70, not the
+measured 0.94; the seed keeps the measured inventory, so the difference
+goes into the pore water (the biogeochemistry's own solution held
+0.06 mM Ca), and the charge balance closes with 91 meq/L of strong
+anions. The Energy Farm's remedy fits: affinities shifted until the
+measured base saturation holds at the measured pH. Whether the Na and
+SO4 + Cl supply should then come from CT15 rather than the closure
+(`keyword_add`) waits on that seed.
 
 ### Energy Farm Bouchet R2025a runs
 
