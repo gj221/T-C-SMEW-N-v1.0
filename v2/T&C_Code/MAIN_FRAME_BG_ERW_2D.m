@@ -139,6 +139,30 @@ for c = 1:N_col
         end
         PAR{c}.bulk_pH_params.appelo.logKH = ColCfg(c).appelo_logKH;
     end
+    %%% v1.0: a site's rain-chemistry record (Load_Rain_Chemistry) gives the
+    %%% column's ERW its rain pH and its Na and strong-anion supply, as in the
+    %%% 1-D driver, and the column's spin-up state -- its own, or else the
+    %%% site's -- the long-term water loss the rain Na seed divides by.
+    %%% Inert without a record.
+    if isfield(ColCfg(c),'RAIN_CHEM') && isstruct(ColCfg(c).RAIN_CHEM) && ...
+            isfield(ColCfg(c).RAIN_CHEM,'source_file') && ...
+            ~isempty(strtrim(char(ColCfg(c).RAIN_CHEM.source_file)))
+        if isfield(ColCfg(c),'BG_STATE') && isstruct(ColCfg(c).BG_STATE) && ...
+                isfield(ColCfg(c).BG_STATE,'seed_water_loss_l_m2_d')
+            PAR{c}.seed_water_loss_l_m2_d = ColCfg(c).BG_STATE.seed_water_loss_l_m2_d;
+        elseif exist('seed_water_loss_l_m2_d','var')
+            PAR{c}.seed_water_loss_l_m2_d = seed_water_loss_l_m2_d;
+        else
+            error('MAIN_FRAME_BG_ERW_2D:NoSeedWaterLoss', ...
+                ['Column %d: the rain record %s seeds Na from the spin-up''s ' ...
+                 'long-term water loss, which its spin-up state does not carry.'], ...
+                c,char(ColCfg(c).RAIN_CHEM.source_file));
+        end
+        PAR{c}.rain_pH_vwm = ColCfg(c).RAIN_CHEM.rain_pH_vwm;
+        PAR{c}.rain_Na_flux_umol_m2_d = ColCfg(c).RAIN_CHEM.rain_Na_flux_umol_m2_d;
+        PAR{c}.rain_strong_anion_flux_umolc_m2_d = ...
+            ColCfg(c).RAIN_CHEM.rain_strong_anion_flux_umolc_m2_d;
+    end
     fprintf('  column %2d  %-14s  %s\n', c, topo.cell_name{c}, ...
         ternary(isempty(ovr),'base parameters','PFT override'));
 end
@@ -704,6 +728,11 @@ for c = 1:N_col
         mat2str(PAR{c}.Kbot,17), ...
         mat2str(cec_dpH_c,17),mat2str(last_app_c,17),bgovr_c, ...
         mat2str(sexp_c,17));
+    if isfield(PAR{c},'rain_Na_flux_umol_m2_d')
+        ERW_runtime_parts{c} = [ERW_runtime_parts{c} sprintf(';rain=%s', ...
+            mat2str([PAR{c}.rain_pH_vwm PAR{c}.rain_Na_flux_umol_m2_d ...
+            PAR{c}.rain_strong_anion_flux_umolc_m2_d PAR{c}.seed_water_loss_l_m2_d],17))];
+    end
 end
 ERW_forcing_identity = sprintf('date_start=%.17g;date_end=%.17g',Date(1),Date(end));
 topology_overlap_area = topo.cell_area_m2;

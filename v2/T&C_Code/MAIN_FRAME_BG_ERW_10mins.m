@@ -820,6 +820,13 @@ for i=2:NN
                             ERW_rain_chemistry.rain_strong_anion_flux_umolc_m2_d;
                     end
                 end
+                %%% v1.0: the spin-up's long-term water loss (Run_BG_Spinup),
+                %%% which the rain Na seed divides by: on the seeding day the
+                %%% forcing series hold the first day's transpiration and
+                %%% drainage and zeros after it.
+                if exist('ERW_seed_water_loss_l_m2_d','var') && ~isempty(ERW_seed_water_loss_l_m2_d)
+                    ERW_TC_const.seed_water_loss_l_m2_d = ERW_seed_water_loss_l_m2_d;
+                end
                 if exist('bulk_pH_params','var')
                     ERW_TC_const.bulk_pH_params = bulk_pH_params;
                 end

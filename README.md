@@ -1160,10 +1160,20 @@ a site with records of its own: `co2_file` names a CO2 record in
 interpolated linearly, refused outside its span); `pft_override` names a
 vegetation script run after the base parameter file, in the 1-D and 2-D
 drivers alike (the pattern of `PFT_Prairie_Margin`); and a non-empty
-`rain_chem_file` makes the 10-minute driver pass the record's Na and
-strong-anion (SO4 + Cl) deposition, `Rain_Chem_<Location>.mat`, to the
-ERW chemistry. N, K, Ca and Mg enter through the biogeochemistry's
-deposition terms only, so each element enters once. They are constant
+`rain_chem_file` hands the record `Rain_Chem_<Location>.mat`
+(`Load_Rain_Chemistry`) to the ERW chemistry of both drivers: its rain
+pH and its Na and strong-anion (SO4 + Cl) deposition. The Na seed is the
+rain steady state, the Na flux over the long-term water loss of the ERW
+layer (the transpiration drawn from it plus the leakage), which the
+spin-up records for each ring year (`ERW_Mean_Water_Loss`) and hands off
+with the state as the ring's mean (`seed_water_loss_l_m2_d`); a record
+without it is refused. Two latent v0.9 flaws had kept the seed from that
+steady state: the record's scalar flux was padded with zeros over the
+forcing series, and the drivers seed on their second day, when the
+series hold one day of water fluxes and zeros after it
+(`test_rain_chemistry_seed`, `test_kantola_seed_charge`). N, K, Ca and
+Mg enter through the biogeochemistry's deposition terms only, so each
+element enters once. They are constant
 daily rates unless the vegetation script gives `B_IO.Dep_events`, a
 year-by-year event record (`Build_Site_Deposition`): then they arrive wet
 with each day's precipitation (the year's precipitation-weighted mean

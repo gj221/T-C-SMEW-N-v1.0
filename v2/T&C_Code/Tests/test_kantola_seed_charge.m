@@ -249,6 +249,32 @@ check(isequal(Pseed([1:51,54:59,62:67,70:79]), ...
     P0([1:51,54:59,62:67,70:79])), ...
     'cation synchronization leaves unrelated T&C pools unchanged');
 
+%% A site's rain record (Load_Rain_Chemistry) seeds pore-water Na at the
+%% rain steady state, as if Na_in were that steady state: its long-term Na
+%% flux, which holds at every step, over the long-term water loss -- the
+%% spin-up's, handed in, or else the forcing series' mean of Tw + Lw.
+F_Na = 23.7;                                  % [umol m-2 d-1]
+same_Na = @(A,B) abs(A.Na(1)-B.Na(1)) <= 1e-12*B.Na(1) && ...
+    abs(A.Na_tot(1)-B.Na_tot(1)) <= 1e-12*B.Na_tot(1) && ...
+    abs(A.f_Na(1)-B.f_Na(1)) <= 1e-12*max(B.f_Na(1),eps);
+ERW_PARAM_rain = ERW_PARAM_input;
+ERW_PARAM_rain.Na_in = F_Na/2.5;
+Bn = ERW_MOD_PARAM_excel(t, TT, ERW_TC_const, ERW_biogeochem, ERW_PARAM_rain, 1);
+ERW_PARAM_rain.Na_in = NaN;
+TC_rain = ERW_TC_const;
+TC_rain.rain_Na_flux_umol_m2_d = F_Na;
+TC_rain.seed_water_loss_l_m2_d = 2.5;         % [L m-2 d-1]
+Br = ERW_MOD_PARAM_excel(t, TT, TC_rain, ERW_biogeochem, ERW_PARAM_rain, 1);
+check(same_Na(Br,Bn), 'rain Na seed is the flux over the water loss handed in');
+TT3 = S.TT_m(1:3,:);
+TT3.Tw = [1; 2; 3]*1e-3;                      % [m/d], each row its day's total
+TT3.Lw = [0.5; 0.5; 0.5]*1e-3;                % mean Tw + Lw: 2.5 L m-2 d-1
+TC_rain = rmfield(TC_rain,'seed_water_loss_l_m2_d');
+Br3 = ERW_MOD_PARAM_excel(1:3, TT3, TC_rain, ERW_biogeochem, ERW_PARAM_rain, 1);
+ERW_PARAM_rain.Na_in = F_Na/2.5;
+Bn3 = ERW_MOD_PARAM_excel(1:3, TT3, ERW_TC_const, ERW_biogeochem, ERW_PARAM_rain, 1);
+check(same_Na(Br3,Bn3), 'a scalar rain Na flux holds at every step of the forcing');
+
 fprintf('  Na(1)=%.6g umol/L  An(1)=%.6g umolc/L  Alk_tot(1)=%.6g umol/m2\n', ...
     B.Na(1), B.An(1), B.Alk_tot(1));
 fprintf('  fixed logKH=[%s]\n', ...
