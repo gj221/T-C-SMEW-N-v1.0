@@ -371,6 +371,19 @@ BiogeoPar_erw_handoff = Biogeochemistry_Parameter(1);
 ERW_biogeo_PO4_fraction = BiogeoPar_erw_handoff.aP;
 ERW_biogeo_NO3_fraction = BiogeoPar_erw_handoff.aNO3;
 ERW_biogeo_NH4_fraction = BiogeoPar_erw_handoff.aNH4;
+%%% v1.0: the water the dissolved pools leach with (Leaching_Water_Basis,
+%%% the row's leaching_water).  'column', the default, is v0.9's: the
+%%% drainage out of the bottom of the soil column over the column's water.
+%%% 'layer' leaches them with the drainage out of the bottom of the
+%%% biogeochemical layer (Biogeo_Layer_Drainage, every hour) over the
+%%% layer's own water; Lk_leach_out and V_leach_out keep each day's for
+%%% the spin-up's Phase 2.
+leach_layer = exist('MOD_PARAM_input','var') && ...
+    strcmp(Leaching_Water_Basis(MOD_PARAM_input),'layer');
+if leach_layer
+    Lk_bio = zeros(NN,1);
+    Lk_leach_out = nan(NNd,1); V_leach_out = nan(NNd,1);
+end
 for i=2:NN
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     if  (mod(i,1000) == 0) || (i == 2)
@@ -408,6 +421,17 @@ for i=2:NN
         VTSUM_out(j)       = VTSUM;
         Tdp_bio_out(j)     = mean(Tdp_bio(:),    'omitnan');
         f_anaer_bio_out(j) = mean(f_anaer_bio(:),'omitnan');
+        %%% The day's leaching water and the water it leaches from
+        %%% (leach_layer above); the column's are v0.9's.
+        if leach_layer
+            Lk_leach = sum(Lk_bio(pdind));
+            if Lk_leach < 0; Lk_leach = 0; end   %% water rose into the layer
+            V_leach = Zbio*sum(Bio_Zs.*mean(O(pdind,:),1));
+            Lk_leach_out(j) = Lk_leach; V_leach_out(j) = V_leach;
+        else
+            Lk_leach = sum(Lk(pdind));
+            V_leach = VSUM;
+        end
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         if OPT_SoilBiogeochemistry == 1
             IS= Ccrown*squeeze(ISOIL_L(j-1,:,:)) + Ccrown*squeeze(ISOIL_H(j-1,:,:));
@@ -441,8 +465,8 @@ for i=2:NN
                 R_litter(j),R_microbe(j),R_litter_sur(j),R_ew(j),VOL(j),N2flx(j),Min_N(j),Min_P(j),...
                 R_bacteria(j),RmycAM(j),RmycEM(j),Prod_B(j),Prod_F(j),BfixN(j),NavlI(j,:),LitFirEmi(j,:),N2Oflx(j),...
                 FertN_d(j),DepN_d(j),NITflx(j),DENITflx(j),N2Oflx_nit(j),P_inputs(j,:)]=BIOGEO_UNIT(P(j-1,:),IS,Zbio,sum(Bio_Zs.*rsd),...
-                PH_bulk,Tdp_bio,mean(Ta(pdind)),Psi_bio,Se_bio,Se_fc,VSUM,VTSUM,Ccrown,Bio_Zs,RfH_Zs,RfL_Zs,...
-                sum(Lk(pdind)),sum(T_H(pdind,:),1),sum(T_L(pdind,:),1),B_H(j-1,:,3),B_L(j-1,:,3),LAI_H(j-1,:),LAI_L(j-1,:),...
+                PH_bulk,Tdp_bio,mean(Ta(pdind)),Psi_bio,Se_bio,Se_fc,V_leach,VTSUM,Ccrown,Bio_Zs,RfH_Zs,RfL_Zs,...
+                Lk_leach,sum(T_H(pdind,:),1),sum(T_L(pdind,:),1),B_H(j-1,:,3),B_L(j-1,:,3),LAI_H(j-1,:),LAI_L(j-1,:),...
                 SupN_H(j-1,:),SupP_H(j-1,:),SupK_H(j-1,:),SupN_L(j-1,:),SupP_L(j-1,:),SupK_L(j-1,:),...
                 SupCa_H(j-1,:),SupMg_H(j-1,:),SupSi_H(j-1,:),SupCa_L(j-1,:),SupMg_L(j-1,:),SupSi_L(j-1,:),...
                 REXMY,RexmyI(j-1,:),ExEM,NavlI(j-1,:),Pcla,Psan,...
@@ -767,6 +791,14 @@ for i=2:NN
         SPAR,SN,OPT_VegSnow,OPT_SoilTemp,OPT_PlantHydr,Opt_CR,Opt_ST,OPT_SM,OPT_STh,OPT_FR_SOIL,OPT_PH);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%
     %%%%%%%%%%%%%%%%%%%%%%%%%%%
+    %%% v1.0, leaching_water 'layer': this hour's drainage out of the bottom
+    %%% of the biogeochemical layer, from the vertical step alone (before the
+    %%% lateral replay below moves water sideways).
+    if leach_layer
+        Lk_bio(i) = Biogeo_Layer_Drainage(Bio_Zs,V(i-1,:),Vice(i-1,:),V(i,:),Vice(i,:), ...
+            f(i),Rd(i),EG(i),Jsx_H(i,:),Jsx_L(i,:),Qi_in(i,:),Qi_out(i,:), ...
+            EvL_Zs,RfH_Zs,RfL_Zs,Asur,Ared,dth);
+    end
 
     if lateral_replay_on
         [O(i,:),V(i,:),lat_rep] = Lateral_Replay_Water(lat_rep,i,O(i,:),Oice(i,:),Ohy,Osat,dz);
@@ -866,6 +898,18 @@ for i=2:NN
                 ERW_TC.f_Lw_bio(j) = Lk_tot/VSUM;
             end
             
+            %%% v1.0, leaching_water 'layer': the ERW's pools leach with the
+            %%% layer's own drainage over the layer's water, as the
+            %%% biogeochemistry's do above (V_leach, this day's or, on a
+            %%% run's last partial day, the last day's, as VSUM is).
+            if leach_layer
+                ERW_TC.Lw = Lk_bio/1000;
+                Lk_tot = sum(Lk_bio(pdind));
+                if Lk_tot < 0; Lk_tot = 0; end
+                Lk_tot(Lk_tot>V_leach) = V_leach;
+                ERW_TC.f_Lw_bio(j) = Lk_tot/V_leach;
+            end
+
             % passive uptake from transpiration within active layers [mm/h]
             % to [mm/day]
             T_tot = sum(cfTH.*sum(T_H(pdind,:),1)+cfTL.*sum(T_L(pdind,:),1),2);

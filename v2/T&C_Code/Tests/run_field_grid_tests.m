@@ -25,5 +25,6 @@ test_event_deposition;
 test_perennial_vegetation;
 test_erw_seed_water_loss;
 test_rain_chemistry_seed;
+test_leaching_water_basis;
 test_build_tc_forcing_from_nldas2;
 end
