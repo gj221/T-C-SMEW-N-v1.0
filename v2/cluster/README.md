@@ -45,7 +45,7 @@ resubmitted by hand as before (the chained tracking copies,
 | step | script | what it does |
 |---|---|---|
 | plan | `field_spinup_step.sbatch` (`TC_TASK=plan`) | `spinup_plan.csv`, the classes and the tracked subsample, and the array-index lists |
-| class seeds | `field_spinup_cell.sbatch` (`TC_TASK=class_seed`, array over classes) | one plot-scale spin-up per land cover x soil class, on its most typical cell |
+| class seeds | `field_spinup_cell.sbatch` (`TC_TASK=class_seed`, array over classes) | one plot-scale spin-up per land cover x soil class, on its most typical cell, with its ERW seed's inputs beside it (`classseed_<k>_erw_seed_inputs.mat`) |
 | tracking | `field_spinup_track.sbatch` | the 2-D field run from the class seeds, recording the tracked cells' lateral exchange (`track/record_<id>.mat`, `track/ringend_<id>.mat`, `track/handoff_states.mat`) |
 | replays | `field_spinup_cell.sbatch` (`TC_TASK=replay`, array over tracked cells) | each tracked cell's spin-up replaying its record |
 | reconstruction | `field_spinup_cell.sbatch` (`TC_TASK=reconstruct`, array over the other cells) | the forest over the replayed cells, then the cell's own ERW handoff |
@@ -60,6 +60,15 @@ is the only MATLAB entry point. The tracking job may need more than one
 day on a large grid: the submitter queues `TC_TRACK_JOBS` copies (default
 3), each starting after the previous one ends; a copy continues where the
 last stopped, and one that finds the run complete exits at once.
+
+`TC_STOP_AFTER=class_seed` ends the chain after the class seeds. A site
+whose exchanger emerges from the spin-up (`spinup_equilibrium`) refits its
+exchange constants there on a class seed's converged soil solution
+(`classseed_<k>_erw_seed_inputs.mat`, `v2/calibration/Fit_Exchange_Affinity.m`)
+and submits again without the variable; the finished class seeds are
+reused. Every replay and reconstruction hands off with the constants in
+force when it runs, and a finished one is reused as it is, so constants
+changed after them need a new `TC_OUTPUT_DIR`.
 
 ## Getting the repository and inputs onto the cluster
 
@@ -174,7 +183,8 @@ scripts by dropping `TC_CELL_M` and `TC_MIN_COVERAGE`.
   Hamden's do.
 - Base saturation reaches the ERW exchanger through the per-cell
   `f_CEC_in` seed (main README, *Base saturation*); Na and Al exchange
-  start at zero.
+  start at zero. A cell without one on a `spinup_equilibrium` row (Hamden)
+  takes the exchanger in equilibrium with its spun-up soil solution.
 - Every spin-up stage is ERW-free (the v0.9 driver gates its chemistry on
   `OPT_ERW`); each cell's ERW seed is built and checked once, from the
   first two forcing days of the transient window, by its final handoff

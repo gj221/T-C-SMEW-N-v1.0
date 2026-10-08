@@ -756,6 +756,17 @@ for c = 1:N_col
             mat2str([PAR{c}.rain_pH_vwm PAR{c}.rain_Na_flux_umol_m2_d ...
             PAR{c}.rain_strong_anion_flux_umolc_m2_d PAR{c}.seed_water_loss_l_m2_d],17))];
     end
+    %% v1.0: a site's own Al(OH)3 phase, and the exchange constants fitted
+    %% with it (Fit_Exchange_Affinity), are part of its identity.
+    if isfield(PAR{c},'bulk_pH_params') && isfield(PAR{c}.bulk_pH_params,'Al_pin_logKso')
+        appelo_params = [];
+        if isfield(PAR{c}.bulk_pH_params,'appelo')
+            appelo_params = PAR{c}.bulk_pH_params.appelo;
+        end
+        [~,~,~,~,~,alpha_id,logKH_id] = Resolve_Appelo_Constants(appelo_params);
+        ERW_runtime_parts{c} = [ERW_runtime_parts{c} sprintf(';alpin=%s;appelo=%s', ...
+            mat2str(PAR{c}.bulk_pH_params.Al_pin_logKso,17),mat2str([logKH_id alpha_id],17))];
+    end
 end
 ERW_forcing_identity = sprintf('date_start=%.17g;date_end=%.17g',Date(1),Date(end));
 topology_overlap_area = topo.cell_area_m2;

@@ -270,8 +270,13 @@ end
     K_AlOH3_trial, I_pore);
 k1_p = k_pore(1); k2_p = k_pore(2); k_w_p = k_pore(3);
 K1_p = k_pore(4); K2_p = k_pore(5); K3_p = k_pore(6); K4_p = k_pore(7);
-%%% The amorphous Al(OH)3 pin (log *Kso 10.8) takes the same activity shift.
-logKso_pin = 10.8 + (logKso_pore - K_AlOH3_trial);
+%%% The amorphous Al(OH)3 pin (log *Kso 10.8) takes the same activity shift;
+%%% v1.0: a site may pin another phase (bulk_pH_params.Al_pin_logKso).
+logKso_pin_ref = 10.8;
+if isfield(bulk_pH_params_trial, 'Al_pin_logKso') && ~isempty(bulk_pH_params_trial.Al_pin_logKso)
+    logKso_pin_ref = bulk_pH_params_trial.Al_pin_logKso;
+end
+logKso_pin = logKso_pin_ref + (logKso_pore - K_AlOH3_trial);
 
 Al_pin = isfield(bulk_pH_params_trial, 'Al_solubility_pin') && ...
     isequal(bulk_pH_params_trial.Al_solubility_pin, true);

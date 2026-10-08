@@ -45,6 +45,32 @@
 %% concentration times the day's rain or snow) and TDep dry deposition
 %% every day (Deposition_Day).  P, which neither measures, keeps the global
 %% map.  No fertiliser, and no fertiliser years.
+%%
+%% WEATHERING  the base file's primary-mineral supply of Ca and Mg (the
+%% Kantola uplift, Tup_Ca 0.003 and Tup_Mg 0.002 g/m2/d) keeps its charge,
+%% 1.15 keq/ha/yr, but not its split, which is the Energy Farm's and gives
+%% more Mg than Ca by moles.  The biogeochemistry exchanges, fixes, leaches
+%% and takes up Ca and Mg alike by mass, so its soil solution settles at the
+%% molar ratio of their supply; Hamden's is set so that weathering and
+%% deposition supply Ca and Mg at 1.58 to 1, the dissolved ratio in which
+%% the measured exchanger (Ca/Mg 3.28, Representative_soil_chemistry.csv)
+%% is at equilibrium under SCEPTER's Ca/Mg selectivity (10^0.316): Tup_Ca
+%% 0.0038876 and Tup_Mg 0.0014617 g/m2/d (14.2 and 5.3 kg/ha/yr).  A cold
+%% start's primary-mineral pools of K, Ca and Mg begin at the steady state of
+%% their supply (Tup/K3), so the release is the supply from the first day,
+%% not that of the base file's placeholder inventories (502 g/m2 for each).
+%%
+%% EXCHANGER  Hamden's own Appelo constants replace the base file's (the
+%% Energy Farm's), fitted the way those were (v2/calibration/
+%% Fit_Exchange_Affinity): SCEPTER's logKH shifted by z*delta at alpha 3.4,
+%% with the pinned Al(OH)3 phase, so that the exchanger emerging from the
+%% class seed's spun-up soil solution (Inputs/Hamden/Calibration) holds the
+%% measured base saturation, 0.598 of the CEC at pH 7, and KCl Al, 0.032, at
+%% the pH they were measured at, 5.22 (Inputs/Hamden/Soils/
+%% Representative_soil_chemistry.csv).  The phase lies between crystalline
+%% gibbsite (log *Kso 8.04) and the microcrystalline phase (9.66); the
+%% amorphous phase the base file pins (10.8) cannot hold the bases at any
+%% shift.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if ~(numel(Ccrown) == 2 && sum(Ccrown) > 0)
@@ -233,6 +259,16 @@ B_IO.DepCa = hamden_dep.Deposition.mean_g_m2_d(3);
 B_IO.DepMg = hamden_dep.Deposition.mean_g_m2_d(4);
 B_IO.Dep_events = hamden_dep.Deposition.events;
 
+%% --- Weathering (header, WEATHERING)
+B_IO.Tup_Ca = 0.0038876;   % [g Ca/m2 d]
+B_IO.Tup_Mg = 0.0014617;   % [g Mg/m2 d]
+if exist('OPT_SoilBiogeochemistry','var') && OPT_SoilBiogeochemistry == 1 && ...
+        ~exist('B_out','var')
+    hamden_bgp = Biogeochemistry_Parameter(1);
+    P(1,[55 63 71]) = [B_IO.Tup_K/hamden_bgp.K3k B_IO.Tup_Ca/hamden_bgp.K3ca ...
+        B_IO.Tup_Mg/hamden_bgp.K3mg];
+end
+
 %% --- Plant reserves: each element at the storage capacity of the stand's
 %% carbohydrate reserve, reserve x (1/leaf - 1/storage) -- the state
 %% Crop_Planting_Harvest gives a sown crop, so every relative-concentration
@@ -276,6 +312,15 @@ Perennial_Vegetation_Apply;
 %% while its canopy stalls.
 OPT_EnvLimitGrowth = 0;
 
+%% --- Exchanger (header, EXCHANGER)
+if ~exist('bulk_pH_params','var') || ~isstruct(bulk_pH_params)
+    bulk_pH_params = struct();
+end
+hamden_delta = -1.042050;
+bulk_pH_params.appelo = struct('logKH',[5.9 4.8 10.47 10.786 16.47] + ...
+    [1 1 2 2 3]*hamden_delta,'alpha',3.4);
+bulk_pH_params.Al_pin_logKso = 9.203355;
+
 %% --- Reference height of the forcing [m]: 2 m above the canopy, T&C's
 %% convention over tall vegetation (the driver's own guard adds 2 m when a
 %% canopy reaches it).  The base file's 8 m suits maize; under a 24 m canopy
@@ -283,8 +328,8 @@ OPT_EnvLimitGrowth = 0;
 %% height to work over.  The forcing's near-surface air and wind are
 %% applied at it.
 zatm = max([hc_H(1,:) hc_L(1,:)]) + 2;
-clear islot tree_B grass_B reserve_at res_H res_L hamden_dep deposition_file
-
 fprintf(['[PFT_Hamden_Deciduous_Grass] trees (Harvard Forest, ZR95 %d mm) over grass ' ...
     '(Fendt, ZR95 %d mm); cover %s; grass cut 1 Sep (90%% removed); CT15 wet + TDep dry deposition by event; ' ...
-    'reference height %g m\n'],ZR95_H(1),ZR95_L(1),mat2str(Ccrown,4),zatm);
+    'reference height %g m; exchange shift %.4f per charge, Al(OH)3 log *Kso %.4f\n'], ...
+    ZR95_H(1),ZR95_L(1),mat2str(Ccrown,4),zatm,hamden_delta,bulk_pH_params.Al_pin_logKso);
+clear islot tree_B grass_B reserve_at res_H res_L hamden_dep deposition_file hamden_delta hamden_bgp

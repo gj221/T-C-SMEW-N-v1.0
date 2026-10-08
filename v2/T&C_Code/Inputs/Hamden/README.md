@@ -223,29 +223,71 @@ The same files are kept in two places:
   Kellogg laboratory data of the eight characterised Cheshire pedons
   (`Soils/KSSL_Cheshire_pedons_0-30cm.csv`, Soil Data Access lab tables;
   six within 13 km). The 0-30 cm layers within 0.3 of the cells' mean pH
-  (5.36) that carry an effective CEC (bases + KCl Al) are pooled: three
-  layers at pH 5.2-5.3 (85P0055, 97P0102). Effective CEC (at the soil's
-  own pH, the model's `CEC_tot_in`) 6.8 cmolc/kg; Ca 0.709, Mg 0.216,
-  K 0.019 of it.
+  (5.36) that carry a KCl Al are pooled: three layers at pH 5.2-5.3
+  (85P0055, 97P0102; CEC-weighted pH 5.22). The model's `CEC_tot_in` is
+  their CEC at pH 7 (NH4OAc), 10.8 cmolc/kg: Ca 0.444, Mg 0.135, K 0.012
+  and Na 0.006 of it (base saturation 0.598), KCl Al 0.032, the rest
+  (0.37) H.
+  - Why the CEC at pH 7 and not the effective CEC (bases + KCl Al, 6.8,
+    the model's value until 8 October 2026): the Appelo exchanger has a
+    fixed capacity and carries the soil's pH-dependent charge as
+    exchangeable H, which an effective CEC leaves out. The Kantola
+    (Energy Farm) runs use a buffered CEC the same way: 13 cmolc/kg by
+    summation of Mehlich-3 Ca, Mg and K and Sikora-buffer H (Pihlap et
+    al. 2025, A&L Great Lakes), whose 18-20 % H is the buffer acidity
+    their exchanger seed carries. On the effective CEC, the Energy-Farm
+    style fit needed SCEPTER's selectivities shifted 3.3 log units per
+    charge, and only crystalline gibbsite could hold the bases.
 - **SoilGrids** at the parcel (`Soils/SoilGrids_parcel_centre.csv`,
   v2.0 REST, 0-5/5-15/15-30 cm): pH 5.0/5.2/5.3, agreeing with SSURGO;
-  CEC at pH 7 38.7/12.2/10.4 cmolc/kg (0-30 cm median 12.9, which at the
-  pooled layers' effective/pH-7 ratio of 0.63 gives 8.1, the cross-check);
-  organic carbon 269/50/22 g/kg, a forest-floor value at 0-5 cm (90 %
-  range 27-528), so OM is SSURGO's, not SoilGrids'.
+  CEC at pH 7 38.7/12.2/10.4 cmolc/kg (0-30 cm median 12.9, the
+  cross-check of the pooled layers' 10.8); organic carbon 269/50/22 g/kg,
+  a forest-floor value at 0-5 cm (90 % range 27-528), so OM is SSURGO's,
+  not SoilGrids'.
 - The exchanger follows pH: the one forested Cheshire pedon (40A1239,
-  7.9 km, pH 4.6) holds Al on 67-83 % of its sites and bases on 22 % of
-  its 3.0 cmolc/kg. Were the site's pH revised to that, the set would
-  change with it (`Representative_Soil_Chemistry` at the new pH).
+  7.9 km, pH 4.6) holds Al on 30-60 % of its CEC at pH 7 (67-83 % of its
+  effective CEC) and bases on 10-19 %. Were the site's pH revised to
+  that, the set would change with it (`Representative_Soil_Chemistry` at
+  the new pH).
 - `Run_Hamden_Field_Inputs` (v2/interpolation) rebuilds the per-cell file
-  from all of this; sub-plot data later fill its `measured_*` columns.
-  Until they do, the model does not impose this base saturation: the
-  exchanger emerges from the spin-up (see the open items below).
-- Weathering: the primary-mineral supply stays the borrowed case-5 rate,
-  by decision: `B_IO.Tup_Ca` 0.003, `Tup_Mg` 0.002 and `Tup_Si` 0.0001
-  g m⁻² d⁻¹ (about 11, 7 and 0.4 kg ha⁻¹ yr⁻¹) into the primary-mineral
-  pools, which release their Ca over about 380 years and their Mg over
-  about 480 (`Biogeochemistry_Parameter`).
+  from all of this; sub-plot data later fill its `measured_*` columns
+  (a measured CEC on the same basis: at pH 7, or by summation with buffer
+  acidity). Until they do, the model does not impose this base
+  saturation: the exchanger emerges from the spin-up, and Hamden's
+  exchange constants are fitted so that it holds this one (below).
+- **Weathering** (`PFT_Hamden_Deciduous_Grass`): the borrowed case-5
+  supply of Ca and Mg (the Kantola uplift, `B_IO.Tup_Ca` 0.003 and
+  `Tup_Mg` 0.002 g m⁻² d⁻¹) keeps its charge, 1.15 keq ha⁻¹ yr⁻¹, but is
+  split for Hamden: `Tup_Ca` 0.0038876 and `Tup_Mg` 0.0014617 g m⁻² d⁻¹
+  (14.2 and 5.3 kg ha⁻¹ yr⁻¹, against 11.0 and 7.3); K (5.3 kg ha⁻¹ yr⁻¹,
+  T&C's default soil production) and `Tup_Si` 0.0001 are unchanged.
+  - Why (8 October 2026): the soil biogeochemistry exchanges, fixes,
+    leaches and takes up Ca, Mg and K alike by mass, so its spun-up
+    solution settles at the molar ratios of their supply. The uplift's
+    split, the Energy Farm's, supplies more Mg than Ca by moles (1.10 to
+    1; 1.2-1.3 once the release of the base file's placeholder mineral
+    inventories is added), and the spun-up solution followed it: Mg/Ca
+    1.22 at loop 54 of a class seed. The exchanger emerging from it held
+    the measured total but not its split (Mg-dominated, against the
+    measured Ca/Mg of 3.28).
+  - The split: weathering plus deposition supply Ca and Mg at 1.58 to 1,
+    the dissolved ratio in which the measured exchanger is at equilibrium
+    under SCEPTER's Ca/Mg selectivity (3.28 / 10^0.316); the test
+    (`test_hamden_field_configuration`) re-derives it from
+    `Soils/Representative_soil_chemistry.csv` and the deposition record.
+  - A cold start's primary-mineral pools of K, Ca and Mg begin at the
+    steady state of their supply (`Tup/K3`: 503, 544 and 256 g m⁻²), so
+    the release is the supply from the first day. The base file starts
+    them at a placeholder 502 g m⁻² each (one vector copied for Ca, Mg
+    and Si), which the spin-up cannot shed: they release over about 380
+    (Ca), 480 (Mg) and 960 (K) years.
+  - A spin-up from before this change carries the old supply: start the
+    field spin-up in a new `TC_OUTPUT_DIR` (the spin-up's provenance does
+    not see the vegetation file's content).
+  - In the probe class seed the solution was also K-rich (K/Ca 6.2): its
+    short spin-up still held most of the base file's 135 g m⁻² of fixed
+    K, which releases with a 37-year time constant. A full spin-up sheds
+    it (K/Ca 0.41 at loop 54, the molar ratio of K's supply).
 
 ## Vegetation and management
 
@@ -378,27 +420,57 @@ The same files are kept in two places:
   converged state (Phase 3 only).
 - **Base saturation emerges from the spin-up** until sub-plot data
   arrive (`fX_conc_convention` `spinup_equilibrium` in the ERW row). The
-  seed keeps the spun-up soil solution (dissolved Ca 0.09, Mg 0.43,
-  K 0.54 mmol/L in a short test spin-up) and puts the exchanger in
+  seed keeps the spun-up soil solution and puts the exchanger in
   equilibrium with it, by the run's exchange law, at the pore-water pH
-  that reproduces the cell's bulk pH. On the representative CEC that
-  gives a base saturation of 0.15 at bulk pH 5.3 (Cheshire cells) and
-  0.24 at 5.5 (Wilbraham), the rest H (0.56, 0.54) and Al (0.30, 0.22),
-  pore pH 4.91 and 5.06, dissolved Al 0.42 and 0.18 mmol/L, strong
-  anions 2.2 and 1.6 meq/L, and it passes the ERW handoff check. A cell
-  whose `measured_bs_*` columns are filled (`use_measured_base_saturation`)
-  is seeded from its measurement instead.
-- Why the representative set is not imposed: the base parameter file's
-  exchange constants are the Energy Farm's calibration
-  (`bulk_pH_params.appelo`), and at Hamden's bulk pH (5.3) they hold a
-  base saturation of 0.70, not the representative 0.94. A seed that keeps
-  the given inventory moves the difference (4.6 molc m⁻² of Ca, 2.3 of
-  Mg) into 80 L m⁻² of pore water, and the handoff check refused it:
-  dissolved Ca 28.7 mM against its 20 mM ceiling in the short test
-  spin-up, 27.1 mM in a class seed converged at loop 180. A measured base
-  saturation that disagrees with the constants in the same way will call
-  for Hamden's own affinities, as the Energy Farm's was fitted to its own.
-- The start of the simulation: the seeded strong anions (1.6–2.2 meq/L,
+  that reproduces the cell's bulk pH. A cell whose `measured_bs_*` columns
+  are filled (`use_measured_base_saturation`) is seeded from its
+  measurement instead.
+- **Hamden's exchange constants** (`PFT_Hamden_Deciduous_Grass`,
+  EXCHANGER) are fitted the way the Energy Farm's were, by
+  `v2/calibration/Fit_Exchange_Affinity.m` (any site). SCEPTER's `logKH`
+  are shifted by z·δ at alpha 3.4, and the pinned Al(OH)3 phase is fitted
+  too. The fit makes the exchanger that emerges from the class seed's
+  spun-up solution hold the representative layers' base saturation (0.598
+  of the CEC at pH 7) and KCl Al (0.032) at their pH (5.22).
+  - Result: δ −1.042 (`logKH` [4.858 3.758 8.386 8.702 13.344]) and
+    log \*Kso 9.20, between crystalline gibbsite (8.04) and the
+    microcrystalline phase (9.66). The Energy Farm's own shift is −1.18
+    (at alpha 1.3). The amorphous phase the base file pins (10.8) cannot
+    hold Hamden's bases at any shift: its Al takes the sites.
+  - Fitted on `Calibration/ERW_seed_inputs_classseed_01.mat`, the ERW
+    seed's inputs at the 2020-01-01 handoff of a cold class seed of this
+    code. That seed carries Hamden's weathering split and the CEC at pH 7,
+    and converged at loop 216 on a workstation (4.5 h). Its solution holds
+    Ca 0.51, Mg 0.47 and K 0.17 mmol/L. Every class seed now leaves such a
+    file beside it (`classseed_<k>_erw_seed_inputs.mat`).
+  - The exchanger that emerges (CEC 10.8 cmolc/kg):
+
+    | bulk pH | base saturation | Ca | Mg | K | Al | H | pore pH | dissolved Al (µmol/L) |
+    |---|---|---|---|---|---|---|---|---|
+    | 5.22 (the layers; measured) | 0.598 (0.598) | 0.406 (0.444) | 0.179 (0.135) | 0.013 (0.012) | 0.032 (0.032) | 0.370 (0.370) | 4.84 | 14.5 |
+    | 5.3 (Cheshire cells) | 0.625 | 0.425 | 0.187 | 0.013 | 0.020 | 0.355 | 4.92 | 9.4 |
+    | 5.5 (Wilbraham cells) | 0.678 | 0.461 | 0.203 | 0.014 | 0.006 | 0.317 | 5.12 | 3.5 |
+
+    Strong anions are 1.9–2.0 meq/L, and every row passes the handoff
+    check.
+  - The Ca:Mg split follows the solution on the handoff day. On 1 January
+    that solution has Ca/Mg 1.10, against 1.51 flow-weighted over the ring
+    and the supply's 1.58. So the exchanger holds a little more Mg than
+    measured: Ca/Mg 2.3 against 3.3. Under the case-5 weathering split it
+    was 0.9.
+  - Reproduce (about 20 minutes), in `v2/T&C_Code/Inputs/Hamden`:
+    `chem = readtable('Soils/Representative_soil_chemistry.csv');`
+    `Fit_Exchange_Affinity('Calibration/ERW_seed_inputs_classseed_01.mat',
+    chem.bs_Ca_fraction + chem.bs_Mg_fraction + chem.bs_K_fraction +
+    chem.bs_Na_fraction, chem.layers_pH, 'ExchangeableAl',
+    chem.Al_fraction, 'AlPinLogKso', [8.04 9.66])`.
+  - Before these, the base file's constants (the Energy Farm's, alpha
+    1.3, amorphous Al(OH)3) let the same kind of solution hold a base
+    saturation of only 0.15–0.28. Imposing the representative set under
+    them failed the handoff check: dissolved Ca 28.7 mM against the 20 mM
+    ceiling.
+- The start of the simulation, as a test under the Energy Farm constants
+  showed it before Hamden's own: the seeded strong anions (1.6–2.2 meq/L,
   the charge balance of the measured pH, which includes the organic
   anions the model does not carry) are 40–60 times what deposition
   sustains (39 µeq/L at the ring's water loss). With deposition the only
