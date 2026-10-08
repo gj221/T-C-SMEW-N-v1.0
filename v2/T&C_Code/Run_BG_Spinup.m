@@ -366,14 +366,25 @@ if ~spinup_handoff_only && ~p1_done && ~p2_done && ~p3_done
         p1_Tdp_acc = p1_Tdp_acc + mean(Tdp_bio_out(jrows),   'omitnan');
         p1_Se_acc  = p1_Se_acc  + mean(Se_bio_out(jrows),    'omitnan');
         p1_Psi_acc = p1_Psi_acc + mean(Psi_bio_out(jrows),   'omitnan');
-        p1_VSUM_acc  = p1_VSUM_acc  + mean(VSUM_out(jrows),  'omitnan');
+        %%% v1.0, leaching_water 'layer' (the frame's leach_layer): Phase 2
+        %%% leaches with the layer's own drainage over the layer's water, so
+        %%% these two carry the frame's daily records of those instead.
+        if leach_layer
+            p1_VSUM_acc = p1_VSUM_acc + mean(V_leach_out(jrows),'omitnan');
+        else
+            p1_VSUM_acc  = p1_VSUM_acc  + mean(VSUM_out(jrows),  'omitnan');
+        end
         p1_VTSUM_acc = p1_VTSUM_acc + mean(VTSUM_out(jrows),  'omitnan');
         p1_WFPS_acc  = p1_WFPS_acc  + mean(WFPS_bio_out(jrows),'omitnan');
         p1_fanaer_acc = p1_fanaer_acc + mean(f_anaer_bio_out(jrows),'omitnan');
         %% Peak leaf area of the year over every crown of both layers.
         p1_peak_LAI(end+1) = max([reshape(LAI_H(jrows,:),1,[]), ...
             reshape(LAI_L(jrows,:),1,[]), 0]);
-        p1_Lk_acc    = p1_Lk_acc    + sum(Lk(1:NN)) / (NNd_y - 1);
+        if leach_layer
+            p1_Lk_acc = p1_Lk_acc + mean(Lk_leach_out(jrows),'omitnan');
+        else
+            p1_Lk_acc    = p1_Lk_acc    + sum(Lk(1:NN)) / (NNd_y - 1);
+        end
 
         p1_T_H_acc      = p1_T_H_acc      + sum(T_H(1:NN,:), 1) / (NNd_y - 1);
         p1_T_L_acc      = p1_T_L_acc      + sum(T_L(1:NN,:), 1) / (NNd_y - 1);
@@ -1124,7 +1135,12 @@ while ~p3_converged
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
-    p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk, Bio_Zs, RfH_Zs, RfL_Zs);
+    if leach_layer
+        %%% v1.0, leaching_water 'layer': the ERW's drainage is the layer's.
+        p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk_bio, Bio_Zs, RfH_Zs, RfL_Zs);
+    else
+        p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk, Bio_Zs, RfH_Zs, RfL_Zs);
+    end
     p3_rows = 2:j;
     %%% The plants' nutrient stock on day 1, the state the parameter file sets.
     %%% The frame fills its tissue records (TNIT ... TSIL) from day 2, so their

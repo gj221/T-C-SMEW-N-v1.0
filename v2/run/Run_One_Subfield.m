@@ -29,6 +29,8 @@ function result_file = Run_One_Subfield(run_id, varargin)
 %%   Run_One_Subfield(11,'AppeloLogKH',[5.9 4.8 10.47 10.986 16.47])
 %%   Run_One_Subfield(10,'Pcla',0.12,'Psan',0.22,'KNmaxd',0.0032)
 %%   Run_One_Subfield(10,'Kbot',NaN)            % explicit free drainage
+%%   Run_One_Subfield(10,'LeachingWater','layer','ResultDirectory',D)
+%%                                             % leach with the layer's drainage
 %%   Run_One_Subfield(2,'ParallelWorkers',6)    % parallel daily ERW columns
 %%   Run_One_Subfield(3,'Scenario','ssp245','LastApplicationYear',2050, ...
 %%       'ResultDirectory',D)                  % rock every November to 2050
@@ -48,7 +50,8 @@ opt = struct('NDays',[],'StartDate',[],'GridNx',[],'GridNy',[], ...
     'KNmaxd',[],'Kbot',[],'CECpHSensitivity',[],'ParallelWorkers',[], ...
     'SaveResults',true,'ResultDirectory','','Scenario','', ...
     'CalciteCase',[],'LastApplicationYear',[], ...
-    'BiogeoOverrides',[],'DissolutionFactor',[],'SaturationExponent',[]);
+    'BiogeoOverrides',[],'DissolutionFactor',[],'SaturationExponent',[], ...
+    'LeachingWater',[]);
 if mod(numel(varargin),2) ~= 0
     error('Run_One_Subfield:BadOptions','Options must be name/value pairs.');
 end
@@ -101,6 +104,15 @@ validate_optional_fraction(opt.Pcla,'Pcla');
 validate_optional_fraction(opt.Psan,'Psan');
 validate_optional_nonnegative_scalar(opt.KNmaxd,'KNmaxd');
 validate_optional_kbot(opt.Kbot);
+%% v1.0: the water the dissolved pools leach with (Leaching_Water_Basis).
+%% Empty or 'column' is v0.9's; 'layer' changes every run, the control
+%% included, so its results need a directory of their own.
+opt.LeachingWater = validate_optional_leaching_water(opt.LeachingWater);
+if strcmp(opt.LeachingWater,'layer') && isempty(opt.ResultDirectory)
+    error('Run_One_Subfield:BadOptions', ...
+        ['A LeachingWater ''layer'' run needs an explicit ResultDirectory so its ' ...
+        'results do not collide with the validated campaign.']);
+end
 %% Uncertainty-ensemble knobs (runtime/Uncertainty_1D): a
 %% struct of Biogeochemistry_Parameter literals to replace for this run, a
 %% dissolution factor for the feedstock rows of the ERW workbook, and an
@@ -303,6 +315,9 @@ ERW_PARAM_input = readtable(wb,ERW_opts);
 MOD_PARAM_input.Zbio(:) = R.biogeo_depth_mm;
 if ~isempty(opt.Kbot)
     MOD_PARAM_input.Kbot(:) = opt.Kbot;
+end
+if strcmp(opt.LeachingWater,'layer')
+    MOD_PARAM_input.leaching_water = repmat("layer",height(MOD_PARAM_input),1);
 end
 if ~isempty(opt.Pcla)
     texture_sum = opt.Pcla + opt.Psan + MOD_PARAM_input.Porg;
@@ -535,6 +550,9 @@ run_provenance.last_application_year = last_application_year;
 run_provenance.biogeo_overrides = opt.BiogeoOverrides;
 run_provenance.dissolution_factor = opt.DissolutionFactor;
 run_provenance.saturation_exponent = saturation_exponent;
+if strcmp(opt.LeachingWater,'layer')
+    run_provenance.leaching_water = 'layer';
+end
 
 base_param = fullfile(Parameter_Directory,[char(MOD_PARAM_input.MOD_PARAM) '.m']);
 is_main = strcmp(topo.cell_region,'main');
@@ -669,6 +687,9 @@ if ~isempty(opt.SaturationExponent)
 end
 if ~isempty(opt.Kbot)
     ckpt_tag = sprintf('%s__kbot%s',ckpt_tag,kbot_tag(opt.Kbot));
+end
+if strcmp(opt.LeachingWater,'layer')
+    ckpt_tag = sprintf('%s__leachlayer',ckpt_tag);
 end
 if ~isempty(opt.FieldDEM) && topo.N_cells > 1
     %% A topographic and a flat run of the same grid must never share a
@@ -806,6 +827,9 @@ if opt.SaveResults
     if ~isempty(opt.Kbot)
         tag = sprintf('%s__kbot%s',tag,kbot_tag(opt.Kbot));
     end
+    if strcmp(opt.LeachingWater,'layer')
+        tag = sprintf('%s__leachlayer',tag);
+    end
     if ~isempty(opt.FieldDEM) && topo.N_cells > 1
         tag = sprintf('%s__dem%s',tag, ...
             number_tag(dem_resolution(opt.DEMResolutionM,topo)));
@@ -875,6 +899,20 @@ if ~(isnumeric(value) && isreal(value) && isscalar(value) && ...
         (isnan(value) || (isfinite(value) && value >= 0)))
     error('Run_One_Subfield:BadOptions', ...
         'Kbot must be NaN for free drainage or a finite nonnegative scalar.');
+end
+end
+
+function value = validate_optional_leaching_water(value)
+%% '' (v0.9's leaching), 'column' (the same, named) or 'layer'.
+if isempty(value); value = ''; return; end
+if ~(ischar(value) || (isstring(value) && isscalar(value)))
+    error('Run_One_Subfield:BadOptions', ...
+        'LeachingWater must be ''column'' or ''layer''.');
+end
+value = lower(strtrim(char(value)));
+if ~ismember(value,{'column','layer'})
+    error('Run_One_Subfield:BadOptions', ...
+        'LeachingWater must be ''column'' or ''layer''.');
 end
 end
 
