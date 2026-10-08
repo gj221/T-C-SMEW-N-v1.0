@@ -1482,15 +1482,21 @@ window and, once downloaded, the 1 m DEM tile are in
   of the eight characterised Cheshire pedons
   (`KSSL_Cheshire_pedons_0-30cm.csv`, six within 13 km).
   `Representative_Soil_Chemistry` pools the 0-30 cm layers whose pH lies
-  within 0.3 of the cells' area-mean pH (5.36) and that carry an
-  effective CEC (bases + KCl Al): three layers at pH 5.2-5.3. The model
-  takes the CEC at the soil's own pH, so the effective CEC: 6.8 cmolc
-  kg-1, with Ca 0.709, Mg 0.216 and K 0.019 of it (each fraction the
-  layers' summed base over their summed effective CEC). SoilGrids' CEC at
-  pH 7 at the parcel (12.9 cmolc kg-1, 0-30 cm median) scaled by those
-  layers' effective/pH-7 ratio (0.63) gives 8.1, the cross-check. The
+  within 0.3 of the cells' area-mean pH (5.36) and that carry a KCl Al:
+  three layers at pH 5.2-5.3 (CEC-weighted 5.22). The model takes their
+  CEC at pH 7 (NH4OAc), 10.8 cmolc kg-1, with Ca 0.444, Mg 0.135, K 0.012
+  and Na 0.006 of it (base saturation 0.598; each fraction the layers'
+  summed cation over their summed CEC), KCl Al 0.032 and the rest H. The
+  Appelo exchanger has a fixed capacity and carries the pH-dependent
+  charge as exchangeable H, so its CEC is a buffered one, as the Energy
+  Farm's is (13 cmolc kg-1 by summation of Mehlich-3 bases and
+  Sikora-buffer H, Pihlap et al. 2025); the effective CEC (bases + KCl
+  Al, 6.8), the model's value until 8 October 2026, leaves that charge
+  out. SoilGrids' CEC at pH 7 at the parcel (12.9 cmolc kg-1, 0-30 cm
+  median) is the cross-check. The
   pH window matters, because the exchanger follows pH: the one forested
-  pedon (7.9 km away, pH 4.6) holds Al on 67-83 % of its sites. SoilGrids'
+  pedon (7.9 km away, pH 4.6) holds Al on 30-60 % of its CEC at pH 7
+  (67-83 % of its effective CEC). SoilGrids'
   pH (5.0-5.3) agrees with SSURGO; its organic carbon does not (269 g/kg
   at 0-5 cm, a forest-floor value), so OM is SSURGO's. All of this is
   every cell's baseline (`Run_Hamden_Field_Inputs`); sub-plot data fill
@@ -1528,9 +1534,17 @@ window and, once downloaded, the 1 m DEM tile are in
   its steady state on that supply. No fertiliser or manure, no
   fertiliser year (`FertN_years` empty) and no biological N fixation:
   atmospheric deposition is the only external nutrient supply, beside the
-  primary-mineral supply, which stays the borrowed case-5 rate by decision
-  (`B_IO.Tup_Ca` 0.003, `Tup_Mg` 0.002 g m-2 d-1, about 11 and 7 kg ha-1
-  yr-1).
+  primary-mineral supply. That keeps the borrowed case-5 uplift's Ca + Mg
+  charge (1.15 keq ha-1 yr-1) split for Hamden: `B_IO.Tup_Ca` 0.0038876
+  and `Tup_Mg` 0.0014617 g m-2 d-1 (14.2 and 5.3 kg ha-1 yr-1, against the
+  uplift's 11.0 and 7.3), so that with the deposition Ca and Mg arrive at
+  1.58 to 1, the dissolved ratio in which the measured exchanger (Ca/Mg
+  3.28) is at equilibrium under SCEPTER's Ca/Mg selectivity. The
+  biogeochemistry treats Ca, Mg and K alike by mass, so its spun-up
+  solution settles at the molar ratios of their supply; the uplift's
+  split had left it Mg-rich (Mg/Ca 1.22). A cold start's primary-mineral
+  pools begin at the steady state of their supply instead of the base
+  file's placeholder 502 g m-2 each.
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell
@@ -1578,38 +1592,51 @@ window and, once downloaded, the 1 m DEM tile are in
   site observations.
 
 `test_cell_land_cover_and_soil` (19 checks) covers the cover and soil
-mapping on the parcel's grid; `test_hamden_field_configuration` (23) the
+mapping on the parcel's grid; `test_hamden_field_configuration` (31) the
 site as the cluster configures it, from the grid down to one cell's
-assembled parameters and, with the DEM, the cluster's plan.
+assembled parameters (the weathering split and the exchange constants
+included) and, with the DEM, the cluster's plan; `test_fit_exchange_affinity`
+the calibration tool and the Al(OH)3 phase option.
 
 The exchanger: until sub-plot data arrive, Hamden's ERW row lets the
 base saturation emerge from the spin-up (`spinup_equilibrium`), and a
 cell given a measured one (`measured_bs_*`) is seeded from it. The
-representative set could not be imposed. The base parameter file
-carries the Energy Farm's exchange calibration (`bulk_pH_params.appelo`:
-the shifted `logKH` and alpha 1.3), which at Hamden's bulk pH 5.3 holds
-a base saturation of 0.70, not the representative 0.94. The seed keeps
-the given inventory, so it moved the difference into the pore water,
-and the handoff check refused it: dissolved Ca 28.7 mM against the 20 mM
-ceiling, in a short test spin-up (27.1 mM in a class seed converged at
-loop 180), where the spun-up solution held 0.09 mM, with 91 meq/L of
-strong anions closing the charge. Emerging from the spun-up solution,
-the same seed passes at both map units' pH: base saturation 0.15 and
-0.24 (bulk pH 5.3 and 5.5), the rest H (0.56, 0.54) and Al (0.30,
-0.22), pore pH 4.91 and 5.06, dissolved Al 0.42 and 0.18 mM, strong
-anions 2.2 and 1.6 meq/L. That is the Energy Farm constants' answer for
-this solution; a measured base saturation that disagrees with them, as
-the representative set does, will call for Hamden's own affinities.
+exchange constants are Hamden's own, fitted the way the Energy Farm's
+were by `v2/calibration/Fit_Exchange_Affinity.m`, which works for any
+site. SCEPTER's `logKH` are shifted by z·δ at alpha 3.4, and the pinned
+Al(OH)3 phase is fitted too, so that on a converged class seed's spun-up
+solution the emerging exchanger holds the representative layers' base
+saturation (0.598 of the CEC at pH 7) and KCl Al (0.032) at their pH
+(5.22). The fit gives δ −1.042 and log \*Kso 9.20 (crystalline gibbsite
+8.04, microcrystalline 9.66). The Energy Farm's own shift is −1.18. Its
+amorphous phase (10.8) cannot hold Hamden's bases at any shift.
+
+The fit's input is `Inputs/Hamden/Calibration/ERW_seed_inputs_classseed_01.mat`,
+from a cold class seed of this code converged at loop 216; every class
+seed now leaves such a file. The exchanger then emerges with:
+
+- at the layers' pH: Ca 0.406, Mg 0.179 and K 0.013 (measured 0.444,
+  0.135 and 0.012);
+- base saturation 0.625 at bulk pH 5.3 (Cheshire cells, pore pH 4.92)
+  and 0.678 at 5.5 (Wilbraham, pore pH 5.12);
+- dissolved Al 9 and 3.5 µmol/L.
+
+Both pass the handoff check. The base file's Energy Farm constants (alpha
+1.3, amorphous Al(OH)3) had held only 0.15–0.28, and imposing the
+representative set under them failed the check (dissolved Ca 28.7 mM
+against 20).
+
 Deposition alone supplies Na and SO4 + Cl (`keyword_add` = 0, by
 decision). The seeded strong anions are the measured pH's charge
-balance, organic anions the model does not carry included, and 40-60
-times what deposition sustains (39 ueq/L at the ring's water loss). They
-leave with the water the ERW layer loses, which is little before the
-leaves are out: in a 200-day plot-scale test from 1 January 2020 they
-stayed near 2 meq/L until June, then went with the transpiration stream,
-to 84 ueq/L by 18 July, as the pore pH rose from 4.91 to 5.13 and base
-saturation from 0.145 to 0.160. The layer's leakage is T&C's flux out of
-the bottom of the 5 m column (`Lk`), which is small through the winter.
+balance, organic anions the model does not carry included. They are
+40-60 times what deposition sustains (39 ueq/L at the ring's water
+loss), and leave with the water the ERW layer loses, which is little
+before the leaves are out. In a 200-day plot-scale test from 1 January
+2020, under the Energy Farm constants, they stayed near 2 meq/L until
+June, then went with the transpiration stream, to 84 ueq/L by 18 July.
+Over that time the pore pH rose from 4.91 to 5.13 and base saturation
+from 0.145 to 0.160. The layer's leakage is T&C's flux out of the bottom
+of the 5 m column (`Lk`), which is small through the winter.
 
 ### Energy Farm Bouchet R2025a runs
 

@@ -386,6 +386,10 @@ if al_pin
     % kinetic microcrystalline default (9.66) with the equilibrium phase
     % constant verified against the SCEPTER source (scepter.f90 amal case).
     K_AlOH3 = 10.8;
+    %%% v1.0: a site may pin another phase (bulk_pH_params.Al_pin_logKso).
+    if isfield(bulk_pH_params, 'Al_pin_logKso') && ~isempty(bulk_pH_params.Al_pin_logKso)
+        K_AlOH3 = bulk_pH_params.Al_pin_logKso;
+    end
 end
 
 %%% Ionic-strength-conditional constants.  The species variables stay

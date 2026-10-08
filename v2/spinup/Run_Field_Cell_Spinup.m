@@ -33,7 +33,10 @@ function [state_file,CellInputs] = Run_Field_Cell_Spinup(shape_file,agronomic_fi
 %%
 %% Stages, one SLURM step or array each (v2/cluster):
 %%   'Stage','plan'        spinup_plan.csv and the array-index lists
-%%   'Stage','class_seed'  'ClassIndex',k: the seed of class k
+%%   'Stage','class_seed'  'ClassIndex',k: the seed of class k, with its
+%%                         ERW seed's inputs beside it for an exchange
+%%                         calibration (classseed_<k>_erw_seed_inputs.mat,
+%%                         Fit_Exchange_Affinity)
 %%   'Stage','track'       the 2-D tracking run (every class seed on disk)
 %%   'Stage','replay'      'CellIndex',c: subsample cell c's replay
 %%   'Stage','reconstruct' 'CellIndex',c: cell c from the forest (every
@@ -433,9 +436,12 @@ end
 %% =======================================================================
 function st = class_seed(F,k)
 %% The class's 1-D spin-up (Lian et al. Fig. 3a): its representative cell's
-%% own full spin-up, written to the class seed file.
+%% own full spin-up, written to the class seed file.  Its handoff saves the
+%% ERW seed's inputs beside it, the input of an exchange calibration.
 c = F.class_rep(k);
-st = full_cell_spinup(class_seed_path(F.dir,k),F.resolved.cell_id(c),F.case,F.inputs(c));
+f = class_seed_path(F.dir,k);
+st = full_cell_spinup(f,F.resolved.cell_id(c),F.case,F.inputs(c),'', ...
+    struct('ERW_SEED_INPUTS_FILE',strrep(f,'.mat','_erw_seed_inputs.mat')));
 end
 
 function v = stand_of(st)

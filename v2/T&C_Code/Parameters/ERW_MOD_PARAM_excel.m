@@ -344,6 +344,13 @@ use_amorphous_AlOH3 = isfield(ERW_TC_const_input, 'bulk_pH_params') && ...
     isfield(ERW_TC_const_input.bulk_pH_params, 'Al_solubility_pin') && ...
     isequal(ERW_TC_const_input.bulk_pH_params.Al_solubility_pin, true);
 K_AlOH3 = ERW_AlOH3_LogK(use_amorphous_AlOH3);
+%%% v1.0: a site may pin another Al(OH)3 phase than the amorphous one
+%%% (bulk_pH_params.Al_pin_logKso, log *Kso); the seed, the bulk-pH inversion
+%%% and the daily solver then all hold dissolved Al at that phase.
+if use_amorphous_AlOH3 && isfield(ERW_TC_const_input.bulk_pH_params,'Al_pin_logKso') && ...
+        ~isempty(ERW_TC_const_input.bulk_pH_params.Al_pin_logKso)
+    K_AlOH3 = ERW_TC_const_input.bulk_pH_params.Al_pin_logKso;
+end
 % When the Al solubility pin is active the daily solver works with the
 % amorphous phase (ERW_function overrides K_AlOH3 to 10.8, SCEPTER
 % 'amal'), so the seed and its saturation diagnostic must use the same

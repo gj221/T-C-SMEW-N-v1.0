@@ -85,6 +85,12 @@ if isfield(RUN_SETTINGS,'MOD_PARAM_override') && ~isempty(RUN_SETTINGS.MOD_PARAM
     MOD_PARAM_input = validate_parameter_override(RUN_SETTINGS.MOD_PARAM_override, ...
         MOD_PARAM_input,'MOD_PARAM_override');
 end
+%% Where the ERW seed's inputs go for an exchange calibration
+%% (Fit_Exchange_Affinity): the plot-scale driver saves them at its seed.
+ERW_seed_inputs_file = '';
+if isfield(RUN_SETTINGS,'ERW_SEED_INPUTS_FILE') && ~isempty(RUN_SETTINGS.ERW_SEED_INPUTS_FILE)
+    ERW_seed_inputs_file = char(RUN_SETTINGS.ERW_SEED_INPUTS_FILE);
+end
 if isfield(RUN_SETTINGS,'ERW_PARAM_override') && ~isempty(RUN_SETTINGS.ERW_PARAM_override)
     ERW_PARAM_input = validate_parameter_override(RUN_SETTINGS.ERW_PARAM_override, ...
         ERW_PARAM_input,'ERW_PARAM_override');

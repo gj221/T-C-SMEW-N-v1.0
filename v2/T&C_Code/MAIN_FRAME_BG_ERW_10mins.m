@@ -1043,6 +1043,12 @@ for i=2:NN
             %%%%%%%%%%%%%%%%%% initilising first inputs %%%%%%%%%%%%%%%%%%%
             P_prev_for_erw_delta = P(j-1,:);
             if first_erw_step
+                %%% v1.0: a run may keep the seed's inputs for an exchange
+                %%% calibration (ERW_SEED_INPUTS_FILE, Fit_Exchange_Affinity).
+                if exist('ERW_seed_inputs_file','var') && ~isempty(ERW_seed_inputs_file)
+                    save(ERW_seed_inputs_file,'t','TT_m','ERW_TC_const','ERW_biogeochem', ...
+                        'ERW_PARAM_input','opt_ERW_preprocessing','B_out','cov_moll','-v7');
+                end
                 %%%%%%%%%%%%%%
                 [ERW_biogeochem, ERW_plant, ERW_weathering, ERW_const, ERW_var, ERW_biogeochem_varnames, ERW_weathering_varnames, ERW_plant_varnames, ERW_const_varnames, ERW_var_varnames, ERW_all]=...
                   ERW_MOD_PARAM_excel(t, TT_m, ERW_TC_const, ERW_biogeochem, ERW_PARAM_input, opt_ERW_preprocessing);

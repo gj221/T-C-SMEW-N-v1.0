@@ -9,6 +9,8 @@
 #   plan -> array(class seeds) -> track (TC_TRACK_JOBS chained copies)
 #        -> array(tracked cells: replays) -> array(other cells: forest)
 #        -> assemble
+#   (TC_STOP_AFTER=class_seed stops after the class seeds, for a refit of
+#   the site's exchange constants before any cell hands off)
 # Chain (Method per_cell):  plan -> array(all cells) -> assemble -> validate
 # The plan job runs first and blocks (sbatch --wait, a few minutes) because
 # the array indices only exist once it has written them.
@@ -39,6 +41,13 @@ if [[ "$METHOD" == "flux_tracking" ]]; then
   [[ -n "$classes" && -n "$tracked" ]] || { echo "the plan has no classes or no tracked cells" >&2; exit 1; }
   echo "class seeds: --array=$classes"
   dep=$(sbatch --parsable --export=ALL,TC_TASK=class_seed --array="$classes" field_spinup_cell.sbatch)
+  if [[ "${TC_STOP_AFTER:-}" == "class_seed" ]]; then
+    # every cell's handoff takes the site's exchange constants: refit them on
+    # a class seed's classseed_<k>_erw_seed_inputs.mat first, then submit
+    # again without TC_STOP_AFTER (the finished class seeds are reused)
+    echo "stopping after the class seeds (TC_STOP_AFTER=class_seed), job $dep"
+    exit 0
+  fi
   n_track="${TC_TRACK_JOBS:-3}"
   for ((k = 1; k <= n_track; k++)); do
     # every copy after the first continues the previous one's work

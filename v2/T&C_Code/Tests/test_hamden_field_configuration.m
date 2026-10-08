@@ -17,7 +17,7 @@ function test_hamden_field_configuration()
 %%      over the borrowed case (location, its default 20-layer column with
 %%      free drainage, vegetation file, CO2, deposition and rain records, the
 %%      2020 handoff); its exchanger left to emerge on the representative
-%%      CEC (Representative_Soil_Chemistry); pH by a 1:1 extract; no rock;
+%%      CEC at pH 7 (Representative_Soil_Chemistry); pH by a 1:1 extract; no rock;
 %%      Cheshire texture, its own map
 %%      unit's pH and OM, and its own land cover
 %%   4  a column override may not set a cell's own soil or cover, nor an
@@ -30,7 +30,11 @@ function test_hamden_field_configuration()
 %%      fertiliser year for the plot-scale frame to refill; a cold start
 %%      takes the base file's 20-layer moisture profile; trees and grass
 %%      are perennial, a run that follows another starting from its stand,
-%%      and grow without T&C's sink limitation
+%%      and grow without T&C's sink limitation; the site's weathering keeps
+%%      the uplift's Ca + Mg charge, split to the measured exchanger, a cold
+%%      start's primary minerals at the steady state of their supply; the
+%%      site's own exchange constants hold the measured exchanger on the
+%%      class seed's soil solution
 %%   6  with the parcel's DEM window (not versioned; skipped without it) the
 %%      flux-tracking plan the cluster runs first: one class (every cell
 %%      shares soil and vegetation), a topographically stratified ~10 %
@@ -217,6 +221,30 @@ P_cold = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maiz
     fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx_cold);
 check('a cold start takes the base file''s 20-layer moisture profile', ...
     isequal(size(P_cold.O(1,:)),[1 20]) && all(P_cold.O(1,:) > 0));
+%% Hamden's weathering: the uplift's Ca + Mg charge, split so that with the
+%% deposition it supplies the dissolved Ca/Mg in which the measured exchanger
+%% is at equilibrium under SCEPTER's selectivity; a cold start's
+%% primary-mineral pools at the steady state of that supply, a run that
+%% follows another keeping its own.
+chem_r = (chem.bs_Ca_fraction/chem.bs_Mg_fraction)/10^(10.786-10.47);
+mol = @(ca,mg) [ca/40.078 mg/24.305];
+w_mol = mol(P.B_IO.Tup_Ca,P.B_IO.Tup_Mg);
+d_mol = mol(R.Deposition.mean_g_m2_d(3),R.Deposition.mean_g_m2_d(4));
+BGP = Biogeochemistry_Parameter(1);
+ctx_seed = rmfield(ctx,{'B_out','O_out','NavlI_out','RexmyI_out','NupI_L_out'});
+ctx_seed.O = zeros(1,numel(Zs)-1); ctx_seed.P = zeros(1,79);   % as Phase 2 starts a cold spin-up
+P_seed = Load_Cell_Parameters(fullfile(code,'Parameters','MOD_PARAM_Kantola_Maize_Soy.m'), ...
+    fullfile(code,'Parameters',[char(CI(c).MOD_PARAM.pft_override) '.m']),ctx_seed);
+check('weathering keeps the uplift''s Ca + Mg charge, split to the measured exchanger''s dissolved Ca/Mg', ...
+    abs(sum(w_mol)/sum(mol(0.003,0.002)) - 1) < 1e-5 && ...
+    abs((w_mol(1)+d_mol(1))/(w_mol(2)+d_mol(2))/chem_r - 1) < 1e-4 && ...
+    P.B_IO.Tup_Si == 0.0001, ...
+    sprintf('Tup_Ca %.7f Tup_Mg %.7f, supply Ca/Mg %.4f against %.4f',P.B_IO.Tup_Ca,P.B_IO.Tup_Mg, ...
+    (w_mol(1)+d_mol(1))/(w_mol(2)+d_mol(2)),chem_r));
+check('a cold start''s primary K, Ca and Mg begin at the steady state of their supply; a run that follows another keeps its own', ...
+    max(abs(P_seed.P(1,[55 63 71]) - [P_seed.B_IO.Tup_K/BGP.K3k P_seed.B_IO.Tup_Ca/BGP.K3ca ...
+    P_seed.B_IO.Tup_Mg/BGP.K3mg])) < 1e-9 && isequal(P.P(1,:),K.B_out(end,:)), ...
+    sprintf('primary %s',mat2str(P_seed.P(1,[55 63 71]),6)));
 %% Trees and grass are perennial: a cold start begins from the file's stand,
 %% a run that follows another from that run's end state, as the 2-D driver
 %% loads it for each cell (Cell_BG_State_Context -> Perennial_Vegetation_Apply);
@@ -245,6 +273,27 @@ check('the stand is perennial: it starts from a run''s end state handed in, else
 check('the stand grows as the legacy coupled forest runs: no sink limitation, heartwood turning over in 40 years', ...
     P.OPT_EnvLimitGrowth == 0 && P_veg.OPT_EnvLimitGrowth == 0 && ...
     abs(P.Wm_H(1)*40*365 - 1) < 1e-12 && isequal(P.Wm_L,[0 0]));
+%% Hamden's own exchange constants (Fit_Exchange_Affinity): on the class
+%% seed's ERW seed inputs, the exchanger that emerges at the representative
+%% layers' pH holds their base saturation and KCl Al.
+X = load(fullfile(code,'Inputs','Hamden','Calibration','ERW_seed_inputs_classseed_01.mat'));
+Cx = X.ERW_TC_const; Cx.PH_in = chem.layers_pH;
+Cx.bulk_pH_params.appelo = P.bulk_pH_params.appelo;
+Cx.bulk_pH_params.Al_pin_logKso = P.bulk_pH_params.Al_pin_logKso;
+[Bx,~,Wx,ECx] = ERW_MOD_PARAM_excel(X.t,X.TT_m,Cx,X.ERW_biogeochem,X.ERW_PARAM_input, ...
+    X.opt_ERW_preprocessing);
+Dx = ERW_Handoff_Diagnostic(ERW_Initialize_TC_Cation_Pools(X.B_out,Bx,ECx,X.TT_m.s(1,:)), ...
+    Bx,Wx,ECx,X.cov_moll);
+bs_x = Bx.f_Ca(1) + Bx.f_Mg(1) + Bx.f_K(1) + Bx.f_Na(1);
+bs_m = chem.bs_Ca_fraction + chem.bs_Mg_fraction + chem.bs_K_fraction + chem.bs_Na_fraction;
+delta = P.bulk_pH_params.appelo.logKH(1) - 5.9;
+check('the site''s exchange constants hold the measured base saturation and KCl Al on the class seed''s soil solution', ...
+    P.bulk_pH_params.appelo.alpha == 3.4 && isequal(P.bulk_pH_params.Al_solubility_pin,true) && ...
+    max(abs(P.bulk_pH_params.appelo.logKH - ([5.9 4.8 10.47 10.786 16.47] + [1 1 2 2 3]*delta))) < 1e-12 && ...
+    abs(X.ERW_PARAM_input.CEC_tot_in - chem.CEC_cmolc_kg) < 1e-9 && ...
+    abs(bs_x - bs_m) < 1e-4 && abs(Bx.f_Al(1) - chem.Al_fraction) < 1e-4 && ...
+    string(ERW_Handoff_Readiness(Dx).status) == "pass", ...
+    sprintf('base saturation %.4f (measured %.4f), Al %.4f (%.4f)',bs_x,bs_m,Bx.f_Al(1),chem.Al_fraction));
 
 %% --- 6 --------------------------------------------------------------------
 dem = fullfile(v2,'Spatial inputs','Hamden Blue Trail','DEM');
