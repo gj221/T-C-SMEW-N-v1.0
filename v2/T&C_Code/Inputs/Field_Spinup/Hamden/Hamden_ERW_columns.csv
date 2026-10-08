@@ -1,2 +1,2 @@
 ExperimentFullName,Location,Lat,Lon,ExperimentalDescription,soil,fX_conc_convention,pH_DilutionFactor,keyword_add,M_rock_in,M_rock_event
-Hamden (US),Hamden,41.437,-72.866,forest_grass_control,sandy loam,f_CEC_inventory,1,1,0,0
+Hamden (US),Hamden,41.437,-72.866,forest_grass_control,sandy loam,spinup_equilibrium,1,1,0,0

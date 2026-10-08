@@ -903,7 +903,14 @@ at zero and follow the handoff equilibrium. It also switches that row
 to v0.9's `f_CEC_inventory` convention: the workbook rows use the
 `Kantola` convention, whose seed prescribes an 80 % base saturation in
 `ERW_pre_processing` and would overwrite the measurement (the anion
-closure is full-charge under both). That seed is the right
+closure is full-charge under both). A row set to `spinup_equilibrium`
+(v1.0) takes a measured base saturation only. Without one, no
+composition is prescribed: the seed keeps the spun-up soil solution (the
+biogeochemistry's dissolved Ca, Mg and K, the rain's Na), and
+`Invert_Bulk_pH` puts the exchanger in equilibrium with it, by the run's
+own exchange law, at the pore-water pH that reproduces the measured bulk
+pH. The base saturation then emerges from the spin-up, the CEC and the
+pH (`test_kantola_seed_charge`, `test_cell_agronomic_inputs`). That seed is the right
 entry point mechanistically: `Invert_Bulk_pH` treats a supplied
 exchanger seed as a conserved exchangeable inventory that it combines
 with the dissolved cations and re-partitions by the same Gaines-Thomas
@@ -1078,7 +1085,8 @@ up, so neither the tracking nor the forest touches them. Every cell,
 replayed or reconstructed, is handed on through the transient's own seed
 path: the observation constraint at the transient start, then the ERW
 seed built from the cell's own bulk pH, CEC and measured base saturation
-(`Invert_Bulk_pH`, the `f_CEC_inventory` convention), gated by
+(`Invert_Bulk_pH`, the `f_CEC_inventory` convention) or, under
+`spinup_equilibrium` without one, from its spun-up soil solution, gated by
 `ERW_Handoff_Readiness` (charge balance, pore and bulk pH, base
 saturation). A reconstructed cell runs that gate alone
 (`Run_Automatic_Site_Spinup` with `SPINUP_HANDOFF_ONLY`), keeping the
@@ -1478,10 +1486,9 @@ window and, once downloaded, the 1 m DEM tile are in
   pH (5.0-5.3) agrees with SSURGO; its organic carbon does not (269 g/kg
   at 0-5 cm, a forest-floor value), so OM is SSURGO's. All of this is
   every cell's baseline (`Run_Hamden_Field_Inputs`); sub-plot data fill
-  the `measured_*` columns and a warm start re-spins the field. The
-  representative exchanger passes the model's ERW handoff gate at both
-  map units' pH (pore pH 5.09 and 5.28; the exchange law re-partitions
-  it to 0.71 and 0.77 base saturation at the Energy Farm constants).
+  the `measured_*` columns and a warm start re-spins the field. Until
+  they do, the base saturation is left to emerge from the spin-up (below):
+  imposed, the representative set fails the ERW handoff check.
 - **Vegetation** (`PFT_Hamden_Deciduous_Grass`, the row's `pft_override`):
   trees from the T&C site table's Harvard Forest row, grass from its
   Fendt C3 meadow row; a mature, dormant stand re-prescribed each
@@ -1560,19 +1567,27 @@ mapping on the parcel's grid; `test_hamden_field_configuration` (23) the
 site as the cluster configures it, from the grid down to one cell's
 assembled parameters and, with the DEM, the cluster's plan.
 
-Open, and blocking the cluster run: the ERW handoff check refuses
-Hamden's seed (dissolved Ca 28.7 mM against its 20 mM ceiling, in a short
-test spin-up that reached the 2020-01-01 handoff). The base parameter
-file carries the Energy Farm's exchange calibration
-(`bulk_pH_params.appelo`: the shifted `logKH` and alpha 1.3), which at
-Hamden's measured bulk pH 5.3 holds a base saturation of 0.70, not the
-measured 0.94; the seed keeps the measured inventory, so the difference
-goes into the pore water (the biogeochemistry's own solution held
-0.06 mM Ca), and the charge balance closes with 91 meq/L of strong
-anions. The Energy Farm's remedy fits: affinities shifted until the
-measured base saturation holds at the measured pH. Whether the Na and
-SO4 + Cl supply should then come from CT15 rather than the closure
-(`keyword_add`) waits on that seed.
+The exchanger: until sub-plot data arrive, Hamden's ERW row lets the
+base saturation emerge from the spin-up (`spinup_equilibrium`), and a
+cell given a measured one (`measured_bs_*`) is seeded from it. The
+representative set could not be imposed. The base parameter file
+carries the Energy Farm's exchange calibration (`bulk_pH_params.appelo`:
+the shifted `logKH` and alpha 1.3), which at Hamden's bulk pH 5.3 holds
+a base saturation of 0.70, not the representative 0.94. The seed keeps
+the given inventory, so it moved the difference into the pore water,
+and the handoff check refused it: dissolved Ca 28.7 mM against the 20 mM
+ceiling, in a short test spin-up (27.1 mM in a class seed converged at
+loop 180), where the spun-up solution held 0.09 mM, with 91 meq/L of
+strong anions closing the charge. Emerging from the spun-up solution,
+the same seed passes at both map units' pH: base saturation 0.15 and
+0.24 (bulk pH 5.3 and 5.5), the rest H (0.56, 0.54) and Al (0.30,
+0.22), pore pH 4.91 and 5.06, dissolved Al 0.42 and 0.18 mM, strong
+anions 2.2 and 1.6 meq/L. That is the Energy Farm constants' answer for
+this solution; a measured base saturation that disagrees with them, as
+the representative set does, will call for Hamden's own affinities. The
+Na and SO4 + Cl supply stays with the steady closure (`keyword_add` = 1):
+the seeded strong anions are still some 60-80 times what CT15 alone
+would sustain (28 ueq/L).
 
 ### Energy Farm Bouchet R2025a runs
 

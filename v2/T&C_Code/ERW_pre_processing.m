@@ -6,6 +6,8 @@ function [excel_var_names, ERW_preprocess_output] = ...
 % "total_to_f_CEC_and_conc" (total element pools -> f_CEC + conc)
 % "f_CEC_to_conc" (CEC fractions -> concentrations)
 % "f_CEC_inventory" (fractions define conserved initial inventories)
+% "spinup_equilibrium" (no fractions: the exchanger emerges in equilibrium
+%     with the spun-up soil solution at the measured bulk pH; v1.0)
 
 % excel_input.rock_filepath: datafile for rock distribution
 
@@ -253,6 +255,24 @@ elseif excel_input.fX_conc_convention == "Kantola"
     K_Ca_Mg = (f_Ca(1)/Ca(1))*(Mg(1)/f_Mg(1));
     K_Ca_K = (f_Ca(1)/Ca(1))*(K(1)/f_K(1))^2;
 
+
+elseif excel_input.fX_conc_convention == "spinup_equilibrium"
+    %%% v1.0: no exchange composition is prescribed.  The spun-up soil
+    %%% solution stands (the biogeochemistry's dissolved Ca, Mg and K, the
+    %%% rain's Na), and Invert_Bulk_pH puts the exchanger in equilibrium
+    %%% with it, by the run's own exchange law, at the pore-water pH that
+    %%% reproduces the measured bulk pH, so the base saturation emerges
+    %%% from the spin-up.  Without fractions (all zero) the inversion
+    %%% derives them at every trial pH; a row's own f_CEC_in is not used.
+    if ~(isfinite(Ca(1)) && Ca(1) > 0) || ...
+            any(~isfinite([Mg(1), K(1)])) || any([Mg(1), K(1)] < 0)
+        error('ERW:InvalidSpinupSolution', ...
+            'spinup_equilibrium needs the spun-up dissolved Ca (positive), Mg and K.');
+    end
+    if ~isfinite(Na(1))
+        Na(1) = 0;
+    end
+    f_Ca(1) = 0; f_Mg(1) = 0; f_K(1) = 0; f_Na(1) = 0; f_Al(1) = 0; f_H(1) = 0;
 
 else
     error('ERW:UnknownCECConvention', 'Unknown fX_conc_convention: %s', ...
