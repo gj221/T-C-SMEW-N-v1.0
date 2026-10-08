@@ -1355,8 +1355,8 @@ deposition), and its base cations with it.
 
 The legacy coupled forest runs of T&C-BG-2D turn heartwood over in 37.6
 and 40.1 years, returning dead wood to the soil as woody litter.
-Hamden's trees now do the same, at 40 years; heartwood levels off where
-conversion from sapwood equals mortality.
+Hamden's trees now do the same, at 40 years (kept by decision);
+heartwood levels off where conversion from sapwood equals mortality.
 
 With the turnover, the class seed's canopy holds through twenty-five
 coupled years, cycling with the four-year forcing ring: peak LAI 4.8-5.0,
@@ -1514,8 +1514,12 @@ window and, once downloaded, the 1 m DEM tile are in
   map. The ERW chemistry takes CT15's rain record (`Rain_Chem_Hamden.mat`,
   `rain_chem_file`): rain pH 5.20 and a pore-water Na seeded at the rain
   steady state; after the first day the Na and SO4 + Cl supply follows the
-  steady closure (`keyword_add` = 1). No fertiliser, and no fertiliser
-  year (`FertN_years` empty).
+  steady closure (`keyword_add` = 1). No fertiliser or manure, no
+  fertiliser year (`FertN_years` empty) and no biological N fixation:
+  atmospheric deposition is the only external nutrient supply, beside the
+  primary-mineral supply, which stays the borrowed case-5 rate by decision
+  (`B_IO.Tup_Ca` 0.003, `Tup_Mg` 0.002 g m-2 d-1, about 11 and 7 kg ha-1
+  yr-1).
 - **CO2**: NOAA Mauna Loa daily means as given
   (`Ca_Data_NOAA_MLO_daily.mat`, `co2_file`).
 - **Forcing**: NLDAS-2 hourly primary forcing for the 0.125 degree cell

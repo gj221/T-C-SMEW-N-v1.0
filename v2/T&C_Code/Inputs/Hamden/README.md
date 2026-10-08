@@ -236,6 +236,11 @@ The same files are kept in two places:
   from all of this; sub-plot data later fill its `measured_*` columns.
   Until they do, the model does not impose this base saturation: the
   exchanger emerges from the spin-up (see the open items below).
+- Weathering: the primary-mineral supply stays the borrowed case-5 rate,
+  by decision: `B_IO.Tup_Ca` 0.003, `Tup_Mg` 0.002 and `Tup_Si` 0.0001
+  g m⁻² d⁻¹ (about 11, 7 and 0.4 kg ha⁻¹ yr⁻¹) into the primary-mineral
+  pools, which release their Ca over about 380 years and their Mg over
+  about 480 (`Biogeochemistry_Parameter`).
 
 ## Vegetation and management
 
@@ -247,7 +252,9 @@ The same files are kept in two places:
   - grass (LOW, beneath the trees and in the open): Fendt, DE (row 102,
     "C3 grass": aSE = 2, Vmax 50, ZR95 25 cm), a humid temperate meadow.
 - Management: grass cut once a year on 1 September; no liming, fertiliser,
-  irrigation or rock.
+  manure, irrigation or rock, and no biological N fixation
+  (`Exudation_Parameter(0)`). Atmospheric deposition is the only external
+  nutrient supply, beside the primary-mineral supply under Soils.
 - Trees and grass are perennial. The stand in `PFT_Hamden_Deciduous_Grass`
   starts only a cold start: a dormant Harvard Forest stand over an
   established sward, its 140 gC m-2 of roots sized for a mown lawn's peak
@@ -268,9 +275,9 @@ The same files are kept in two places:
     there, yet growth still draws on their reserves. Carried through it,
     the grass starved within a year and the trees within four, so each
     Phase-1 year starts from the file, as before.
-- Heartwood turns over in 40 years (`Wm_H`), as in the legacy coupled
-  T&C-BG-2D forest runs (37.6 and 40.1 years). The site table's 0, from
-  water-carbon runs, let heartwood grow for ever and bury 2 g N m-2 a
+- Heartwood turns over in 40 years (`Wm_H`), by decision, as in the legacy
+  coupled T&C-BG-2D forest runs (37.6 and 40.1 years). The site table's 0,
+  from water-carbon runs, let heartwood grow for ever and bury 2 g N m-2 a
   year (three times the deposition) and its base cations. The canopy then
   thinned after fifteen years, to LAI 1.4 by the forty-second.
 - The trees grow without T&C's sink limitation (`OPT_EnvLimitGrowth = 0`),
