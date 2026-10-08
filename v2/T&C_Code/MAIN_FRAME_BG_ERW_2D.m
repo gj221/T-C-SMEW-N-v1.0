@@ -141,23 +141,26 @@ for c = 1:N_col
     end
     %%% v1.0: a site's rain-chemistry record (Load_Rain_Chemistry) gives the
     %%% column's ERW its rain pH and its Na and strong-anion supply, as in the
-    %%% 1-D driver, and the column's spin-up state -- its own, or else the
-    %%% site's -- the long-term water loss the rain Na seed divides by.
-    %%% Inert without a record.
-    if isfield(ColCfg(c),'RAIN_CHEM') && isstruct(ColCfg(c).RAIN_CHEM) && ...
-            isfield(ColCfg(c).RAIN_CHEM,'source_file') && ...
-            ~isempty(strtrim(char(ColCfg(c).RAIN_CHEM.source_file)))
-        if isfield(ColCfg(c),'BG_STATE') && isstruct(ColCfg(c).BG_STATE) && ...
-                isfield(ColCfg(c).BG_STATE,'seed_water_loss_l_m2_d')
-            PAR{c}.seed_water_loss_l_m2_d = ColCfg(c).BG_STATE.seed_water_loss_l_m2_d;
-        elseif exist('seed_water_loss_l_m2_d','var')
-            PAR{c}.seed_water_loss_l_m2_d = seed_water_loss_l_m2_d;
-        else
-            error('MAIN_FRAME_BG_ERW_2D:NoSeedWaterLoss', ...
-                ['Column %d: the rain record %s seeds Na from the spin-up''s ' ...
-                 'long-term water loss, which its spin-up state does not carry.'], ...
-                c,char(ColCfg(c).RAIN_CHEM.source_file));
-        end
+    %%% 1-D driver; a deposition record carrying Na and the strong anions
+    %%% (Build_Site_Deposition) supplies them wet and dry instead.  Either
+    %%% seeds Na from the long-term water loss of the column's spin-up state
+    %%% -- its own, or else the site's.  Inert without a record.
+    has_rain_record = isfield(ColCfg(c),'RAIN_CHEM') && isstruct(ColCfg(c).RAIN_CHEM) && ...
+        isfield(ColCfg(c).RAIN_CHEM,'source_file') && ...
+        ~isempty(strtrim(char(ColCfg(c).RAIN_CHEM.source_file)));
+    has_erw_deposition = isfield(PAR{c},'B_IO') && isfield(PAR{c}.B_IO,'Dep_events') && ...
+        isfield(PAR{c}.B_IO.Dep_events,'erw_mean_umol_m2_d');
+    if isfield(ColCfg(c),'BG_STATE') && isstruct(ColCfg(c).BG_STATE) && ...
+            isfield(ColCfg(c).BG_STATE,'seed_water_loss_l_m2_d')
+        PAR{c}.seed_water_loss_l_m2_d = ColCfg(c).BG_STATE.seed_water_loss_l_m2_d;
+    elseif exist('seed_water_loss_l_m2_d','var')
+        PAR{c}.seed_water_loss_l_m2_d = seed_water_loss_l_m2_d;
+    elseif has_rain_record || has_erw_deposition
+        error('MAIN_FRAME_BG_ERW_2D:NoSeedWaterLoss', ...
+            ['Column %d: its rain or deposition record seeds Na from the spin-up''s ' ...
+             'long-term water loss, which its spin-up state does not carry.'],c);
+    end
+    if has_rain_record
         PAR{c}.rain_pH_vwm = ColCfg(c).RAIN_CHEM.rain_pH_vwm;
         PAR{c}.rain_Na_flux_umol_m2_d = ColCfg(c).RAIN_CHEM.rain_Na_flux_umol_m2_d;
         PAR{c}.rain_strong_anion_flux_umolc_m2_d = ...
@@ -371,6 +374,7 @@ VOL=z2(NNd,1); N2flx=z2(NNd,1); N2Oflx=z2(NNd,1); ...
     FertN_d=z2(NNd,1); DepN_d=z2(NNd,1); PH_d=z2(NNd,1); ...
     PH_pore_d=z2(NNd,1); PH_bulk_d=z2(NNd,1);
 Dep_d=z2(NNd,6); %% the day's deposition [N P K Ca Mg Si] (Deposition_Day)
+Dep_erw_d=z2(NNd,2); %% the day's ERW Na and strong-anion deposition [umol, umolc m-2 d-1]
 Min_N=z2(NNd,1); Min_P=z2(NNd,1); R_bacteria=z2(NNd,1);
 RmycAM=z2(NNd,1); RmycEM=z2(NNd,1); Prod_B=z2(NNd,1); Prod_F=z2(NNd,1);
 BfixN=z2(NNd,1); LitFirEmi=z2(NNd,2);
@@ -1021,7 +1025,7 @@ for i = i_resume:NN
                 PH_bulk_d(j,c) = PH_bulk_c(c);
                 %% The day's deposition: constant, or wet on the day's
                 %% precipitation plus the year's dry (Deposition_Day).
-                [B_IO_bgc_day,Dep_d(j,:,c)] = Deposition_Day(B_IO_c_now, ...
+                [B_IO_bgc_day,Dep_d(j,:,c),Dep_erw_d(j,:,c)] = Deposition_Day(B_IO_c_now, ...
                     Datam(i,:),sum(Pr(pdind))*dth);
 
                 [P(j,:,c),LEAK_NH4(j,c),LEAK_NO3(j,c),LEAK_P(j,c),LEAK_K(j,c), ...
@@ -1614,7 +1618,7 @@ for i = i_resume:NN
                 R_microbe(:,1,c), R_litter(:,1,c), R_ew(:,1,c), R_litter_sur(:,1,c), ...
                 Rmr_H(:,:,c), Rmr_L(:,:,c), Ccrown_c(c,:), ...
                 P(:,:,c), PAR{c}.MOD_PARAM_input, ERW_PARAM_cell, ...
-                conv_mol, conv_Al, N_col);
+                conv_mol, conv_Al, N_col, Dep_erw_d(j,:,c));
         end
         for c = 1:N_col
             ERW{c} = ERW_next{c};

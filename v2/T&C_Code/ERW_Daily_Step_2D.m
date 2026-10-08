@@ -1,7 +1,7 @@
 function E = ERW_Daily_Step_2D(E, cfg, p, i, j, NN, NNd, Datam, ~, Ca, ...
     O_c, Lk_c, f_c, T_H_c, T_L_c, Tdp_bio, VSUM, VTSUM, ...
     R_microbe_c, R_litter_c, R_ew_c, R_litter_sur_c, Rmr_H_c, Rmr_L_c, Ccrown, ...
-    P_c, MOD_PARAM_input, ERW_PARAM_input, conv_mol, conv_Al, N_col)
+    P_c, MOD_PARAM_input, ERW_PARAM_input, conv_mol, conv_Al, N_col, dep_erw)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% ERW_Daily_Step_2D
 %%
@@ -43,6 +43,13 @@ function E = ERW_Daily_Step_2D(E, cfg, p, i, j, NN, NNd, Datam, ~, Ca, ...
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 E.has_update = false;
+%% v1.0: the day's Na and strong-anion deposition [umol, umolc m-2 d-1]
+%% (Deposition_Day), when the column's deposition record carries them.
+if nargin < 32
+    dep_erw = [];
+end
+erw_deposition = isfield(p,'B_IO') && isfield(p.B_IO,'Dep_events') && ...
+    isfield(p.B_IO.Dep_events,'erw_mean_umol_m2_d');
 
 %% ---------------------------------------------------------------------
 %% One-off initialisation for this column
@@ -65,11 +72,18 @@ if ~E.init
     if isfield(p,'Porg');   C.Porg  = p.Porg;   end
     if isfield(p,'Pcla');   C.Pcla  = p.Pcla;   end
     if isfield(p,'rain_pH_vwm'); C.rain_pH_vwm = p.rain_pH_vwm; end
-    %%% v1.0: a site's rain record and the spin-up's long-term water loss
+    %%% v1.0: a site's rain record, its deposition record's long-term Na
+    %%% and strong-anion supply, and the spin-up's long-term water loss
     %%% (MAIN_FRAME_BG_ERW_2D), as the 1-D driver hands them on.
     if isfield(p,'rain_Na_flux_umol_m2_d')
         C.rain_Na_flux_umol_m2_d = p.rain_Na_flux_umol_m2_d;
         C.rain_strong_anion_flux_umolc_m2_d = p.rain_strong_anion_flux_umolc_m2_d;
+    end
+    if erw_deposition
+        C.I_Na_source = p.B_IO.Dep_events.erw_mean_umol_m2_d(1);
+        C.I_An_source = p.B_IO.Dep_events.erw_mean_umol_m2_d(2);
+    end
+    if isfield(p,'seed_water_loss_l_m2_d')
         C.seed_water_loss_l_m2_d = p.seed_water_loss_l_m2_d;
     end
     if isfield(p,'bulk_pH_params'); C.bulk_pH_params = p.bulk_pH_params; end
@@ -363,6 +377,10 @@ if ERW_PARAM_input.keyword_add == 1
     %% the bare anion does not acidify the box (ERW_Leached_Salt_Resupply).
     [E.const.I_Ca,E.const.I_Mg] = ERW_Leached_Salt_Resupply(E.TC.f_Lw_bio(j), ...
         E.bg.An_tot(bg_row),E.bg.Na_tot(bg_row),E.bg.Ca(bg_row),E.bg.Mg(bg_row));
+elseif erw_deposition && ~isempty(dep_erw)
+    %% v1.0: the day's own Na and strong-anion deposition.
+    E.const.I_Na = dep_erw(1);
+    E.const.I_An = dep_erw(2);
 end
 
 %% ---------------------------------------------------------------------

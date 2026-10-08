@@ -3,8 +3,9 @@ function Deposition = Build_Site_Deposition(ntn_file, tdep_dir, forcing_file, la
 %% Build_Site_Deposition
 %%
 %% A site's event deposition record, for the biogeochemistry's
-%% B_IO.Dep_events (Deposition_Day): N, K, Ca and Mg arriving wet with each
-%% day's precipitation and dry every day.
+%% B_IO.Dep_events (Deposition_Day): N, K, Ca and Mg, and for the ERW
+%% chemistry Na and the strong-acid anions (SO4 + Cl), arriving wet with
+%% each day's precipitation and dry every day.
 %%
 %% Wet, per calendar year: the precipitation-weighted mean concentration of
 %% the NADP NTN samples collected within the year
@@ -21,7 +22,11 @@ function Deposition = Build_Site_Deposition(ntn_file, tdep_dir, forcing_file, la
 %% year's precipitation, for the summary and the long-term mean rates.
 %%
 %% Deposition.events     year, wet_g_m2_per_mm, dry_g_m2_d over [N K Ca Mg]
-%%                       (B_IO.Dep_events)
+%%                       (B_IO.Dep_events); and for the ERW chemistry
+%%                       erw_wet_umol_m2_per_mm, erw_dry_umol_m2_d and
+%%                       their long-term mean erw_mean_umol_m2_d over
+%%                       [Na An]: Na [umol] and the strong-acid anions
+%%                       SO4 + Cl [umolc] (nitrate is N deposition)
 %% Deposition.wet_mg_L   per year, as element (N, S) or ion, with its source
 %% Deposition.dry_kg_ha_yr  per year, with its source
 %% Deposition.annual     per complete forcing year: precipitation, wet, dry
@@ -102,6 +107,13 @@ events.year = years;
 events.wet_g_m2_per_mm = wet(:,model_col)*1e-3;           % mg/L x L/m2/mm
 events.dry_g_m2_d = dry(:,model_col)*0.1./days_in_year;   % kg/ha -> g/m2
 events.elements = model;
+%% The ERW chemistry's Na and strong-acid anions on the same footing,
+%% [mg] -> [umol Na, umolc SO4 + Cl]; kg/ha is 100 mg/m2.
+to_erw = @(x) [x(:,strcmp(elements,'Na'))/22.990, ...
+    2*x(:,strcmp(elements,'S'))/mw.S + x(:,strcmp(elements,'Cl'))/35.453]*1e3;
+events.erw_elements = {'Na','An'};
+events.erw_wet_umol_m2_per_mm = to_erw(wet);              % mg/L x L/m2/mm
+events.erw_dry_umol_m2_d = to_erw(dry*100)./days_in_year;
 
 F = load(forcing_file,'Date','Pr');
 forcing_year = year(datetime(F.Date,'ConvertFrom','datenum'));
@@ -114,6 +126,7 @@ annual = array2table([annual_years precip_mm wet_kg dry(a,:) total], ...
     'VariableNames',[{'year','precip_mm'} strcat('wet_',elements,'_kg_ha') ...
     strcat('dry_',elements,'_kg_ha') strcat('total_',elements,'_kg_ha')]);
 mean_g_m2_d = sum(total(:,model_col),1)*0.1/sum(days_in_year(a));
+events.erw_mean_umol_m2_d = sum(to_erw(total*100),1)/sum(days_in_year(a));
 
 Deposition = struct();
 Deposition.site_lat_lon = [lat lon];

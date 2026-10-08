@@ -200,6 +200,7 @@ N2Oflx = zeros(NNd,1);
 NITflx = zeros(NNd,1); DENITflx = zeros(NNd,1); N2Oflx_nit = zeros(NNd,1);
 FertN_d = zeros(NNd,1); DepN_d = zeros(NNd,1);
 Dep_d = zeros(NNd,6); %% the day's deposition [N P K Ca Mg Si] (Deposition_Day)
+Dep_erw_d = zeros(NNd,2); %% the day's ERW Na and strong-anion deposition [umol, umolc m-2 d-1]
 PH_d = zeros(NNd,1); PH_pore_d = zeros(NNd,1); PH_bulk_d = zeros(NNd,1);
 Min_N = zeros(NNd,1);
 Min_P = zeros(NNd,1);
@@ -429,7 +430,7 @@ for i=2:NN
             %%% The day's deposition: B_IO's constant rates, or with an event
             %%% record the day's wet deposition on its precipitation plus the
             %%% year's dry deposition (Deposition_Day).
-            [B_IO_bgc_day,Dep_d(j,:)] = Deposition_Day(B_IO,Datam(i,:),sum(Pr(pdind))*dth);
+            [B_IO_bgc_day,Dep_d(j,:),Dep_erw_d(j,:)] = Deposition_Day(B_IO,Datam(i,:),sum(Pr(pdind))*dth);
             [P(j,:),LEAK_NH4(j),LEAK_NO3(j),LEAK_P(j),LEAK_K(j),LEAK_DOC(j),LEAK_DON(j),LEAK_DOP(j),...
                 LEAK_Ca(j),LEAK_Mg(j),LEAK_Si(j),...
                 Nuptake_H(j,:),NH4uptake_H(j,:),NO3uptake_H(j,:),...
@@ -827,6 +828,15 @@ for i=2:NN
                 if exist('ERW_seed_water_loss_l_m2_d','var') && ~isempty(ERW_seed_water_loss_l_m2_d)
                     ERW_TC_const.seed_water_loss_l_m2_d = ERW_seed_water_loss_l_m2_d;
                 end
+                %%% v1.0: a deposition record that carries the ERW's Na and
+                %%% strong anions (Build_Site_Deposition) supplies them wet
+                %%% and dry, as it supplies N, K, Ca and Mg: its long-term
+                %%% mean seeds the pools, and with keyword_add = 0 each
+                %%% day's own deposition is the boundary input below.
+                if isfield(B_IO,'Dep_events') && isfield(B_IO.Dep_events,'erw_mean_umol_m2_d')
+                    ERW_TC_const.I_Na_source = B_IO.Dep_events.erw_mean_umol_m2_d(1);
+                    ERW_TC_const.I_An_source = B_IO.Dep_events.erw_mean_umol_m2_d(2);
+                end
                 if exist('bulk_pH_params','var')
                     ERW_TC_const.bulk_pH_params = bulk_pH_params;
                 end
@@ -1051,6 +1061,10 @@ for i=2:NN
                 [ERW_const.I_Ca,ERW_const.I_Mg] = ERW_Leached_Salt_Resupply(ERW_TC.f_Lw_bio(j), ...
                     ERW_biogeochem.An_tot(bg_row),ERW_biogeochem.Na_tot(bg_row), ...
                     ERW_biogeochem.Ca(bg_row),ERW_biogeochem.Mg(bg_row));
+            elseif isfield(B_IO,'Dep_events') && isfield(B_IO.Dep_events,'erw_mean_umol_m2_d')
+                %%% v1.0: the day's own Na and strong-anion deposition.
+                ERW_const.I_Na = Dep_erw_d(j,1);
+                ERW_const.I_An = Dep_erw_d(j,2);
             end
 
             %%%%%%%%%%%%%%%%%%%%%% ERW simulation %%%%%%%%%%%%%%%%%%%%%%%%%

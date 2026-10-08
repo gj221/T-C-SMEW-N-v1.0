@@ -7,17 +7,23 @@ function test_event_deposition()
 %%      row; a span's mean rate; a year the record lacks and a negative
 %%      precipitation are errors, never a silent zero; the day's record
 %%      stays double beside the global maps' single-precision P and Si
+%%   2b the ERW's Na and strong anions (SO4 + Cl) arrive the same way when
+%%      the record carries them, and are zero when it does not
 %%   3  the Hamden record: one row per year 2014-2026; complete NTN years
 %%      keep their own concentration, the rest pool the three nearest
 %%      complete years; years beyond TDep's grids take the mean of the
 %%      three nearest; its long-term rates are the record applied to the
-%%      forcing's precipitation, and Phase 2's ring mean is the same sum
+%%      forcing's precipitation, and Phase 2's ring mean is the same sum;
+%%      likewise its Na and strong anions, the ERW seed's long-term supply
 %%   4  the frames apply it: the plot-scale and 2-D frames hand
 %%      BIOGEO_UNIT the day's deposition, Phase 2 (running the row's
 %%      vegetation override, as the frames do) the ring's mean and the
 %%      Phase 3 budgets what the frame applied, from the plants' day-1 stock
 %%      (Plant_Tissue_Nutrients, the model's own tissue content) to the
-%%      soil's at the end, with the last day's litter still on its way
+%%      soil's at the end, with the last day's litter still on its way;
+%%      both frames hand the ERW the day's Na and strong anions, which
+%%      replace the steady closure where keyword_add is 0, and its seed
+%%      the record's long-term mean
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 test_directory = fileparts(mfilename('fullpath'));
 code = fileparts(test_directory);
@@ -25,9 +31,10 @@ addpath(code,fullfile(code,'Inputs','Preprocess'));
 
 %% --- 1 --------------------------------------------------------------------
 B = struct('DepN',2e-3,'DepP',1e-5,'DepK',1e-4,'DepCa',2e-4,'DepMg',1e-4,'DepSi',3e-6);
-[B_day,dep] = Deposition_Day(B,[2020 6 1 1 0 0],25);
-assert(isequal(B_day,B) && isequal(dep,[2e-3 1e-5 1e-4 2e-4 1e-4 3e-6]), ...
-    'Without an event record the constant rates must stand.');
+[B_day,dep,dep_erw] = Deposition_Day(B,[2020 6 1 1 0 0],25);
+assert(isequal(B_day,B) && isequal(dep,[2e-3 1e-5 1e-4 2e-4 1e-4 3e-6]) && ...
+    isequal(dep_erw,[0 0]), ...
+    'Without an event record the constant rates must stand, and no ERW supply.');
 
 %% --- 2 --------------------------------------------------------------------
 E = B;
@@ -50,6 +57,17 @@ E_single = E; E_single.DepP = single(1e-5); E_single.DepSi = single(3e-6);
 [~,mixed] = Deposition_Day(E_single,[2020 3 5 1 0 0],12.5);
 assert(isa(mixed,'double') && isequal(mixed([1 3 4 5]),wet_day([1 3 4 5])), ...
     'A single-precision P or Si rate must not round the day''s record.');
+[~,~,no_erw] = Deposition_Day(E,[2020 3 5 1 0 0],12.5);
+assert(isequal(no_erw,[0 0]),'A record without the ERW elements supplies none.');
+E2 = E;
+E2.Dep_events.erw_elements = {'Na','An'};
+E2.Dep_events.erw_wet_umol_m2_per_mm = [8 15; 9 16];
+E2.Dep_events.erw_dry_umol_m2_d = [7 14; 6 13];
+[~,dep_same,erw_wet] = Deposition_Day(E2,[2020 3 5 1 0 0],12.5);
+[~,~,erw_span] = Deposition_Day(E2,[2019 1 1 0 0 0],365*2,365);
+assert(isequal(dep_same,wet_day) && max(abs(erw_wet-([6 13]+12.5*[9 16]))) < 1e-12 && ...
+    max(abs(erw_span-([7 14]+2*[8 15]))) < 1e-12, ...
+    'The ERW Na and strong anions arrive dry every day and wet on the day''s precipitation.');
 expect_error(@() Deposition_Day(E,[2021 1 1 1 0 0],0),'Deposition_Day:NoYear');
 expect_error(@() Deposition_Day(E,[2020 1 1 1 0 0],-1),'Deposition_Day:BadPrecipitation');
 expect_error(@() Deposition_Day(E,[2020 1 1 1 0 0],NaN),'Deposition_Day:BadPrecipitation');
@@ -86,6 +104,18 @@ for y = 2015:2025
 end
 assert(max(abs(total/days-D.mean_g_m2_d)./D.mean_g_m2_d) < 1e-12, ...
     'The long-term rates are the record applied to the forcing''s precipitation.');
+erw_total = zeros(1,2);
+for y = 2015:2025
+    n = datenum(y+1,1,1)-datenum(y,1,1);
+    [~,~,erw_rate] = Deposition_Day(struct('DepN',0,'DepP',0,'DepK',0,'DepCa',0, ...
+        'DepMg',0,'DepSi',0,'Dep_events',ev),[y 1 1 0 0 0], ...
+        sum(F.Pr(forcing_year == y)),n);
+    erw_total = erw_total+n*erw_rate;
+end
+assert(isequal(ev.erw_elements,{'Na','An'}) && all(ev.erw_wet_umol_m2_per_mm(:) > 0) && ...
+    all(ev.erw_dry_umol_m2_d(:) > 0) && ...
+    max(abs(erw_total/days-ev.erw_mean_umol_m2_d)./ev.erw_mean_umol_m2_d) < 1e-12, ...
+    'The ERW''s long-term Na and strong-anion supply is the record applied to the forcing.');
 A = D.annual;
 assert(abs(mean(A.total_N_kg_ha)-mean(A.wet_N_kg_ha)-mean(A.dry_N_kg_ha)) < 1e-12 && ...
     mean(A.dry_N_kg_ha) > mean(A.wet_N_kg_ha),'Dry N outweighs wet N at the parcel.');
@@ -94,10 +124,10 @@ assert(abs(mean(A.total_N_kg_ha)-mean(A.wet_N_kg_ha)-mean(A.dry_N_kg_ha)) < 1e-1
 frame_1d = fileread(fullfile(code,'MAIN_FRAME_BG_ERW_10mins.m'));
 frame_2d = fileread(fullfile(code,'MAIN_FRAME_BG_ERW_2D.m'));
 spinup = fileread(fullfile(code,'Run_BG_Spinup.m'));
-assert(contains(frame_1d,'[B_IO_bgc_day,Dep_d(j,:)] = Deposition_Day(B_IO,Datam(i,:),sum(Pr(pdind))*dth);') && ...
+assert(contains(frame_1d,'[B_IO_bgc_day,Dep_d(j,:),Dep_erw_d(j,:)] = Deposition_Day(B_IO,Datam(i,:),sum(Pr(pdind))*dth);') && ...
     contains(frame_1d,'B_IO_bgc_day,Datam(i,:),FireA,0,...'), ...
     'The plot-scale frame must hand BIOGEO_UNIT the day''s deposition.');
-assert(contains(frame_2d,'[B_IO_bgc_day,Dep_d(j,:,c)] = Deposition_Day(B_IO_c_now, ...') && ...
+assert(contains(frame_2d,'[B_IO_bgc_day,Dep_d(j,:,c),Dep_erw_d(j,:,c)] = Deposition_Day(B_IO_c_now, ...') && ...
     contains(frame_2d,'B_IO_bgc_day,Datam(i,:),FireA,0, ...'), ...
     'The 2-D frame must hand BIOGEO_UNIT each cell''s day''s deposition.');
 assert(contains(spinup,'B_IO_p2 = rmfield(B_IO_p2,''Dep_events'');') && ...
@@ -109,6 +139,16 @@ assert(contains(spinup,"ismember('pft_override',MOD_PARAM_input.Properties.Varia
     contains(spinup,'p3_terms.plant_start = p3_plant1(p3_n_i)+'), ...
     ['Phase 2 must run the row''s vegetation override (else it never sees the ' ...
      'event record), and the Phase 3 budgets start from the plants'' day-1 stock.']);
+step_2d = fileread(fullfile(code,'ERW_Daily_Step_2D.m'));
+assert(contains(frame_1d,'ERW_TC_const.I_Na_source = B_IO.Dep_events.erw_mean_umol_m2_d(1);') && ...
+    contains(frame_1d,'ERW_const.I_Na = Dep_erw_d(j,1);') && ...
+    contains(frame_1d,'ERW_const.I_An = Dep_erw_d(j,2);') && ...
+    contains(frame_2d,'conv_mol, conv_Al, N_col, Dep_erw_d(j,:,c));') && ...
+    contains(step_2d,'C.I_Na_source = p.B_IO.Dep_events.erw_mean_umol_m2_d(1);') && ...
+    contains(step_2d,'E.const.I_Na = dep_erw(1);') && ...
+    contains(step_2d,'E.const.I_An = dep_erw(2);'), ...
+    ['Both frames must seed the ERW from the record''s long-term Na and strong ' ...
+     'anions and, without the steady closure, supply the day''s own.']);
 %% The frame hands a day's litter to the soil the next day, so the soil
 %% storage at each end of a loop counts the litter still on its way.
 assert(contains(frame_1d,'IS= Ccrown*squeeze(ISOIL_L(j-1,:,:)) + Ccrown*squeeze(ISOIL_H(j-1,:,:));') && ...
