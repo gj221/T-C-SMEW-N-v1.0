@@ -402,5 +402,12 @@ The same files are kept in two places:
   the charge balance of the measured pH, which includes the organic
   anions the model does not carry) are 40–60 times what deposition
   sustains (39 µeq/L at the ring's water loss). With deposition the only
-  supply they drain in the first months, on a timescale of about seven
-  weeks, and the pore pH rises as they go.
+  supply they leave with the water the ERW layer loses, which is little
+  before the leaves are out. In a 200-day plot-scale test from 1 January
+  2020 (the class seed's state, 2020's weather), leakage took 0.03–0.4 %
+  of the layer's water a day until June, and the strong anions stayed near
+  2 meq/L. In June and July transpiration carried them out: by 18 July
+  the inventory had fallen from 176 to 1.6 mmolc m⁻² (84 µeq/L), the pore
+  pH had risen from 4.91 to 5.13 and base saturation from 0.145 to 0.160.
+  The ERW layer's leakage is T&C's flux out of the bottom of the 5 m
+  column (`Lk`, `Leakage_Bottom`), not out of the layer itself.
