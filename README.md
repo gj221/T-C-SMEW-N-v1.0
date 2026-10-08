@@ -1603,9 +1603,13 @@ the representative set does, will call for Hamden's own affinities.
 Deposition alone supplies Na and SO4 + Cl (`keyword_add` = 0, by
 decision). The seeded strong anions are the measured pH's charge
 balance, organic anions the model does not carry included, and 40-60
-times what deposition sustains (39 ueq/L at the ring's water loss), so
-they drain in the first months of the simulation, on a timescale of
-about seven weeks, and the pore pH rises as they go.
+times what deposition sustains (39 ueq/L at the ring's water loss). They
+leave with the water the ERW layer loses, which is little before the
+leaves are out: in a 200-day plot-scale test from 1 January 2020 they
+stayed near 2 meq/L until June, then went with the transpiration stream,
+to 84 ueq/L by 18 July, as the pore pH rose from 4.91 to 5.13 and base
+saturation from 0.145 to 0.160. The layer's leakage is T&C's flux out of
+the bottom of the 5 m column (`Lk`), which is small through the winter.
 
 ### Energy Farm Bouchet R2025a runs
 
