@@ -118,9 +118,10 @@ The same files are kept in two places:
   Extract_NTN_Rain_Chemistry(ntn,'Inputs/Rain_Chem_Hamden.mat',[],[], ...
       sum(F.Pr(in))/(w(2)-w(1))*365.25);
   ```
-- `Deposition_Hamden.mat` (in `Inputs`) — what the biogeochemistry uses,
-  event by event and year by year (`Inputs/Preprocess/Build_Site_Deposition.m`;
-  the model applies it day by day with `Deposition_Day`):
+- `Deposition_Hamden.mat` (in `Inputs`) — what the biogeochemistry and the
+  ERW chemistry use, event by event and year by year
+  (`Inputs/Preprocess/Build_Site_Deposition.m`; the model applies it day
+  by day with `Deposition_Day`):
   - **wet** — CT15's precipitation-weighted mean concentration of each
     calendar year's valid samples (`Deposition/CT15_wet_concentration_by_year.csv`)
     times each day's NLDAS precipitation, rain or snow, so it comes with
@@ -165,17 +166,21 @@ The same files are kept in two places:
   biogeochemistry's deposition terms (replacing the built-in global maps,
   which give 13.4 kg N ha⁻¹ yr⁻¹ at Hamden, wet plus dry, older and
   coarse); P is measured by neither network and stays on the global map;
-  rain pH, Na and the strong anions SO₄ + Cl through the ERW chemistry,
-  from CT15's record (`Rain_Chem_Hamden.mat`, above), which the site row
-  names (`rain_chem_file`) and both drivers read. Nitrate is not counted
-  among the strong anions because it is already N deposition. The record
-  sets the rain pH (5.20, in place of the default 5.6) and seeds the pore
-  water's Na at the rain steady state: 23.7 µmol m⁻² d⁻¹ over the spin-up
-  ring's water loss of the ERW layer (the transpiration drawn from it plus
-  the leakage), 1.6 L m⁻² d⁻¹ in a short test spin-up, so about 15 µmol/L.
-  After the first day the Na and SO₄ + Cl supply follows the steady
-  closure (`keyword_add` = 1), which holds the seeded inventories; see the
-  open items below for why it stays.
+  Na and the strong anions SO₄ + Cl through the ERW chemistry, from the
+  same event record, wet with each day's precipitation and dry every day
+  (34.4 µmol m⁻² d⁻¹ of Na and 62.1 µmolc m⁻² d⁻¹ of SO₄ + Cl over
+  2015–2025, against 23.7 and 44.1 wet alone). Nitrate is not counted
+  among the strong anions because it is already N deposition. CT15's rain
+  record (`Rain_Chem_Hamden.mat`, above, which the site row names in
+  `rain_chem_file`) gives the rain pH, 5.20 in place of the default 5.6.
+- Deposition is the only Na and SO₄ + Cl supply, by decision
+  (`keyword_add` = 0). The pore water's Na is seeded at its steady state:
+  34.4 µmol m⁻² d⁻¹ over the spin-up ring's water loss of the ERW layer
+  (the transpiration drawn from it plus the leakage, 1.6 L m⁻² d⁻¹ in a
+  short test spin-up), about 22 µmol/L. Each day's own deposition is the
+  supply after that. The steady closure (`keyword_add` = 1) would instead
+  return each day's leached Na and SO₄ + Cl with the Ca and Mg that left
+  with them, so deposition could not deplete the exchanger.
 
 ## Atmospheric CO₂
 
@@ -393,8 +398,9 @@ The same files are kept in two places:
   spin-up, 27.1 mM in a class seed converged at loop 180. A measured base
   saturation that disagrees with the constants in the same way will call
   for Hamden's own affinities, as the Energy Farm's was fitted to its own.
-- `keyword_add` stays 1 (the steady closure): even the emergent seed's
-  strong anions (1.6–2.2 meq/L) are 60–80 times what CT15's SO₄ + Cl alone
-  would sustain (28 µeq/L at the ring's water loss), so with CT15's
-  supply alone they would drain on a seven-week timescale and take the
-  pore pH up with them.
+- The start of the simulation: the seeded strong anions (1.6–2.2 meq/L,
+  the charge balance of the measured pH, which includes the organic
+  anions the model does not carry) are 40–60 times what deposition
+  sustains (39 µeq/L at the ring's water loss). With deposition the only
+  supply they drain in the first months, on a timescale of about seven
+  weeks, and the pore pH rises as they go.

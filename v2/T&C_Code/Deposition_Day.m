@@ -1,4 +1,4 @@
-function [B_IO_day,dep] = Deposition_Day(B_IO,Date,precip_mm,n_days)
+function [B_IO_day,dep,dep_erw] = Deposition_Day(B_IO,Date,precip_mm,n_days)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% The atmospheric deposition of one biogeochemistry day [g m-2 d-1].
 %%
@@ -17,9 +17,13 @@ function [B_IO_day,dep] = Deposition_Day(B_IO,Date,precip_mm,n_days)
 %% precipitation is precip_mm.
 %%
 %% dep = [DepN DepP DepK DepCa DepMg DepSi] of the day.
+%% dep_erw = [Na An] of the day for the ERW chemistry [umol, umolc m-2 d-1]:
+%% Na and the strong-acid anions (SO4 + Cl), wet and dry the same way, when
+%% the record carries them (erw_elements); otherwise [0 0].
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 B_IO_day = B_IO;
+dep_erw = [0 0];
 if isfield(B_IO,'Dep_events') && ~isempty(B_IO.Dep_events)
     if nargin < 4 || isempty(n_days); n_days = 1; end
     if ~(isnumeric(precip_mm) && isscalar(precip_mm) && isfinite(precip_mm) && ...
@@ -40,6 +44,10 @@ if isfield(B_IO,'Dep_events') && ~isempty(B_IO.Dep_events)
     B_IO_day.DepK = rate(2);
     B_IO_day.DepCa = rate(3);
     B_IO_day.DepMg = rate(4);
+    if isfield(events,'erw_elements')
+        dep_erw = events.erw_dry_umol_m2_d(row,:)+ ...
+            events.erw_wet_umol_m2_per_mm(row,:)*precip_mm/n_days;
+    end
 end
 %% Each rate to double first: the global maps hold P and Si in single, and
 %% concatenating would round the whole record to single.

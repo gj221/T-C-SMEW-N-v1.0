@@ -1181,19 +1181,27 @@ forcing series, and the drivers seed on their second day, when the
 series hold one day of water fluxes and zeros after it
 (`test_rain_chemistry_seed`, `test_kantola_seed_charge`). N, K, Ca and
 Mg enter through the biogeochemistry's deposition terms only, so each
-element enters once. They are constant
-daily rates unless the vegetation script gives `B_IO.Dep_events`, a
-year-by-year event record (`Build_Site_Deposition`): then they arrive wet
-with each day's precipitation (the year's precipitation-weighted mean
-concentration times the day's rain or snow) and dry every day (the
-year's dry deposition spread over its days), `Deposition_Day`. Both
-frames hand `BIOGEO_UNIT` the day's rates and record them (`Dep_d`),
-Phase 2 takes the ring's mean, and the Phase 3 budgets take what the
-frame applied; every other site keeps its constant rates
-(`test_event_deposition`). A vegetation script for a stand that is never
+element enters once. They are constant daily rates unless the vegetation
+script gives `B_IO.Dep_events`, a year-by-year event record
+(`Build_Site_Deposition`): then they arrive wet with each day's
+precipitation (the year's precipitation-weighted mean concentration
+times the day's rain or snow) and dry every day (the year's dry
+deposition spread over its days), `Deposition_Day`. Both frames hand
+`BIOGEO_UNIT` the day's rates and record them (`Dep_d`), Phase 2 takes
+the ring's mean, and the Phase 3 budgets take what the frame applied;
+every other site keeps its constant rates (`test_event_deposition`). The
+record can also carry the ERW chemistry's Na and strong-acid anions (SO4
++ Cl; nitrate is N deposition), wet and dry the same way (`erw_*`
+fields, `Deposition_Day`'s third output). Its long-term mean then seeds
+the ERW pools in place of a rain record's wet-only fluxes, and with
+`keyword_add` = 0 each day's own deposition is the ERW's Na and
+strong-anion supply (`Dep_erw_d`), so deposition is the only source and
+nothing returns what leaches. With `keyword_add` = 1 the steady closure
+replaces it, as in v0.9. A vegetation script for a stand that is never
 fertilised must also empty `B_IO.FertN_years`: the 10-minute driver
 refills `FertN` with 202 kg N ha-1 in every year the borrowed maize-soy
-row lists there, two years in three. `Tests/test_spinup_meteo_loader.m` (10
+row lists there, two years in three.
+`Tests/test_spinup_meteo_loader.m` (10
 checks) covers the slicing, complete-year detection, the cycle-year
 validator and the refusals. The topographically stratified subsample
 (`Select_Topographic_Subsample`) uses three quantile bins per terrain
@@ -1511,10 +1519,13 @@ window and, once downloaded, the 1 m DEM tile are in
   (kg ha-1 yr-1): N 6.6 (wet 2.6, dry 4.0), S 1.6 (1.0, 0.6), Ca 0.85,
   Mg 0.42, K 0.36; dry S halves over the decade (0.97 to 0.45) and dry N
   falls a fifth. The wet-only record had given N 2.7. P keeps the global
-  map. The ERW chemistry takes CT15's rain record (`Rain_Chem_Hamden.mat`,
-  `rain_chem_file`): rain pH 5.20 and a pore-water Na seeded at the rain
-  steady state; after the first day the Na and SO4 + Cl supply follows the
-  steady closure (`keyword_add` = 1). No fertiliser or manure, no
+  map. The ERW chemistry takes its rain pH (5.20) from CT15's rain record
+  (`Rain_Chem_Hamden.mat`, `rain_chem_file`) and its Na and strong-acid
+  anions (SO4 + Cl) from the event record, wet and dry like the rest:
+  34.4 umol m-2 d-1 of Na and 62.1 umolc m-2 d-1 of SO4 + Cl over
+  2015-2025 (wet alone 23.7 and 44.1). Deposition is their only supply
+  (`keyword_add` = 0, by decision), and the pore water's Na is seeded at
+  its steady state on that supply. No fertiliser or manure, no
   fertiliser year (`FertN_years` empty) and no biological N fixation:
   atmospheric deposition is the only external nutrient supply, beside the
   primary-mineral supply, which stays the borrowed case-5 rate by decision
@@ -1588,10 +1599,13 @@ the same seed passes at both map units' pH: base saturation 0.15 and
 0.22), pore pH 4.91 and 5.06, dissolved Al 0.42 and 0.18 mM, strong
 anions 2.2 and 1.6 meq/L. That is the Energy Farm constants' answer for
 this solution; a measured base saturation that disagrees with them, as
-the representative set does, will call for Hamden's own affinities. The
-Na and SO4 + Cl supply stays with the steady closure (`keyword_add` = 1):
-the seeded strong anions are still some 60-80 times what CT15 alone
-would sustain (28 ueq/L).
+the representative set does, will call for Hamden's own affinities.
+Deposition alone supplies Na and SO4 + Cl (`keyword_add` = 0, by
+decision). The seeded strong anions are the measured pH's charge
+balance, organic anions the model does not carry included, and 40-60
+times what deposition sustains (39 ueq/L at the ring's water loss), so
+they drain in the first months of the simulation, on a timescale of
+about seven weeks, and the pore pH rises as they go.
 
 ### Energy Farm Bouchet R2025a runs
 
