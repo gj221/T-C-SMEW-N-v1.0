@@ -52,8 +52,16 @@ for c = 1:n
     %% start at zero and follow that equilibrium.  Absent -> the row's own
     %% f_CEC_in stands and the handoff derives the exchanger from pore water
     %% and bulk pH alone, exactly as before.
+    %% A row whose exchanger emerges from the spin-up (fX_conc_convention
+    %% spinup_equilibrium, ERW_pre_processing) takes a measured base
+    %% saturation only: a baseline one is not imposed.
+    seed_sources = ["measured" "baseline"];
+    if ismember('fX_conc_convention',E.Properties.VariableNames) && ...
+            string(E.fX_conc_convention) == "spinup_equilibrium"
+        seed_sources = "measured";
+    end
     if ismember('base_saturation_source',resolved.Properties.VariableNames) && ...
-            any(resolved.base_saturation_source(c) == ["measured" "baseline"])
+            any(resolved.base_saturation_source(c) == seed_sources)
         cec = resolved.CEC_cmolc_kg(c);
         f = [resolved.exch_Ca_cmolc_kg(c) resolved.exch_Mg_cmolc_kg(c) ...
             resolved.exch_K_cmolc_kg(c)]/cec;

@@ -7,18 +7,18 @@ function test_hamden_field_configuration()
 %%   1  the site's MOD and ERW column files read as the workbook rows hold
 %%      them (numbers, NaN, text); they leave the borrowed row its soil
 %%      layers and name CT15's rain record
-%%   2  a per-cell file without base saturation is refused: the site seeds
-%%      the exchanger from it (f_CEC_inventory), and the Kantola row's 80 %
-%%      would otherwise stand in
+%%   2  the exchanger emerges from the spin-up (spinup_equilibrium): a
+%%      per-cell file without base saturation runs, the representative one
+%%      is not imposed, and a cell given a measured one is seeded from it
 %%   0  the process grid: 5 m squares kept by the majority rule on the
 %%      lattice of least misrepresented area, as the cluster builds it
 %%      (the environment example's TC_CELL_M and TC_MIN_COVERAGE)
 %%   3  the site's own per-cell file: every cell runs the site's settings
 %%      over the borrowed case (location, its default 20-layer column with
 %%      free drainage, vegetation file, CO2, deposition and rain records, the
-%%      2020 handoff); its exchanger seeded from the representative base
-%%      saturation (Representative_Soil_Chemistry) on the representative
-%%      CEC; pH by a 1:1 extract; no rock; Cheshire texture, its own map
+%%      2020 handoff); its exchanger left to emerge on the representative
+%%      CEC (Representative_Soil_Chemistry); pH by a 1:1 extract; no rock;
+%%      Cheshire texture, its own map
 %%      unit's pH and OM, and its own land cover
 %%   4  a column override may not set a cell's own soil or cover, nor an
 %%      unknown column
@@ -85,7 +85,7 @@ check('the MOD columns read as the workbook holds them', ...
     M.meteo_start == "2015-01-01" && M.meteo_end == "2019-12-31" && ...
     M.transient_start == "2020-01-01" && M.transient_end == "2026-09-29");
 check('the ERW columns read as the workbook holds them', ...
-    E.fX_conc_convention == "f_CEC_inventory" && E.pH_DilutionFactor == 1 && ...
+    E.fX_conc_convention == "spinup_equilibrium" && E.pH_DilutionFactor == 1 && ...
     E.M_rock_in == 0 && E.M_rock_event == 0 && E.Location == "Hamden");
 %% The exchange selectivities are tabulated by USDA texture class
 %% (ERW_MOD_PARAM_excel); Cheshire (55-62 % sand, 9.5 % clay) is a sandy loam.
@@ -105,8 +105,20 @@ dry = [grid {'Method','per_cell','MODParamColumns',M,'ERWParamColumns',E, ...
 T = readtable(agro);
 no_bs = removevars(T,{'baseline_bs_Ca_fraction','baseline_bs_Mg_fraction','baseline_bs_K_fraction'});
 agro_no_bs = fullfile(tmp,'agronomic_no_bs.csv'); writetable(no_bs,agro_no_bs);
-check('cells without a base saturation are refused before any work', ...
-    raises(@() Run_Field_Cell_Spinup(shp,agro_no_bs,dry{:}),'Run_Field_Cell_Spinup:NoBaseSaturation'));
+[~,CI0] = Run_Field_Cell_Spinup(shp,agro_no_bs,dry{:});
+check('cells without a base saturation run: their exchanger emerges from the spin-up', ...
+    all(arrayfun(@(ci) ci.ERW_PARAM.fX_conc_convention == "spinup_equilibrium",CI0)));
+one = T;
+one.measured_bs_Ca_fraction(1) = 0.40; one.measured_bs_Mg_fraction(1) = 0.10;
+one.measured_bs_K_fraction(1) = 0.02; one.use_measured_base_saturation(1) = 1;
+agro_one = fullfile(tmp,'agronomic_one_measured.csv'); writetable(one,agro_one);
+[~,CI1] = Run_Field_Cell_Spinup(shp,agro_one,dry{:});
+k = find([CI1.cell_id] == one.cell_id(1));
+rest = CI1(setdiff(1:numel(CI1),k));
+check('a cell given a measured base saturation is seeded from it; the rest emerge', ...
+    isscalar(k) && CI1(k).ERW_PARAM.fX_conc_convention == "f_CEC_inventory" && ...
+    max(abs(str2num(char(CI1(k).ERW_PARAM.f_CEC_in)) - [0.40 0.10 0.02 0 0 0.48])) < 1e-9 && ... %#ok<ST2NM>
+    all(arrayfun(@(ci) ci.ERW_PARAM.fX_conc_convention == "spinup_equilibrium",rest)));
 
 %% --- 3 --------------------------------------------------------------------
 chem = readtable(fullfile(code,'Inputs','Hamden','Soils','Representative_soil_chemistry.csv'));
@@ -123,23 +135,22 @@ for c = 1:N
         m.co2_file == "Ca_Data_NOAA_MLO_daily.mat" && m.forcing_file == "Data_Hamden.mat" && ...
         m.rain_chem_file == "Rain_Chem_Hamden.mat" && ...
         m.transient_start == "2020-01-01";
-    f = str2num(char(e.f_CEC_in)); %#ok<ST2NM>
-    fs = [chem.bs_Ca_fraction chem.bs_Mg_fraction chem.bs_K_fraction];
-    erw_ok = erw_ok && e.fX_conc_convention == "f_CEC_inventory" && e.pH_DilutionFactor == 1 && ...
+    erw_ok = erw_ok && e.fX_conc_convention == "spinup_equilibrium" && e.pH_DilutionFactor == 1 && ...
         e.M_rock_in == 0 && abs(e.CEC_tot_in - chem.CEC_cmolc_kg) < 1e-9 && ...
-        max(abs(f - [fs 0 0 1-sum(fs)])) < 1e-9;
+        all(isnan(str2double(string(e.f_CEC_in))));
     q = review(review.cell_id == CI(c).cell_id,:);
     own_ok = own_ok && m.PH == q.ssurgo_pH_1to1_water && m.Porg == q.ssurgo_OM_fraction && ...
         m.Psan == r.baseline_sand_fraction && ...   % the row holds the cover to 12 digits
         max(abs(str2num(char(m.Ccrown)) - [r.cover_tree r.cover_grass])) < 1e-11; %#ok<ST2NM>
 end
 check(sprintf('all %d cells run the site''s MOD settings',N),N == topo.N_cells && mod_ok);
-check('every cell''s exchanger is the representative one, pH by a 1:1 extract, no rock',erw_ok);
+check('every cell''s exchanger emerges on the representative CEC, pH by a 1:1 extract, no rock',erw_ok);
 check('every cell keeps its own map unit''s pH and OM and its own land cover',own_ok);
 pHs = arrayfun(@(ci) ci.MOD_PARAM.PH,CI);
 check('the cells carry both map units'' pH (Cheshire and Wilbraham)', ...
     isequal(unique(pHs(:)).',[5.3 5.5]) && chem.n_layers >= 1 && ...
-    sum(fs) < 1 && abs(chem.target_pH - mean(pHs)) < 0.05);
+    chem.bs_Ca_fraction + chem.bs_Mg_fraction + chem.bs_K_fraction < 1 && ...
+    abs(chem.target_pH - mean(pHs)) < 0.05);
 check('the baseline base saturation is part of each cell''s identity', ...
     contains(CI(1).agronomic_identity,':baseline'));
 

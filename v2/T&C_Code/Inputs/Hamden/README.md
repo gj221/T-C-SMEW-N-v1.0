@@ -233,8 +233,9 @@ The same files are kept in two places:
   its 3.0 cmolc/kg. Were the site's pH revised to that, the set would
   change with it (`Representative_Soil_Chemistry` at the new pH).
 - `Run_Hamden_Field_Inputs` (v2/interpolation) rebuilds the per-cell file
-  from all of this; sub-plot data later fill its `measured_*` columns. The
-  set passes the model's ERW handoff gate at both map units' pH.
+  from all of this; sub-plot data later fill its `measured_*` columns.
+  Until they do, the model does not impose this base saturation: the
+  exchanger emerges from the spin-up (see the open items below).
 
 ## Vegetation and management
 
@@ -344,8 +345,9 @@ The same files are kept in two places:
   handoff at 2020-01-01 for the simulation and validation runs,
   2020-01-01 to 2026-09-29, and CT15's rain record; the soil layers are
   left to the borrowed row, its default column) and
-  `Hamden_ERW_columns.csv` (no rock, the exchanger seeded from each cell's
-  base saturation, pH by a 1:1 extract, the exchange selectivities of a
+  `Hamden_ERW_columns.csv` (no rock; the exchanger emerges from the
+  spin-up, `spinup_equilibrium`, unless a cell has a measured base
+  saturation; pH by a 1:1 extract; the exchange selectivities of a
   sandy loam -- Cheshire's USDA texture class, the key the ERW chemistry
   tabulates them by).
 - The vegetation file sets the forcing reference height 2 m above the
@@ -362,19 +364,30 @@ The same files are kept in two places:
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
   output folder and submit again; every cell re-converges from its own
   converged state (Phase 3 only).
-- Open, and blocking the cluster run: the ERW handoff check refuses
-  Hamden's seed. A short test spin-up (Phase 3 stopped after its second
-  ring) reached the check on 2020-01-01 with dissolved Ca at 28.7 mM,
-  against the check's 20 mM ceiling. The biogeochemistry's own soil
-  solution held 0.06 mM; the rest came from the exchanger. The base
-  parameter file's exchange constants are the Energy Farm's calibration
-  (`bulk_pH_params.appelo`), and at Hamden's measured bulk pH (5.3) they
-  hold a base saturation of 0.70, not the measured 0.94. The seed keeps
-  the measured inventory, so it moves the difference, 4.6 molc m⁻² of Ca
-  and 2.3 of Mg, into the 80 L m⁻² of pore water, and the charge balance
-  then closes with 91 meq/L of strong anions, where CT15's SO₄ + Cl would
-  sustain 28 µeq/L. The Energy Farm's own remedy fits: exchange affinities
-  shifted until the measured base saturation holds at the measured pH.
-  `keyword_add` waits on it: under the closure the seeded anions stay;
-  with CT15's supply alone they would drain on a seven-week timescale and
-  take the pore pH up with them.
+- **Base saturation emerges from the spin-up** until sub-plot data
+  arrive (`fX_conc_convention` `spinup_equilibrium` in the ERW row). The
+  seed keeps the spun-up soil solution (dissolved Ca 0.09, Mg 0.43,
+  K 0.54 mmol/L in a short test spin-up) and puts the exchanger in
+  equilibrium with it, by the run's exchange law, at the pore-water pH
+  that reproduces the cell's bulk pH. On the representative CEC that
+  gives a base saturation of 0.15 at bulk pH 5.3 (Cheshire cells) and
+  0.24 at 5.5 (Wilbraham), the rest H (0.56, 0.54) and Al (0.30, 0.22),
+  pore pH 4.91 and 5.06, dissolved Al 0.42 and 0.18 mmol/L, strong
+  anions 2.2 and 1.6 meq/L, and it passes the ERW handoff check. A cell
+  whose `measured_bs_*` columns are filled (`use_measured_base_saturation`)
+  is seeded from its measurement instead.
+- Why the representative set is not imposed: the base parameter file's
+  exchange constants are the Energy Farm's calibration
+  (`bulk_pH_params.appelo`), and at Hamden's bulk pH (5.3) they hold a
+  base saturation of 0.70, not the representative 0.94. A seed that keeps
+  the given inventory moves the difference (4.6 molc m⁻² of Ca, 2.3 of
+  Mg) into 80 L m⁻² of pore water, and the handoff check refused it:
+  dissolved Ca 28.7 mM against its 20 mM ceiling in the short test
+  spin-up, 27.1 mM in a class seed converged at loop 180. A measured base
+  saturation that disagrees with the constants in the same way will call
+  for Hamden's own affinities, as the Energy Farm's was fitted to its own.
+- `keyword_add` stays 1 (the steady closure): even the emergent seed's
+  strong anions (1.6–2.2 meq/L) are 60–80 times what CT15's SO₄ + Cl alone
+  would sustain (28 µeq/L at the ring's water loss), so with CT15's
+  supply alone they would drain on a seven-week timescale and take the
+  pore pH up with them.

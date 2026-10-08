@@ -446,7 +446,10 @@ if active_rock_input(rock_f_in)
 end
 
 f_CEC(1,:) = [f_Ca(1),f_Mg(1),f_K(1),f_Na(1),f_Al(1),f_H(1)];
-if abs(sum(f_CEC(1,:)) - 1) > 1e-3
+%%% v1.0: a spinup_equilibrium exchanger has no fractions until the
+%%% bulk-pH inversion below derives them.
+if abs(sum(f_CEC(1,:)) - 1) > 1e-3 && ...
+        string(excel_input.fX_conc_convention) ~= "spinup_equilibrium"
     error('Sum of fractions must be 1');
 end
 K_CEC = [K_Ca_Mg, K_Ca_K, K_Ca_Na, K_Ca_Al, K_Ca_H];
@@ -496,6 +499,11 @@ if ~isscalar(initial_pH_mode) || ...
         'initial_pH_mode must be state_prescribed or bulk_observed.');
 end
 bulk_pH_params.initial_pH_mode = char(initial_pH_mode);
+if string(excel_input.fX_conc_convention) == "spinup_equilibrium" && ...
+        initial_pH_mode ~= "bulk_observed"
+    error('ERW:invalidInitialPHMode', ...
+        'A spinup_equilibrium exchanger needs a measured bulk pH (initial_pH_mode bulk_observed).');
+end
 if initial_pH_mode == "state_prescribed"
     bulk_pH_params.prescribed_pore_pH_initial = pH_in;
 else
