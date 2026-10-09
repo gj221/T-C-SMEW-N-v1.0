@@ -22,8 +22,8 @@ function test_hamden_field_configuration()
 %%      unit's pH and OM, and its own land cover
 %%   4  a column override may not set a cell's own soil or cover, nor an
 %%      unknown column
-%%   5  a cell with open grass assembles the site's parameters: the forcing
-%%      reference height 2 m above the 24 m canopy, the default column, its
+%%   5  a cell with trees and open grass assembles the site's parameters: the
+%%      forcing reference height 2 m above the 24 m canopy, the default column, its
 %%      own cover, and the vegetation, management and deposition of the
 %%      Hamden vegetation file: event deposition (CT15 wet on the day's
 %%      precipitation, TDep dry every day) and no fertiliser, nor any
@@ -34,7 +34,10 @@ function test_hamden_field_configuration()
 %%      the uplift's Ca + Mg charge, split to the measured exchanger, a cold
 %%      start's primary minerals at the steady state of their supply; the
 %%      site's own exchange constants hold the measured exchanger on the
-%%      class seed's soil solution
+%%      class seed's soil solution; a crown without cover carries no
+%%      vegetation (a wooded cell no open grass, a lawn no trees), and a
+%%      crown with cover that the stand handed in leaves empty -- a lawn
+%%      seeded from the wooded class seed -- starts from the file's stand
 %%   6  with the parcel's DEM window (not versioned; skipped without it) the
 %%      flux-tracking plan the cluster runs first: one class (every cell
 %%      shares soil and vegetation), a topographically stratified ~10 %
@@ -176,9 +179,13 @@ check('an unknown ERW column is refused', raises(@() ...
     'Run_Field_Cell_Spinup:UnknownERWParamColumn'));
 
 %% --- 5 --------------------------------------------------------------------
-cover_grass = arrayfun(@(ci) str2num(char(ci.MOD_PARAM.Ccrown)),CI,'UniformOutput',false); %#ok<ST2NM>
-cover_grass = cellfun(@(x) x(2),cover_grass);
-[~,c] = max(cover_grass);
+covers = arrayfun(@(ci) str2num(char(ci.MOD_PARAM.Ccrown)),CI,'UniformOutput',false); %#ok<ST2NM>
+cover_tree = cellfun(@(x) x(1),covers);
+cover_grass = cellfun(@(x) x(2),covers);
+%% the grassiest cell that also has trees
+mixed = find(cover_tree > 0 & cover_grass > 0);
+[~,k] = max(cover_grass(mixed));
+c = mixed(k);
 Zs = eval(char(CI(c).MOD_PARAM.Zs));
 dn = (datenum(2015,1,1):1/24:datenum(2015,12,31,23,0,0))';
 [YE,MO,DA,HO] = datevec(dn);
@@ -273,6 +280,49 @@ check('the stand is perennial: it starts from a run''s end state handed in, else
 check('the stand grows as the legacy coupled forest runs: no sink limitation, heartwood turning over in 40 years', ...
     P.OPT_EnvLimitGrowth == 0 && P_veg.OPT_EnvLimitGrowth == 0 && ...
     abs(P.Wm_H(1)*40*365 - 1) < 1e-12 && isequal(P.Wm_L,[0 0]));
+%% Crowns as the cell has them.  A crown without cover carries no vegetation:
+%% T&C would grow it with no share of the soil water, it would starve and
+%% its leftover reserve trip Nutrients_Available's e_relN guard every day.
+%% Every cell is seeded from the wooded class seed, so a lawn is handed
+%% trees and an empty open-grass crown: it keeps no trees and starts its
+%% sward from the file's.  A stand that died keeps its remains.
+wood = find(cover_tree == 1 & cover_grass == 0,1);
+lawn = find(cover_tree == 0 & cover_grass > 0,1);
+cell_params = @(ci,base) Load_Cell_Parameters( ...
+    fullfile(code,'Parameters','MOD_PARAM_Kantola_Maize_Soy.m'), ...
+    fullfile(code,'Parameters',[char(ci.MOD_PARAM.pft_override) '.m']), ...
+    cell_context(base,ci));
+P_wood = cell_params(CI(wood),ctx);
+P_lawn = cell_params(CI(lawn),ctx);
+sward = [0 0 140 93 0 0 0 0];
+check('a wooded cell has no open grass: trees and the grass beneath them only', ...
+    isequal(P_wood.ZR95_H,[1000 0]) && isequal(P_wood.ZR95_L,[250 0]) && ...
+    ~any(P_wood.B_L(1,2,:)) && P_wood.Nreserve_L(1,2) == 0 && ...
+    isequal(squeeze(P_wood.B_L(1,1,:)).',sward) && P_wood.zatm == 26);
+check('a lawn has no trees: its open grass only, the reference height 2 m above the sward', ...
+    isequal(P_lawn.ZR95_H,[0 0]) && isequal(P_lawn.ZR95_L,[0 250]) && ...
+    ~any(P_lawn.B_H(1,1,:)) && ~any(P_lawn.B_L(1,1,:)) && P_lawn.Nreserve_H(1,1) == 0 && ...
+    isequal(squeeze(P_lawn.B_L(1,2,:)).',sward) && abs(P_lawn.zatm - 2.05) < 1e-12, ...
+    sprintf('zatm %g',P_lawn.zatm));
+Seed = Veg;                                 % the wooded class seed's stand:
+for k = 1:numel(veg_names)                  % its open-grass crown is empty
+    Seed.(veg_names{k})(1,2,:) = 0;
+end
+Seed.B_H(1,1,:) = [0 1035 607 723 13 12618 1 0]; Seed.hc_H = [24 0];
+Seed.B_L(1,1,:) = [1e-178 0 5e-265 7e-109 0 0 3.2 0];   % its shaded-out understory
+ctx_seed_veg = ctx; ctx_seed_veg.Veg_out = Seed;
+P_lawn_seeded = cell_params(CI(lawn),ctx_seed_veg);
+P_wood_seeded = cell_params(CI(wood),ctx_seed_veg);
+check('a lawn handed the wooded class seed''s stand keeps no trees and starts its sward from the file''s', ...
+    ~any(P_lawn_seeded.B_H(1,1,:)) && P_lawn_seeded.Nreserve_H(1,1) == 0 && ...
+    P_lawn_seeded.hc_H(1,1) == 0 && ~any(P_lawn_seeded.B_L(1,1,:)) && ...
+    isequal(squeeze(P_lawn_seeded.B_L(1,2,:)).',sward) && ...
+    P_lawn_seeded.Nreserve_L(1,2) == P_lawn.Nreserve_L(1,2) && P_lawn_seeded.Nreserve_L(1,2) > 0 && ...
+    P_lawn_seeded.FNC_L(1,2) == P_lawn.FNC_L(1,2) && abs(P_lawn_seeded.zatm - 2.05) < 1e-12, ...
+    sprintf('zatm %g',P_lawn_seeded.zatm));
+check('the wooded cell carries its own stand on, the dead understory with its remains, not sown again', ...
+    isequal(P_wood_seeded.B_H(1,1,:),Seed.B_H(1,1,:)) && isequal(P_wood_seeded.B_L(1,1,:),Seed.B_L(1,1,:)) && ...
+    ~any(P_wood_seeded.B_L(1,2,:)) && P_wood_seeded.zatm == 26);
 %% Hamden's own exchange constants (Fit_Exchange_Affinity): on the class
 %% seed's ERW seed inputs, the exchanger that emerges at the representative
 %% layers' pH holds their base saturation and KCl Al.
@@ -318,4 +368,10 @@ end
 
 function f = write_text(f,txt)
 fid = fopen(f,'w'); fprintf(fid,'%s\n',txt); fclose(fid);
+end
+
+function ctx = cell_context(ctx,ci)
+%% A load context for cell ci: its own rows over the shared one.
+ctx.MOD_PARAM_input = ci.MOD_PARAM;
+ctx.ERW_PARAM_input = ci.ERW_PARAM;
 end
