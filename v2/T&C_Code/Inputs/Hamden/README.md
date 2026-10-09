@@ -469,6 +469,35 @@ The same files are kept in two places:
     saturation of only 0.15–0.28. Imposing the representative set under
     them failed the handoff check: dissolved Ca 28.7 mM against the 20 mM
     ceiling.
+- **CEC scenarios** (`v2/run/Run_Plot_CEC_Scenarios.m`,
+  `Summarize_CEC_Scenarios.m`). Until sub-plot data give the cells their
+  own CEC, every cell has the representative 10.8 cmolc/kg, so the study's
+  CEC contrast comes from scenarios.
+  - The values are 6.4, 10.8 and 13.7 cmolc/kg: the range of the
+    representative layers' CEC at pH 7 (`CEC_min_cmolc_kg`,
+    `CEC_max_cmolc_kg` in `Soils/Representative_soil_chemistry.csv`). The
+    SoilGrids cross-check (12.9) lies inside it.
+  - The spin-up does not depend on the CEC: the ERW chemistry is off in
+    every spin-up stage, and the biogeochemistry's own exchange partitions
+    by mass. So the scenarios share one spin-up and differ in the
+    exchanger's capacity alone.
+  - Each scenario keeps the handoff's exchanger fractions at its own CEC.
+    The seed re-partitions them at the pore pH that reproduces the bulk
+    pH, which on the converged class seed lands within 1.4e-4 of a fresh
+    seed at that CEC. All three start at base saturation 0.625 (bulk pH
+    5.3), with exchangeable bases in proportion to the CEC.
+  - Plot scale: the class seed's cell from 2020-01-01 to 2026-09-29, one
+    run per scenario, `Run_Plot_CEC_Scenarios(cell_inputs, state_file,
+    [6.4 10.8 13.7])`. Each takes about 17 h on a workstation; 'Only' runs
+    one per process. `Summarize_CEC_Scenarios(files, 'Output', dir)`
+    writes the daily and summary tables. The state must be handed off
+    with the current exchange constants (a handoff-only run of the class
+    seed, `SPINUP_HANDOFF_ONLY`).
+  - A transient for a site without a pH record starts from the cell's own
+    bulk pH, as its spin-up hands off at it (`Run_Automatic_Site_Spinup`).
+  - Field scale: the field transient, still to be built, takes the same
+    scenarios as a CEC override on every cell, from the one field
+    spin-up.
 - The start of the simulation, as a test under the Energy Farm constants
   showed it before Hamden's own: the seeded strong anions (1.6–2.2 meq/L,
   the charge balance of the measured pH, which includes the organic

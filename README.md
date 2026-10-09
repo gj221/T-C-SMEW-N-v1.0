@@ -1633,6 +1633,22 @@ Both pass the handoff check. The base file's Energy Farm constants (alpha
 representative set under them failed the check (dissolved Ca 28.7 mM
 against 20).
 
+CEC scenarios: until sub-plot data give the cells their own CEC, every
+cell has the representative 10.8 cmolc/kg. The CEC contrast therefore
+comes from scenarios: 6.4, 10.8 and 13.7 cmolc/kg, the range of the
+representative layers' CEC at pH 7 (`CEC_min_cmolc_kg`,
+`CEC_max_cmolc_kg`).
+
+The spin-up does not depend on the CEC (the ERW chemistry is off in
+every spin-up stage), so the scenarios share one spin-up and differ in
+the exchanger's capacity alone. Each keeps the handoff's exchanger
+fractions at its own CEC; the seed re-partitions them, within 1.4e-4 of
+a fresh seed at that CEC. `v2/run/Run_Plot_CEC_Scenarios.m` runs one
+plot-scale column per scenario from one spun-up state (about 17 h each
+for 2020-2026). `Summarize_CEC_Scenarios.m` tabulates their daily bulk
+and pore pH, base saturation and exchangeable Al and H. A transient for
+a site without a pH record starts from the cell's own bulk pH.
+
 Deposition alone supplies Na and SO4 + Cl (`keyword_add` = 0, by
 decision). The seeded strong anions are the measured pH's charge
 balance, organic anions the model does not carry included. They are

@@ -1,2 +1,2 @@
-CEC_cmolc_kg,bs_Ca_fraction,bs_Mg_fraction,bs_K_fraction,bs_Na_fraction,Al_fraction,layers_pH,target_pH,n_layers,layers,ECEC_cmolc_kg,soilgrids_cec7_cmolc_kg
-10.8,0.444135802469136,0.135493827160494,0.012037037037037,0.00648148148148148,0.0317901234567901,5.21975308641975,5.36165152268405,3,85P0055 25-48 cm pH 5.3; 97P0102 0-25 cm pH 5.2; 97P0102 25-35 cm pH 5.2,6.76666666666667,12.9
+CEC_cmolc_kg,bs_Ca_fraction,bs_Mg_fraction,bs_K_fraction,bs_Na_fraction,Al_fraction,layers_pH,target_pH,n_layers,layers,ECEC_cmolc_kg,CEC_min_cmolc_kg,CEC_max_cmolc_kg,soilgrids_cec7_cmolc_kg
+10.8,0.444135802469136,0.135493827160494,0.012037037037037,0.00648148148148148,0.0317901234567901,5.21975308641975,5.36165152268405,3,85P0055 25-48 cm pH 5.3; 97P0102 0-25 cm pH 5.2; 97P0102 25-35 cm pH 5.2,6.76666666666667,6.4,13.7,12.9

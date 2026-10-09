@@ -20,7 +20,9 @@ function chem = Representative_Soil_Chemistry(lab_file,target_pH,varargin)
 %% layers' CEC at pH 7, each fraction is the layers' summed cation over
 %% their summed CEC, so the fractions are of the very CEC reported, and
 %% layers_pH, their CEC-weighted pH, is the pH that exchanger was measured
-%% at.  ECEC_cmolc_kg, the layers' mean effective CEC, is reported beside.
+%% at.  ECEC_cmolc_kg, the layers' mean effective CEC, is reported beside,
+%% and CEC_min_cmolc_kg and CEC_max_cmolc_kg, the range of their CEC at
+%% pH 7, which bounds a site's CEC scenarios (Run_Plot_CEC_Scenarios).
 %%
 %% Name/value
 %%   'DepthCm'    active depth [top bottom] (default [0 30]); a layer counts
@@ -62,6 +64,8 @@ chem = table(mean(cec),f(1),f(2),f(3),f(4),f(5),sum(cec.*P.ph_h2o)/sum(cec),targ
     height(P),string(layers),mean(P.ecec_base_plus_aluminum),'VariableNames', ...
     {'CEC_cmolc_kg','bs_Ca_fraction','bs_Mg_fraction','bs_K_fraction','bs_Na_fraction', ...
     'Al_fraction','layers_pH','target_pH','n_layers','layers','ECEC_cmolc_kg'});
+chem.CEC_min_cmolc_kg = min(cec);
+chem.CEC_max_cmolc_kg = max(cec);
 chem.soilgrids_cec7_cmolc_kg = NaN;
 if ~isempty(opt.SoilGrids)
     G = readtable(opt.SoilGrids,'TextType','string');
