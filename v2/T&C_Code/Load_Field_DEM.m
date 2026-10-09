@@ -311,10 +311,22 @@ end
 
 %% =======================================================================
 function e = epsg_of(crs)
+%% The CRS's own EPSG code: the last ID["EPSG",n] of its WKT, whose inner
+%% components carry their own IDs before it. Parsed with strfind, because a
+%% deployed file keeps backslashes out of its string literals
+%% (test_bouchet_linux_portability).
 e = NaN;
 try
-    m = regexp(char(wktstring(crs)),'ID\["EPSG",(\d+)\]','tokens');
-    if ~isempty(m); e = str2double(m{end}{1}); end
+    w = char(wktstring(crs));
+    key = 'ID["EPSG",';
+    for k = strfind(w,key)
+        tail = w(k+numel(key):end);
+        digits = regexp(tail,'^[0-9]+','match','once');
+        if ~isempty(digits) && numel(tail) > numel(digits) && ...
+                tail(numel(digits)+1) == ']'
+            e = str2double(digits);
+        end
+    end
 catch
 end
 end
