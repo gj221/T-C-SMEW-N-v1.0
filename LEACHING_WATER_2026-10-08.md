@@ -121,3 +121,51 @@ Maize-soybean NO3 leaching measured at 50 cm on the Energy Farm averaged
 leaching brings the model to that order but cuts N2O by a third, which
 would need KNmaxd refitted; the five-year runs were stopped when the
 legacy formulation was chosen.
+
+## Re-test with the vegetation crowns fixed (2026-10-09)
+
+Greg asked for the layer's leaching back if the crown fix (ce82785: a
+crown without cover carries no vegetation) cured the starvation. It does
+not. A cold Hamden class seed with 91c7aee re-applied, `leaching_water =
+layer` and the crown fix loses its stand as before.
+
+By the tenth Phase 3 year (in brackets, the cold class seed of 2026-10-08
+under the column's leaching, before the crown fix):
+
+| | layer + crown fix | (column) |
+|---|---|---|
+| peak tree LAI | 1.7 | (4.9) |
+| fine roots, g C m-2 | 198 | (525) |
+| sapwood, g C m-2 | 282 | (894) |
+| reserve, g C m-2 | 204 | (621) |
+
+The trees' N reserve is below zero from the third year. The open-grass
+crown is empty and the warnings are gone, so the empty crown was not the
+cause.
+
+The N does not leave by leaching. NO3, NH4 and DON together lose 0.01-0.02
+g N m-2 yr-1, against 0.25-0.5 in the converged column seed. The soil stops
+releasing it.
+
+Phase 2 (408 mean-forcing years under the layer's leaching) ends with the
+decomposers gone (in brackets, the 2026-10-08 column seed's Phase 2):
+
+- bacteria (B18) and saprotrophic fungi (B19): ~1.5e-9 g C m-2 (11 and 41);
+- their enzymes (B14-B17): ~1.5e-9 g C m-2 (0.05-0.15);
+- the DOC the decomposers live on (B12, B13): 5 and 12 g C m-2 (58 each);
+- no NH4 or NO3 (0.16 and 0.02 g N m-2);
+- undecomposed POC (B10): 100 kg C m-2 (1);
+- SOM N (B26): 5.0 kg N m-2 (0.7).
+
+Phase 3 then starts with net mineralisation of -0.15 to +0.16 g N m-2 yr-1,
+against 21-26 in the converged column seed. The trees live on the
+deposition: uptake 0.5-0.75 against 19-27 g N m-2 yr-1. In the tenth year
+mineralisation jumps to 10.9: the decomposers grow back from 1e-9 and
+start on the organic matter that piled up.
+
+The leaching water reaches the stand through T&C-BG's decomposers. Their
+dissolved substrate and mineral N leave the 300 mm layer at its own
+drainage about ten times faster than at the column's (2.4 % against
+0.23 % d-1), and under Phase 2's constant forcing they die out. Making the
+layer's leaching usable means revisiting that, not the vegetation: the
+leaching of the decomposers' DOC and mineral N, or Phase 2's forcing.
