@@ -328,8 +328,14 @@ if isempty(fieldnames(field_obs)) && IS_BG_SPINUP
     end
     pH_sem = NaN;
 elseif isempty(fieldnames(field_obs))
-    error('TC_SMEW_N_run:MissingObservedPH', ...
-        'The forcing file must contain a struct with Date and pH fields.');
+    %% A site without a pH record (Hamden) starts its transient from the
+    %% cell's own bulk pH, as its spin-up hands off at it.
+    PHs = table_value(MOD_PARAM_input,'PH',NaN);
+    if ~(isnumeric(PHs) && isscalar(PHs) && isfinite(PHs) && PHs > 0 && PHs <= 14)
+        error('TC_SMEW_N_run:MissingObservedPH', ...
+            'The forcing file must contain a struct with Date and pH fields, or the row a finite PH.');
+    end
+    pH_sem = NaN;
 else
     obs_dates = field_obs.Date;
     if ~isdatetime(obs_dates)
