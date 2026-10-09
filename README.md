@@ -585,6 +585,13 @@ Nitrate leakage remains an inventory-limited mass-flow term driven by drainage.
 It has no direct pH multiplier. pH affects leakage indirectly by changing
 nitrification, denitrification and the nitrate pool available to drain.
 
+Every dissolved pool of the biogeochemical layer, and the ERW's, leaches
+as in T&C-BG in every model iteration: with the leakage out of the bottom
+of the soil column over the water of the whole column (`Biogeo_Leakage`,
+`Lk/VSUM`; the ERW's `f_Lw_bio`). Leaching them with the layer's own
+drainage over its own water was tested and not adopted;
+[`LEACHING_WATER_2026-10-08.md`](LEACHING_WATER_2026-10-08.md) records why.
+
 The detailed equations, dimensions and citations are in
 [`v2/POST_LEGACY_EQUATION_AUDIT.md`](v2/POST_LEGACY_EQUATION_AUDIT.md).
 
