@@ -23,6 +23,7 @@ test_cell_land_cover_and_soil;
 test_hamden_field_configuration;
 test_event_deposition;
 test_perennial_vegetation;
+test_dead_crown_reserve;
 test_erw_seed_water_loss;
 test_rain_chemistry_seed;
 test_fit_exchange_affinity;

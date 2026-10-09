@@ -224,8 +224,25 @@ FNC = FNCtm1*(n4-1)/n4 + (1-(rNc<0.66))/n4;  %% [-] Nitrogen Stress Factor
 m= 0.5; % smoothing factor 
 e_relN = m*(rNc-1)+1; %% Photosynthesis N efficiency 
 rNcR = min(1.85,m*(rNc-1)+1); %%% Factor to increase respiration due to change in N-content 
+%% e_relN > 100 is rNc > 199: a reserve two hundred times the nitrogen of
+%% the tissue that should hold it.  In practice that is a crown whose living
+%% tissue has died away and left its reserve behind (Hamden's shaded-out
+%% grass: ~1e-30 gC/m2 against 0.47 gN/m2, e_relN ~1e31).  It has no leaves
+%% to use e_relN and takes nothing up (SupN = 1), but it trips this test
+%% every day, so only the 1st, 10th, 100th, ... occurrence is printed.
+%% Every output is set above: the return skips only the
+%% OPT_SoilBiogeochemistry == 0 block below.
+persistent ue_count ue_next
 if e_relN > 100 && OPT_SoilBiogeochemistry == 1
-    disp('Error unrealistic Photosynthesis N efficiency!!') 
+    if isempty(ue_count); ue_count = 0; ue_next = 1; end
+    ue_count = ue_count + 1;
+    if ue_count >= ue_next
+        fprintf(['Error unrealistic Photosynthesis N efficiency!! occurrence %d ' ...
+            '(printed at 1, 10, 100, ...): e_relN %.3g, leaf C %.3g g/m2, ' ...
+            'non-structural N %.3g g/m2, N reserve %.3g g/m2\n'], ...
+            ue_count,e_relN,B(1),TNITns,Nreserve);
+        ue_next = 10*ue_next;
+    end
     return 
 end 
 %%%%%%%%%%%%%%%%%%%%%%%%
