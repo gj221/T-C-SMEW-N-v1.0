@@ -16,6 +16,8 @@
 %%            LOW   grass beneath them  row 102, Fendt DE ("C3 grass")
 %%   crown 2  HIGH  none
 %%            LOW   open grass          row 102, Fendt DE
+%% A crown without cover carries no vegetation: a wooded cell has no open
+%% grass, a lawn no trees (Roots, and Perennial for a stand handed in).
 %% The table is the legacy T&C-SMEW lookup (Table_Sites_PFT_LOOKUP_latest,
 %% copied with the site inputs in Inputs/Hamden/Vegetation).  Its root
 %% shape, PAR threshold and leaf-shed temperature are blank for these rows
@@ -79,11 +81,17 @@ if ~(numel(Ccrown) == 2 && sum(Ccrown) > 0)
          'cover (Cell_Land_Cover) or Ccrown = [tree open-grass].'],mat2str(Ccrown));
 end
 
-%% --- Roots [mm]
-ZR95_H  = [1000 0];
+%% --- Roots [mm].  A crown without cover carries no vegetation: no grass
+%% in a wooded cell, no trees on a lawn.  T&C would grow it all the same,
+%% with no share of the soil water (SVAT_UNIT hands each crown water in
+%% proportion to its cover) and nothing taken up, so it would starve within
+%% a few years and its leftover reserve trip Nutrients_Available's e_relN
+%% guard every day for the rest of the run.
+covered = Ccrown > 0;
+ZR95_H  = [1000 0].*covered;
 ZR50_H  = [NaN  NaN];
 ZRmax_H = [NaN  NaN];
-ZR95_L  = [250 250];
+ZR95_L  = [250 250].*covered;
 ZR50_L  = [NaN NaN];
 ZRmax_L = [NaN NaN];
 Zbio = MOD_PARAM_input.Zbio;
@@ -282,26 +290,60 @@ reserve_at = @(St,B4) max(0,B4 .* ...
      [1/St.Ns 1/St.Phos 1/St.Kpots 1/St.Cals 1/St.Mags 1/St.Sils]));
 res_H = reserve_at(Stoich_H(1),tree_B(4));
 res_L = reserve_at(Stoich_L(1),grass_B(4));
-Nreserve_H(1,:)  = [res_H(1) 0];   Nreserve_L(1,:)  = [res_L(1) res_L(1)];
-Preserve_H(1,:)  = [res_H(2) 0];   Preserve_L(1,:)  = [res_L(2) res_L(2)];
-Kreserve_H(1,:)  = [res_H(3) 0];   Kreserve_L(1,:)  = [res_L(3) res_L(3)];
-Careserve_H(1,:) = [res_H(4) 0];   Careserve_L(1,:) = [res_L(4) res_L(4)];
-Mgreserve_H(1,:) = [res_H(5) 0];   Mgreserve_L(1,:) = [res_L(5) res_L(5)];
-Sireserve_H(1,:) = [res_H(6) 0];   Sireserve_L(1,:) = [res_L(6) res_L(6)];
+Nreserve_H(1,:)  = [res_H(1) 0].*covered;   Nreserve_L(1,:)  = [res_L(1) res_L(1)].*covered;
+Preserve_H(1,:)  = [res_H(2) 0].*covered;   Preserve_L(1,:)  = [res_L(2) res_L(2)].*covered;
+Kreserve_H(1,:)  = [res_H(3) 0].*covered;   Kreserve_L(1,:)  = [res_L(3) res_L(3)].*covered;
+Careserve_H(1,:) = [res_H(4) 0].*covered;   Careserve_L(1,:) = [res_L(4) res_L(4)].*covered;
+Mgreserve_H(1,:) = [res_H(5) 0].*covered;   Mgreserve_L(1,:) = [res_L(5) res_L(5)].*covered;
+Sireserve_H(1,:) = [res_H(6) 0].*covered;   Sireserve_L(1,:) = [res_L(6) res_L(6)].*covered;
 
-%% --- Initial stand: dormant (1 January)
-B_H(1,1,:) = tree_B;       B_H(1,2,:) = zeros(1,8);
-B_L(1,1,:) = grass_B;      B_L(1,2,:) = grass_B;
-LAI_H(1,:) = [0 0];        LAI_L(1,:) = [0 0];
-hc_H(1,:) = [24 0];        hc_L(1,:) = [0.05 0.05];   %% [m]
-SAI_H(1,:) = [0.5 0];      SAI_L(1,:) = [0.001 0.001];
-PHE_S_H(1,:) = [1 0];      PHE_S_L(1,:) = [1 1];
-AgeL_H(1,:) = [0 0];       AgeL_L(1,:) = [0 0];
-e_rel_H(1,:) = [1 0];      e_rel_L(1,:) = [1 1];
+%% --- Initial stand: dormant (1 January), in the crowns with cover
+B_H(1,1,:) = tree_B*covered(1);   B_H(1,2,:) = zeros(1,8);
+B_L(1,1,:) = grass_B*covered(1);  B_L(1,2,:) = grass_B*covered(2);
+LAI_H(1,:) = [0 0];               LAI_L(1,:) = [0 0];
+hc_H(1,:) = [24 0].*covered;      hc_L(1,:) = [0.05 0.05].*covered;   %% [m]
+SAI_H(1,:) = [0.5 0].*covered;    SAI_L(1,:) = [0.001 0.001].*covered;
+PHE_S_H(1,:) = [1 0].*covered;    PHE_S_L(1,:) = [1 1].*covered;
+AgeL_H(1,:) = [0 0];              AgeL_L(1,:) = [0 0];
+e_rel_H(1,:) = [1 0].*covered;    e_rel_L(1,:) = [1 1].*covered;
 
-%% --- Perennial: a run that follows another starts from its end state.
+%% --- Perennial: a run that follows another starts from its end state
+%% (Perennial_Vegetation_Apply), crown by crown as this cell has them.  A
+%% crown without cover keeps no stand.  A crown with cover that the state
+%% handed in leaves empty -- every field cell is seeded from its class's
+%% cell, and Hamden's one class seed is wooded, with no open grass -- starts
+%% from the stand above; a stand that died keeps its remains and is not
+%% sown again.
 PFT_perennial = true;
+hd_names = Perennial_Vegetation_States();
+hd_cold = struct();
+for hd_k = 1:numel(hd_names)
+    if exist(hd_names{hd_k},'var'); hd_cold.(hd_names{hd_k}) = eval(hd_names{hd_k}); end
+end
 Perennial_Vegetation_Apply;
+for hd_l = 'HL'
+    hd_B = eval(['B_' hd_l]); hd_ZR = eval(['ZR95_' hd_l]);
+    for hd_c = 1:numel(covered)
+        if covered(hd_c) && ~(hd_ZR(hd_c) > 0 && ~any(hd_B(1,hd_c,:))); continue; end
+        for hd_k = 1:numel(hd_names)
+            hd_n = hd_names{hd_k};
+            if ~(endsWith(hd_n,['_' hd_l]) || any(strcmp(hd_n,{['Bfac_week' hd_l],['TBio_' hd_l 't']}))) || ...
+                    ~exist(hd_n,'var')
+                continue
+            end
+            hd_x = eval(hd_n);
+            if covered(hd_c) && isfield(hd_cold,hd_n)
+                %% a value the files set for every crown at once is a scalar
+                hd_v = hd_cold.(hd_n);
+                hd_x(1,hd_c,:) = hd_v(1,min(hd_c,size(hd_v,2)),:);
+            else
+                hd_x(1,hd_c,:) = 0;
+            end
+            eval([hd_n ' = hd_x;']);
+        end
+    end
+end
+clear hd_names hd_cold hd_k hd_l hd_B hd_ZR hd_c hd_n hd_x hd_v
 
 %% --- Growth without T&C's sink limitation, as the legacy T&C-BG-2D forest
 %% runs (OPT_EnvLimitGrowth = 0, T&C's own default).  The v0.9 plot-scale
@@ -332,4 +374,4 @@ fprintf(['[PFT_Hamden_Deciduous_Grass] trees (Harvard Forest, ZR95 %d mm) over g
     '(Fendt, ZR95 %d mm); cover %s; grass cut 1 Sep (90%% removed); CT15 wet + TDep dry deposition by event; ' ...
     'reference height %g m; exchange shift %.4f per charge, Al(OH)3 log *Kso %.4f\n'], ...
     ZR95_H(1),ZR95_L(1),mat2str(Ccrown,4),zatm,hamden_delta,bulk_pH_params.Al_pin_logKso);
-clear islot tree_B grass_B reserve_at res_H res_L hamden_dep deposition_file hamden_delta hamden_bgp
+clear islot tree_B grass_B reserve_at res_H res_L hamden_dep deposition_file hamden_delta hamden_bgp covered
