@@ -85,8 +85,8 @@ function result_file = Run_Field_Transient(shape_file,agronomic_file,state_file,
 %%   NDays             only the window's first NDays (a smoke test)
 %%   CellIds           only these cells, as a field of their own (a smoke
 %%                     test); the states file may hold every cell
-%%   ParallelWorkers   thread workers for the daily ERW chemistry (0; env
-%%                     TC_PARALLEL_WORKERS)
+%%   ParallelWorkers   thread workers for the columns' hourly step and daily
+%%                     ERW chemistry (0; env TC_PARALLEL_WORKERS)
 %%   CheckpointMinutes the driver's rolling checkpoint (60; env
 %%                     TC_TRANSIENT_CKPT_MINUTES; 0 disables)
 %%   ForceResume       reuse segments and checkpoints of other code (false)
@@ -935,7 +935,7 @@ elseif ~isa(pool,'parallel.ThreadPool') || pool.NumWorkers < workers
     error('Run_Field_Transient:WrongParallelPool', ...
         'ParallelWorkers needs a thread pool of at least %d workers.',workers);
 end
-fprintf('Daily ERW chemistry: %d thread workers\n',workers);
+fprintf('Hourly column steps and daily ERW chemistry: %d thread workers\n',workers);
 end
 
 function stop_thread_pool(started)

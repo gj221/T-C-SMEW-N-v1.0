@@ -1526,22 +1526,30 @@ under atmospheric deposition alone, 2020-01-01 to 2026-09-29.
 - **Cost.** Measured on the workstation with other runs going:
   - The daily ERW chemistry is 98 % of a four-cell segment's time, about
     15–30 s per column-day, mostly the Appelo charge balance and the
-    bulk-pH inversion. The columns run their ERW days in parallel on
-    `ParallelWorkers` thread workers.
-  - The hourly steps run one column after another, then the lateral
-    exchange: about 12–25 ms per column-hour, and 7.3 s per hour for the
-    lateral exchange of all 936 cells.
+    bulk-pH inversion.
+  - The columns' hourly vertical steps take about 12–40 ms per
+    column-hour. They and the ERW days run on `ParallelWorkers` thread
+    workers, column by column, as v0.9 runs its squares, and give the
+    serial loop's numbers bit for bit. A parallel hourly step costs about
+    half a second of overhead per model hour. That is more than four
+    columns' steps take: the four smoke cells' 47 hours took 7.4 s
+    serially and 21.6 s on four workers. Against the whole field's steps
+    it is small: 13.1 s per model hour serially, 9.1 s on four workers,
+    with every core of the workstation busy with other runs.
+  - What stays serial: the lateral exchange, about 2.5 s per model hour
+    for all 936 cells, and the daily vegetation and soil biogeochemistry,
+    about 22 s per model day.
   - Each segment starts by loading 936 columns' parameter files (about
     1.3 s each).
 
   The whole Hamden window is therefore about 10,000–19,000 core-hours of
-  ERW chemistry and, on the workstation, two to three weeks of serial
-  hourly stepping that no number of workers shortens; on Bouchet's faster
-  cores perhaps one (the spin-up's tracking run steps about 8 ms per
-  cell-hour there). With 32 workers on Bouchet that is roughly two to four
-  weeks in all; measure it with a two-day run of the whole field first
-  (`TC_TRANSIENT_NDAYS=2`). Running the hourly column loop on workers too
-  (`v2/cluster/README.md`) would cut the serial part.
+  ERW chemistry and 200–600 core-hours of hourly column steps, which the
+  workers share, and about two and a half days on the workstation of
+  serial lateral exchange and daily biogeochemistry. With 32 workers on
+  Bouchet that is roughly two to four weeks in all, nearly all of it ERW
+  chemistry; the serial part, about a week while the hourly steps ran one
+  column after another, is now a day or two. Measure it with a two-day
+  run of the whole field first (`TC_TRANSIENT_NDAYS=2`).
 - **On Bouchet.** `v2/cluster/submit_field_transient.sh` submits it with the
   spin-up's own environment file (`v2/cluster/README.md`, *The field
   transient*).
@@ -1889,10 +1897,11 @@ The September 2019 mineral-N regression uses a small saved fixture:
 addpath(fullfile('v2','T&C_Code','Tests')); test_no3_immobilization_replay
 ```
 
-`ParallelWorkers` only applies to the independent daily ERW chemistry in
-each 2-D run. Keep `MaxConcurrent * ParallelWorkers` within the available
-CPU allocation. Daily biology, hourly physics and lateral routing remain
-serial. Full 12-column runs also hold several GB of state.
+`ParallelWorkers` applies to the independent per-column work in each 2-D
+run: the hourly physics and the daily ERW chemistry. Keep
+`MaxConcurrent * ParallelWorkers` within the available CPU allocation.
+Daily biology and lateral routing remain serial. Full 12-column runs also
+hold several GB of state.
 
 ### Current campaigns (2026-09-25)
 

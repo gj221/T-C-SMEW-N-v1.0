@@ -1,4 +1,4 @@
-function test_field_transient(n_days)
+function varargout = test_field_transient(n_days,workers)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test_field_transient
 %%
@@ -33,8 +33,13 @@ function test_field_transient(n_days)
 %% Usage
 %%   test_field_transient        % 5 days
 %%   test_field_transient(6)
+%%   test_field_transient(5,2)   % the runs on 2 thread workers
+%%   out = test_field_transient(...)   % the runs' results and end states,
+%%                                     % to compare one worker count's with
+%%                                     % another's
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 if nargin < 1 || isempty(n_days); n_days = 5; end
+if nargin < 2 || isempty(workers); workers = 0; end
 if n_days < 5
     error('test_field_transient:BadDays','Segments of 2, 2 and 1 days need at least 5 days.');
 end
@@ -180,7 +185,7 @@ CellBGStates = harmonise(states); %#ok<NASGU>
 save(state_file,'CellBGStates','-v7.3');
 cd(old_dir);
 common = [grid {'MODParamColumns',M,'ERWParamColumns',Ecol,'FieldDEM',dem, ...
-    'CellIds',ids,'NDays',n_days,'CheckpointMinutes',0,'ParallelWorkers',0}];
+    'CellIds',ids,'NDays',n_days,'CheckpointMinutes',0,'ParallelWorkers',workers}];
 t0 = tic;
 f_one = Run_Field_Transient(shp,agro,state_file,common{:},'SegmentDays',n_days, ...
     'OutputDirectory',fullfile(tmp,'one'));
@@ -281,6 +286,11 @@ check('a site row with rock is refused', raises(@() Run_Field_Transient( ...
 fprintf('\n=== test_field_transient: %d passed, %d failed ===\n',n_pass,n_fail);
 if n_fail > 0
     error('test_field_transient:Failed','%d check(s) failed.',n_fail);
+end
+if nargout > 0
+    varargout{1} = struct('workers',workers,'one',R1,'two',R2,'three',R3,'cec',Rc, ...
+        'end_state_digest',{{S1.info.end_state_digest,S2.info.end_state_digest, ...
+        S3.info.end_state_digest}});
 end
 end
 

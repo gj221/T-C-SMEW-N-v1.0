@@ -334,7 +334,11 @@ else
     da = topo.edge_face_distance_m(e)/2;
     db = da;
 end
-if ~(isfinite(da) && isfinite(db) && da > 0 && db > 0)
+%% Mirror Darcy_Lateral_Topology's guard exactly: a degenerate slope distance
+%% would give cos_face = Inf here and only be caught later, on a different
+%% error path, by the in-loop face-area check. Catch it where it is made.
+if ~(isfinite(da) && isfinite(db) && da > 0 && db > 0 && ...
+        isfinite(cos_face) && cos_face > 0 && cos_face <= 1+1e-12)
     error('Soil_Lateral_Heat_Transport:BadGeometry', ...
         'Every active edge must have positive finite half-cell distances.');
 end

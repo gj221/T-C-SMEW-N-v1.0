@@ -433,9 +433,10 @@ The same files are kept in two places:
   - Run a smoke test first, into its own output folder:
     `TC_TRANSIENT_NDAYS=3` and `TC_TRANSIENT_CELL_IDS="33 34 35 62"` (four
     cells of both map units, joined by their faces).
-  - It is long: about 10,000–19,000 core-hours of daily ERW chemistry
-    and roughly a week of hourly stepping, column after column, so two
-    to four weeks on 32 workers (main README, *Field transient*, *Cost*).
+  - It is long: about 10,000–19,000 core-hours of daily ERW chemistry,
+    which the 32 workers share with the columns' hourly steps, and a day
+    or two of serial lateral exchange and daily biogeochemistry, so two
+    to four weeks (main README, *Field transient*, *Cost*).
     Time two days of the whole field (`TC_TRANSIENT_NDAYS=2`) before the
     full run.
 - **Warm start** once the site observations arrive: put them in the

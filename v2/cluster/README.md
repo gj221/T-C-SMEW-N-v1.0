@@ -168,9 +168,9 @@ the spin-up's grid, columns and DEM, and writes to
 `carry_<k>.mat`, then `Field_Transient_<from>_<to>.mat` and its field means
 as a CSV. `field_transient.sbatch` asks for one node of the `week`
 partition for four days, with 32 CPUs and 64 GB. MATLAB runs
-single-threaded, as the v0.9 2-D campaigns do, and the columns' daily ERW
-chemistry runs on `TC_PARALLEL_WORKERS` thread workers (default one per
-CPU). Near its limit a job requeues itself, up to
+single-threaded, as the v0.9 2-D campaigns do, and the columns' hourly
+steps and daily ERW chemistry run on `TC_PARALLEL_WORKERS` thread workers
+(default one per CPU). Near its limit a job requeues itself, up to
 `TC_TRANSIENT_MAX_REQUEUES` (40) times, and resumes: finished segments are
 reused and the running one restarts from the driver's rolling checkpoint
 (`TC_TRANSIENT_CKPT_MINUTES`, 60). `TC_TRANSIENT_JOBS` (2) chained copies
@@ -185,15 +185,18 @@ Run a smoke test first, into its own folder: `TC_TRANSIENT_NDAYS=3`,
 `TC_TRANSIENT_OUTPUT_DIR=$TC_OUTPUT_DIR/transient_smoke`.
 
 The run is long (main README, *Field transient*, *Cost*). Its daily ERW
-chemistry is about 10,000–19,000 core-hours, which the workers share. Its
-hourly stepping, roughly a week here, runs one column after another
-whatever the worker count. With 32 workers expect two to four weeks, so
-many requeues. Before committing to it, run two days of the whole field
-into its own folder (`TC_TRANSIENT_NDAYS=2`). Its log gives these cores'
-set-up time (936 parameter files), the driver's time per column-step and
-the segment's wall time. `TC_TRANSIENT_CPUS=64` halves the ERW part. A
-30-day segment of the 936 columns holds about 7.4 GB, which the rolling
-checkpoint writes every `TC_TRANSIENT_CKPT_MINUTES`.
+chemistry, about 10,000–19,000 core-hours, and its columns' hourly steps,
+a few hundred, run on the workers. The lateral exchange between the
+columns and their daily vegetation and soil biogeochemistry stay serial,
+a day or two here (roughly a week while the hourly steps ran one column
+after another too). With 32 workers expect two to four weeks, nearly all
+of it ERW chemistry, so many requeues. Before committing to it, run two
+days of the whole field into its own folder (`TC_TRANSIENT_NDAYS=2`). Its
+log gives these cores' set-up time (936 parameter files), the driver's
+time per column-step and the segment's wall time. `TC_TRANSIENT_CPUS=64`
+halves the ERW part. A 30-day segment of the 936 columns holds about
+7.4 GB, which the rolling checkpoint writes every
+`TC_TRANSIENT_CKPT_MINUTES`.
 
 ## The robust test
 
@@ -238,8 +241,12 @@ scripts by dropping `TC_CELL_M` and `TC_MIN_COVERAGE`.
   `OPT_ERW`); each cell's ERW seed is built and checked once, from the
   first two forcing days of the transient window, by its final handoff
   diagnostic.
-- The 2-D driver steps its columns one after another every hour; the
-  tracking run's wall time is therefore proportional to the cell count.
-  Running the hourly column loop on parallel workers would divide it by
-  the worker count and is the obvious next speed-up for the production
-  grid (it would serve the field transient too).
+- The 2-D driver runs its columns' hourly steps on `parallel_workers`
+  thread workers, as v0.9 runs its squares, bit for bit as the serial
+  loop; the lateral exchange between them, and the daily vegetation and
+  soil biogeochemistry, stay serial. The field transient uses it
+  (`TC_PARALLEL_WORKERS`). The tracking run does not yet:
+  `Run_Field_Lateral_Tracking` sets no workers and
+  `field_spinup_track.sbatch` asks for one CPU, so its wall time is still
+  proportional to the cell count. Giving it a thread pool is the next
+  speed-up for the production grid.
