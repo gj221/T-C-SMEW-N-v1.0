@@ -1433,6 +1433,128 @@ class seeds, tracking, replays, reconstruction, assembly) and the
 validation experiment that scores the random forest against a run in
 which every cell is replayed.
 
+### Field transient
+
+`Run_Field_Transient` (`v2/run`) takes a field's spun-up states forward
+over the site's transient window: every cell of the polygon in 2-D
+(`MAIN_FRAME_BG_ERW_2D`, with the lateral water, solute and heat exchange
+over the DEM's terrain that the tracking run uses), with the ERW chemistry
+on and no rock. For Hamden it is the run the study asks for: bulk soil pH
+under atmospheric deposition alone, 2020-01-01 to 2026-09-29.
+
+- **Cells.** Each cell is configured as its spin-up configured it:
+  `Run_Field_Cell_Spinup` with `DryRun` builds its rows (the workbook
+  case, the site's MOD and ERW columns, the cell's own soil and cover),
+  and the grid and terrain are built the same way. Each starts from the
+  state it handed off at the window's first hour, with the exchanger its
+  handoff seeded; `Load_Field_Spinup_States` refuses a state handed off at
+  another instant or for other inputs. The forcing, CO2 and rain record
+  are the ones the handoff check read (the rows' `meteo_file`, `co2_file`
+  and `rain_chem_file`). A row with rock is refused.
+- **Segments.** The 2-D driver keeps every column's hourly state, and each
+  ERW column a ten-minute record, for the whole window it is given: about
+  11 kB per column-hour, so some 570 GB for Hamden's 936 columns over
+  2,464 days (a 30-day segment holds about 7.4 GB). The window
+  therefore runs as segments of `SegmentDays` (30), each going on from the
+  one before exactly as one run would (`Field_Transient_Carry`,
+  `Field_Transient_Restore`):
+  - a segment starts at 00:00 of the previous segment's last but one day,
+    so the drivers' calendar days and daily stamps fall where one run puts
+    them;
+  - those two days' 48 hours become its first rows, so every hourly
+    look-back reads what one run would read: the daily step's 24 hours,
+    and the ERW day's water sums, which also read the hour before the day;
+  - the last three daily rows become its first three, the columns'
+    carried state (cover, rooting, pH, ponded run-on and its solute, the
+    export ledgers) is handed on, and the time loop resumes at the hour
+    after the carried days;
+  - each ERW column is laid on the segment's ten-minute and daily axes,
+    its last two days' rows first and every later row at the value its
+    array held at the end: a segment that another follows runs no final
+    ERW flush, so those rows are the array's preallocation. An array the
+    ERW days grow row by row keeps its rows to the anchor, and the CO2
+    record the first ERW day lays on its whole axis is laid on the new one;
+  - every segment takes the whole window's longest day. The parameter
+    files find it over the days a run is given (`Lmax_day = max(L_day)`),
+    and it scales leaf photosynthesis with day length (`RELATIVE_PC`), so
+    a winter segment would otherwise take its own short days for the
+    longest.
+
+  Four inert hooks in the driver serve this: the restore, the loop's
+  first step, the window's longest day, and no final flush (nor
+  particle-history assembly) in a segment another follows. Before it
+  replaces the longest day, the driver checks the one the parameter files
+  find over the segment against the runner's own finding. Segments are
+  therefore at least two days long,
+  and a column with particle classes (rock) is refused, since its
+  application schedule counts from the start of the run. The ERW seed's
+  rain Na had been the mean of the record's one long-term flux over the
+  forcing's copies of it, whose last-bit rounding depended on the run's
+  length; it is now that flux (`ERW_MOD_PARAM_excel`), so a run and its
+  first segment seed alike. `test_field_transient` runs four Hamden cells
+  for five days in one segment, in segments of 2, 2 and 1 days and in
+  segments of 3 and 2: the daily records and the whole end state agree bit
+  for bit.
+- **CEC scenarios.** `'CEC'` (on the cluster `TC_TRANSIENT_CEC`, which
+  takes a list) gives every cell one CEC at pH 7, the field-scale form of
+  `Run_Plot_CEC_Scenarios`: the spin-up does not depend on the CEC, so the
+  scenarios start from the one field spin-up, each with its handoff's
+  exchanger fractions at its own capacity.
+- **Checkpoint and resume.** A finished segment is written to
+  `segment_<k>.mat` (its records) and `carry_<k>.mat` (the state the next
+  starts from) under a key that chains the run's identity (the cells and
+  their rows, the spun-up states, the terrain, the window, the segment
+  plan and each segment's forcing) through every earlier segment, and a
+  rerun reuses it. The code that wrote a segment is recorded; a segment of
+  other code is refused unless `ForceResume` (`TC_CKPT_FORCE_RESUME=1`)
+  splices them deliberately. Inside a segment the driver's rolling
+  checkpoint resumes (`CheckpointMinutes`, 60). A job that runs out of
+  time is therefore simply run again.
+- **Output.** `Field_Transient_<from>_<to>.mat` (`result`) holds one record
+  per ERW day for every cell, and the field's area-weighted means (pH by
+  mean hydrogen activity), which are also written as a CSV. The model day
+  runs from 01:00 to 01:00 local standard time, the drivers' daily step.
+  Record 1 is the start (the handoff state as the ERW chemistry seeds it)
+  and the last is the end of the window. Each record holds the state then:
+  bulk and pore-water pH, base saturation, the exchanger's charge
+  fractions (Ca, Mg, K, Na, Al, H) and its CEC, dissolved Ca, Mg, K, Na,
+  free and total Al, the residual strong anion, DIC and the water content
+  of the biogeochemical layer. It also holds the fluxes over the 24 hours
+  before it: the soil biogeochemistry's leaching of Ca, Mg, K, NO3 and
+  NH4, the ERW chemistry's leaching of Na, Al, strong anion and DIC,
+  drainage and precipitation. `result.units` names the units.
+- **Cost.** Measured on the workstation with other runs going:
+  - The daily ERW chemistry is 98 % of a four-cell segment's time, about
+    15–30 s per column-day, mostly the Appelo charge balance and the
+    bulk-pH inversion. The columns run their ERW days in parallel on
+    `ParallelWorkers` thread workers.
+  - The hourly steps run one column after another, then the lateral
+    exchange: about 12–25 ms per column-hour, and 7.3 s per hour for the
+    lateral exchange of all 936 cells.
+  - Each segment starts by loading 936 columns' parameter files (about
+    1.3 s each).
+
+  The whole Hamden window is therefore about 10,000–19,000 core-hours of
+  ERW chemistry and, on the workstation, two to three weeks of serial
+  hourly stepping that no number of workers shortens; on Bouchet's faster
+  cores perhaps one (the spin-up's tracking run steps about 8 ms per
+  cell-hour there). With 32 workers on Bouchet that is roughly two to four
+  weeks in all; measure it with a two-day run of the whole field first
+  (`TC_TRANSIENT_NDAYS=2`). Running the hourly column loop on workers too
+  (`v2/cluster/README.md`) would cut the serial part.
+- **On Bouchet.** `v2/cluster/submit_field_transient.sh` submits it with the
+  spin-up's own environment file (`v2/cluster/README.md`, *The field
+  transient*).
+
+`Run_One_Subfield` is unchanged: it stays the Energy Farm's twelve-run
+matrix. It is bound to the matrix (run ids, margin layouts, the rock
+schedule), to the workbook's Kantola rows and window and to `Ca_Data.mat`,
+and reads `Data_<Location>.mat` rather than the meteo file a spin-up's
+handoff read. It also holds its whole window in one driver call, which the
+twelve-cell Energy Farm runs afford and a 936-cell field does not. The
+field transient shares its building blocks instead: the agronomic and
+state loaders, the rain record, the grid, the DEM and the driver.
+
 ### Hamden (145 Blue Trail, CT)
 
 A 2.34 ha residential-forest parcel in Hamden, Connecticut, set up for a

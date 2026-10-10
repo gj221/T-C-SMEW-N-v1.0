@@ -169,6 +169,22 @@ for c = 1:N_col
     fprintf('  column %2d  %-14s  %s\n', c, topo.cell_name{c}, ...
         ternary(isempty(ovr),'base parameters','PFT override'));
 end
+%% v1.0: a segment of a long field transient (Run_Field_Transient) takes the
+%% longest day of the whole window, which the parameter files find over the
+%% days they are given (Lmax_day = max(L_day)), as one run would. Inert
+%% unless the caller sets FIELD_TRANSIENT_LMAX_DAY (.window, and .segment:
+%% the caller's own finding over this segment's days, to check it by).
+if exist('FIELD_TRANSIENT_LMAX_DAY','var') && ~isempty(FIELD_TRANSIENT_LMAX_DAY)
+    for c = 1:N_col
+        if ~isfield(PAR{c},'Lmax_day') || PAR{c}.Lmax_day ~= FIELD_TRANSIENT_LMAX_DAY.segment
+            error('MAIN_FRAME_BG_ERW_2D:LongestDay', ...
+                ['Column %d''s parameter files do not find the longest day of this ' ...
+                 'segment as the field transient does (%.9g h).'], ...
+                c,FIELD_TRANSIENT_LMAX_DAY.segment);
+        end
+        PAR{c}.Lmax_day = FIELD_TRANSIENT_LMAX_DAY.window;
+    end
+end
 if exist('run_provenance','var') && isstruct(run_provenance)
     appelo_alpha_effective = nan(N_col,1);
     appelo_logKH_effective = nan(N_col,5);
@@ -634,6 +650,19 @@ lateral_diag.water_net_m3 = zeros(NNd,1);
 j = 1;
 tic;
 
+%% v1.0: one segment of a long field transient (Run_Field_Transient) goes
+%% on from the end state of the segment before it, hour for hour as one run
+%% would (Field_Transient_Carry, Field_Transient_Restore). A segment that
+%% another follows leaves its last day to that one, so it runs no final ERW
+%% flush. Inert unless the caller sets FIELD_TRANSIENT_CARRY or
+%% FIELD_TRANSIENT_CONTINUES.
+field_transient_first_step = 2;
+field_transient_continues = exist('FIELD_TRANSIENT_CONTINUES','var') && ...
+    isequal(FIELD_TRANSIENT_CONTINUES,true);
+if exist('FIELD_TRANSIENT_CARRY','var') && ~isempty(FIELD_TRANSIENT_CARRY)
+    Field_Transient_Restore;
+end
+
 %% ========================================================================
 %% CHECKPOINT / RESUME
 %% ========================================================================
@@ -870,7 +899,7 @@ ERW_ckpt_fingerprint = ERW_Checkpoint_Fingerprint(NN, N_col, ...
     fullfile(cd, 'Invert_Bulk_pH.m'), ...
     fullfile(cd, 'Porewater_to_Bulk_pH.m'), ...
     ERW_cell_input_dependencies{:});
-i_resume = 2;
+i_resume = field_transient_first_step;
 if ~isempty(ERW_ckpt_file) && isfile(ERW_ckpt_file)
     ckpt_probe = load(ERW_ckpt_file, 'ERW_ckpt_fingerprint', 'i');
     ckpt_ok = isfield(ckpt_probe,'ERW_ckpt_fingerprint') && ...
@@ -1615,7 +1644,7 @@ for i = i_resume:NN
     %% ------------------------------------------------------------------
     %% ERW  --  once per day, after the current lateral transport
     %% ------------------------------------------------------------------
-    if OPT_ERW == 1 && ((Datam(i,4) == 1) || i == NN)
+    if OPT_ERW == 1 && ((Datam(i,4) == 1) || (i == NN && ~field_transient_continues))
         ERW_next = cell(N_col,1);
         parfor (c = 1:N_col,parallel_workers)
             ERW_PARAM_cell = ERW_PARAM_input;
@@ -1697,8 +1726,9 @@ end
 
 %% The particle-class histories were kept in daily blocks during the run
 %% (ERW_Daily_Step_2D); the results carry the rows each column kept:
-%% those set at initialisation and the last row of every ERW day.
-if OPT_ERW == 1
+%% those set at initialisation and the last row of every ERW day. A segment
+%% that another follows hands its columns on as they stand.
+if OPT_ERW == 1 && ~field_transient_continues
     for c = 1:N_col
         ERW{c} = ERW_Particle_History('assemble',ERW{c});
     end

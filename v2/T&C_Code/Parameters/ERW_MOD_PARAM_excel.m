@@ -256,7 +256,14 @@ if ~exist('Na_in','var') || ~(isfinite(Na_in) && Na_in > 0)
     if any(~isfinite(Na_rain_src)) || any(Na_rain_src < 0)
         error('ERW:invalidBoundary', 'Rainwater Na supply must be finite and nonnegative.');
     end
-    I_Na_rain_mean = mean(Na_rain_src);
+    %%% The mean of one long-term flux is that flux. Averaged over its copies
+    %%% it took a last-bit rounding set by the forcing's length, so the seed
+    %%% of a run differed from the seed of its first segment.
+    if isscalar(raw)
+        I_Na_rain_mean = raw;
+    else
+        I_Na_rain_mean = mean(Na_rain_src);
+    end
     mean_water_loss_Lperm2d = ERW_Seed_Water_Loss(ERW_TC_const_input, TT_m_input);
     if I_Na_rain_mean > 0
         if ~(isfinite(mean_water_loss_Lperm2d) && mean_water_loss_Lperm2d > 0)
