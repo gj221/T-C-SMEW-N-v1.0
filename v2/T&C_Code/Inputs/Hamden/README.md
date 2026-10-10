@@ -413,6 +413,31 @@ The same files are kept in two places:
   spin-up (one class seed, 94 tracked and replayed cells, 842 from the
   forest); its header lists what must exist first (the forcing and the
   DEM window).
+- **The field transient**, 2020-01-01 to 2026-09-29 (`Run_Field_Transient`;
+  main README, *Field transient*). Every cell goes on from the state its
+  spin-up handed off at 2020-01-01 00:00, in 2-D over the DEM's terrain,
+  with the ERW chemistry on and no rock, under the forcing, CO₂ and event
+  deposition above. Once `CellBGStates.mat` exists, submit it in
+  `v2/cluster` with the spin-up's environment file:
+  `bash submit_field_transient.sh field_spinup_hamden.env` (its settings
+  are at the end of the example file). It runs as 30-day segments that
+  go on from one another exactly, and resumes after a time limit.
+  - For every model day (01:00 to 01:00 local standard time) and cell it
+    records bulk and pore-water pH, base saturation and the exchanger's
+    composition (Ca, Mg, K, Na, Al, H), dissolved Ca, Mg, K, Na and Al,
+    and the leaching of Ca, Mg, K, Na and Al
+    (`Field_Transient_20200101_20260929.mat`), with the field's
+    area-weighted means in `..._field_mean.csv`.
+  - `TC_TRANSIENT_CEC="6.4 10.8 13.7"` runs the CEC scenarios (below) at
+    field scale, one chain each, from the one spin-up.
+  - Run a smoke test first, into its own output folder:
+    `TC_TRANSIENT_NDAYS=3` and `TC_TRANSIENT_CELL_IDS="33 34 35 62"` (four
+    cells of both map units, joined by their faces).
+  - It is long: about 10,000–19,000 core-hours of daily ERW chemistry
+    and roughly a week of hourly stepping, column after column, so two
+    to four weeks on 32 workers (main README, *Field transient*, *Cost*).
+    Time two days of the whole field (`TC_TRANSIENT_NDAYS=2`) before the
+    full run.
 - **Warm start** once the site observations arrive: put them in the
   per-cell file's `measured_*` columns (or a new representative set), set
   `TC_WARM_START_STATES` to the first run's `CellBGStates.mat`, give a new
@@ -495,9 +520,9 @@ The same files are kept in two places:
     seed, `SPINUP_HANDOFF_ONLY`).
   - A transient for a site without a pH record starts from the cell's own
     bulk pH, as its spin-up hands off at it (`Run_Automatic_Site_Spinup`).
-  - Field scale: the field transient, still to be built, takes the same
-    scenarios as a CEC override on every cell, from the one field
-    spin-up.
+  - Field scale: the field transient (below) takes the same scenarios as
+    a CEC override on every cell, from the one field spin-up
+    (`TC_TRANSIENT_CEC="6.4 10.8 13.7"`).
 - The start of the simulation, as a test under the Energy Farm constants
   showed it before Hamden's own: the seeded strong anions (1.6–2.2 meq/L,
   the charge balance of the measured pH, which includes the organic

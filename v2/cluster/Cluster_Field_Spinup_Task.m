@@ -18,6 +18,11 @@ function out = Cluster_Field_Spinup_Task(task, index)
 %%          'assemble'     gather every cell into CellBGStates.mat
 %%          'validate'     Run_RF_Validation_Experiment on the assembled
 %%                         truth states
+%%          'transient'    the field transient from the assembled states
+%%                         (Run_Field_Transient); finished segments are
+%%                         reused and the running one resumes its
+%%                         checkpoint, so a job that runs out of time is
+%%                         simply run again
 %%   index  integer for the array tasks (default SLURM_ARRAY_TASK_ID; a
 %%          string from the shell is accepted)
 %%
@@ -56,6 +61,18 @@ function out = Cluster_Field_Spinup_Task(task, index)
 %%   TC_VALIDATION_SEEDS      e.g. "1 2 3 4 5"                (validate)
 %%   TC_RF_STATES_DIR         cell files of a flux_tracking run to score
 %%                            against the truth (validate, optional)
+%%   TC_STATES_FILE           the spun-up states the transient starts from
+%%                            (default $TC_OUTPUT_DIR/CellBGStates.mat)
+%%   TC_TRANSIENT_OUTPUT_DIR  its segments, checkpoints and result
+%%                            (default $TC_OUTPUT_DIR/transient)
+%%   TC_TRANSIENT_CEC         a CEC scenario for every cell [cmolc/kg]; its
+%%                            run goes to <output dir>_CEC_<value>
+%%                            (submit_field_transient.sh takes a list)
+%%   TC_SEGMENT_DAYS          days per transient segment (default 30)
+%%   TC_TRANSIENT_CKPT_MINUTES  its rolling checkpoint (default 60)
+%%   TC_PARALLEL_WORKERS      thread workers for its daily ERW chemistry
+%%   TC_TRANSIENT_NDAYS, TC_TRANSIENT_CELL_IDS  a smoke test: the window's
+%%                            first days, a few cells (e.g. "33 34 35 62")
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 here = fileparts(mfilename('fullpath'));
 v2 = fileparts(here);
@@ -125,10 +142,30 @@ switch lower(task)
         if ischar(cov) || isfinite(cov); vopts = [vopts, {'MinCoverage',cov}]; end
         if ~isempty(rfdir);  vopts = [vopts, {'RFStatesDirectory',rfdir}]; end
         out = Run_RF_Validation_Experiment(shp,agro,vopts{:});
+    case 'transient'
+        states = getenv_default('TC_STATES_FILE',state_file);
+        tdir = getenv_default('TC_TRANSIENT_OUTPUT_DIR',fullfile(outdir,'transient'));
+        cec = str2double(getenv_default('TC_TRANSIENT_CEC',''));
+        if isfinite(cec)
+            %% each CEC scenario in a directory of its own
+            tdir = sprintf('%s_CEC_%s',tdir,strrep(sprintf('%g',cec),'.','p'));
+        end
+        topts = {'OutputDirectory',tdir,'CaseNumber',casenum,'MODParamColumns',cols, ...
+            'ERWParamColumns',erw_cols,'FieldFeatureIndices',feats,'FieldPolygonIndex',poly, ...
+            'SegmentDays',str2double(getenv_default('TC_SEGMENT_DAYS','30'))};
+        if isfinite(cec);    topts = [topts, {'CEC',cec}]; end
+        if isfinite(cell_m); topts = [topts, {'GridCellSizeM',cell_m}]; end
+        if ischar(cov) || isfinite(cov); topts = [topts, {'MinCoverage',cov}]; end
+        if ~isempty(dem);    topts = [topts, {'FieldDEM',dem}]; end
+        ndays = str2double(getenv_default('TC_TRANSIENT_NDAYS',''));
+        if isfinite(ndays);  topts = [topts, {'NDays',ndays}]; end
+        ids = str2num(getenv_default('TC_TRANSIENT_CELL_IDS','')); %#ok<ST2NM>
+        if ~isempty(ids);    topts = [topts, {'CellIds',ids}]; end
+        out = Run_Field_Transient(shp,agro,states,topts{:});
     otherwise
         error('Cluster_Field_Spinup_Task:BadTask', ...
             ['task must be plan | class_seed | track | replay | reconstruct | ' ...
-             'cell | assemble | validate (got %s).'], task);
+             'cell | assemble | validate | transient (got %s).'], task);
 end
 end
 

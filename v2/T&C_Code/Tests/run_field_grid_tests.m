@@ -29,4 +29,5 @@ test_rain_chemistry_seed;
 test_fit_exchange_affinity;
 test_plot_cec_scenarios;
 test_build_tc_forcing_from_nldas2;
+test_field_transient;
 end
