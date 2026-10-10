@@ -70,7 +70,8 @@ function out = Cluster_Field_Spinup_Task(task, index)
 %%                            (submit_field_transient.sh takes a list)
 %%   TC_SEGMENT_DAYS          days per transient segment (default 30)
 %%   TC_TRANSIENT_CKPT_MINUTES  its rolling checkpoint (default 60)
-%%   TC_PARALLEL_WORKERS      thread workers for its daily ERW chemistry
+%%   TC_PARALLEL_WORKERS      thread workers for its columns' hourly steps
+%%                            and daily ERW chemistry
 %%   TC_TRANSIENT_NDAYS, TC_TRANSIENT_CELL_IDS  a smoke test: the window's
 %%                            first days, a few cells (e.g. "33 34 35 62")
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

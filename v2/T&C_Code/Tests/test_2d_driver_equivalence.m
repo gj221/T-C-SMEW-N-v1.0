@@ -1,4 +1,4 @@
-function test_2d_driver_equivalence(n_days)
+function varargout = test_2d_driver_equivalence(n_days,workers)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% test_2d_driver_equivalence
 %%
@@ -20,9 +20,12 @@ function test_2d_driver_equivalence(n_days)
 %% Usage
 %%   test_2d_driver_equivalence          % 10 simulated days
 %%   test_2d_driver_equivalence(20)
+%%   test_2d_driver_equivalence(10,2)    % the 2-D column on a thread worker
+%%   S2 = test_2d_driver_equivalence(...)  % and the 2-D records compared
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 if nargin < 1 || isempty(n_days); n_days = 10; end
+if nargin < 2 || isempty(workers); workers = 0; end
 
 here = fileparts(mfilename('fullpath'));
 v2   = fileparts(fileparts(here));          % .../v2
@@ -74,8 +77,8 @@ fprintf('Baseline loaded (%d h simulated)\n', R1.NN);
 %% ---------------------------------------------------------------------
 %% 2. Run the 2-D driver at N_col = 1 over identical forcing
 %% ---------------------------------------------------------------------
-fprintf('Running 2-D driver at N_col = 1...\n');
-S2 = run_driver_single(R1, code);
+fprintf('Running 2-D driver at N_col = 1 (%d thread workers)...\n', workers);
+S2 = run_driver_single(R1, code, workers);
 
 %% ---------------------------------------------------------------------
 %% 3. Compare
@@ -149,6 +152,7 @@ if n_fail > 0
     error('test_2d_driver_equivalence: %d comparison(s) failed', n_fail);
 end
 fprintf('2-D driver reproduces the single-column frame at N_col = 1.\n\n');
+if nargout > 0; varargout{1} = S2; end
 
 end
 
@@ -223,10 +227,17 @@ end
 end
 
 %% =======================================================================
-function S2 = run_driver_single(R1, code)
+function S2 = run_driver_single(R1, code, workers)
 %% Rebuild the caller context the 2-D driver expects and run it.  This is
 %% a plain local function (no nested functions), so its workspace is not
 %% static and the driver script may declare its own variables here.
+%% workers > 0 runs the column's hourly step and its ERW days on a thread
+%% pool of that size, which must agree with the 1-D frame just the same.
+parallel_workers = workers;
+if workers > 0 && isempty(gcp('nocreate'))
+    parpool('Threads',workers);
+    pool_cleanup = onCleanup(@() delete(gcp('nocreate'))); %#ok<NASGU>
+end
 
 NN = R1.NN; NNd = R1.NNd; ms = R1.ms; cc = R1.cc; Zs = R1.Zs; %#ok<NASGU>
 dt = R1.dt; dth = R1.dth;                                      %#ok<NASGU>

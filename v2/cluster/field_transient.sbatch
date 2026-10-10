@@ -18,10 +18,10 @@
 # the one before. A finished segment is reused and the running one resumes
 # from the driver's rolling checkpoint (TC_TRANSIENT_CKPT_MINUTES), so near
 # its limit the job requeues itself (requeue_on_timeout.sh) and carries on.
-# MATLAB runs single-threaded, as the v0.9 2-D campaigns do; the daily ERW
-# chemistry of the columns runs on TC_PARALLEL_WORKERS thread workers (one
-# per CPU). Submit with submit_field_transient.sh, which exports the
-# environment and chains TC_TRANSIENT_JOBS copies.
+# MATLAB runs single-threaded, as the v0.9 2-D campaigns do; the columns'
+# hourly steps and daily ERW chemistry run on TC_PARALLEL_WORKERS thread
+# workers (one per CPU). Submit with submit_field_transient.sh, which exports
+# the environment and chains TC_TRANSIENT_JOBS copies.
 set -euo pipefail
 : "${TC_ROOT:?set TC_ROOT to the repository root (the folder holding v2)}"
 module load "${MATLAB_MODULE:-MATLAB/2025a}"
