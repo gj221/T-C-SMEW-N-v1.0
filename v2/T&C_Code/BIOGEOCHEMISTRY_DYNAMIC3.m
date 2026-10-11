@@ -1002,6 +1002,20 @@ P_imm_cut = zeros(1,4);
 if PMIN_IN < 0
     Pmineral_avail = max(0,B_physical(43)/dtd + P_external_base + ...
         P_internal_solution);
+    if -PMIN_IN >= Pmineral_avail
+        %%% The microbes take all the mineral P. The deposition maps hold P
+        %%% in single precision, so this split is single and rounds at
+        %%% ~1e-7 of the demand: enough to overdraw the emptied pool. Its
+        %%% day's budget is redone in double (double inputs give the same
+        %%% numbers; a pool the demand does not empty keeps its arithmetic).
+        Incoming_P = double(Incoming_P);
+        Psec_exch = double(Psec_exch); Ppri_exch = double(Ppri_exch);
+        Pocc_exch = double(Pocc_exch);
+        P_external_base = Incoming_P + (1-f_org_lea)*Ip_lea_pho - LEAK_P;
+        P_internal_solution = -Psec_exch+Ppri_exch;
+        Pmineral_avail = max(0,B_physical(43)/dtd + P_external_base + ...
+            P_internal_solution);
+    end
     Pmineral_imm = min(-PMIN_IN,Pmineral_avail);
     Porg_dem = -PMIN_IN-Pmineral_imm;
     Porg_avail = max(0,B_physical(38)/dtd+P_som_preimm);
