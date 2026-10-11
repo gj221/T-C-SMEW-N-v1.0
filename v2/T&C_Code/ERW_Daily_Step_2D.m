@@ -142,6 +142,13 @@ pdind = max(1,i-24):i-1;
 
 %% Leaching fraction of the active-layer store
 Lk_tot = sum(Lk_c(pdind));
+%% v1.0: under leaching_water 'layer' the frame passes the drainage out of
+%% the bottom of the biogeochemical layer and the layer's own water in place
+%% of Lk and VSUM (Leaching_Water_Basis); over a day that drainage can be
+%% upward, and then nothing leaves.
+if Lk_tot < 0 && strcmp(Leaching_Water_Basis(MOD_PARAM_input),'layer')
+    Lk_tot = 0;
+end
 Lk_tot(Lk_tot > VSUM) = VSUM;
 if VSUM == 0
     E.TC.f_Lw_bio(j) = 0;

@@ -16,7 +16,7 @@ function[P,LEAK_NH4,LEAK_NO3,LEAK_P,LEAK_K,LEAK_DOC,LEAK_DON,LEAK_DOP,...
     Rexmy,RexmyI,ExEM,NavlI,Pcla,Psan,...
     B_IO,Date,FireA,AAET,...
     opt_ERW,opt_BfixN,f_anaer,WFPS,exchange_scheme,KNmaxd_override, ...
-    biogeo_overrides)
+    biogeo_overrides,leach_layer)
 %%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%% INPUT
 if ~exist('exchange_scheme','var') || isempty(exchange_scheme)
@@ -27,6 +27,9 @@ if ~exist('KNmaxd_override','var')
 end
 if ~exist('biogeo_overrides','var')
     biogeo_overrides = [];
+end
+if ~exist('leach_layer','var') || isempty(leach_layer)
+    leach_layer = false;
 end
 ZBIOG=ZBIOG/1000; %% [m]
 %%%%%%%
@@ -175,6 +178,15 @@ IMAN(9)=  ManF./Si_Man; % [gSi/m^2 day]
 %%%%%%%%%%%%%%%%%%%%%%%%
 opt_cons_CUE=1;
 [BiogeoPar]=Biogeochemistry_Parameter(opt_cons_CUE,KNmaxd_override,biogeo_overrides);
+%%%%%%% Under leaching_water 'layer' (Leaching_Water_Basis) the pools leave with
+%%%%%%% the layer's own drainage over its own water, and at aDOC = 0.04 the
+%%%%%%% Hamden spin-up leached 20-37 gC/m2 yr of DOC, 6-10 times the below-root-zone
+%%%%%%% forest flux of ~3.5 gC/m2 yr (Kindler et al., 2011, Glob. Change Biol.
+%%%%%%% 17:1167); the decomposers grow on DOC alone and died out. The column's
+%%%%%%% leaching keeps v0.9's 0.04.
+if leach_layer
+    BiogeoPar.aDOC = 0.004;
+end
 %%%%%%%%%
 [LEAK_NH4,LEAK_NO3,LEAK_P,LEAK_K,LEAK_DOC,LEAK_DON,LEAK_DOP,...
     LEAK_Ca,LEAK_Mg,LEAK_Si]= Biogeo_Leakage(Ptm1,Lk,V,BiogeoPar);

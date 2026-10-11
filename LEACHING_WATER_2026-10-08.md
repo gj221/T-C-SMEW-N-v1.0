@@ -169,3 +169,23 @@ drainage about ten times faster than at the column's (2.4 % against
 0.23 % d-1), and under Phase 2's constant forcing they die out. Making the
 layer's leaching usable means revisiting that, not the vegetation: the
 leaching of the decomposers' DOC and mineral N, or Phase 2's forcing.
+
+## DOC mobility under the layer's leaching (2026-10-11)
+
+The option is back as 91c7aee had it, with one change under
+`leaching_water = layer`: DOC leaches with mobility `aDOC` 0.004 instead
+of 0.04 (`BIOGEO_UNIT`, which the drivers and Phase 2 hand the basis).
+Everything else leaches as before, and the column's path is untouched (the
+Kantola baseline does not read the option). The 2-D driver's hourly step
+runs on the thread pool since c09c3e8, so the layer drainage is now taken
+from the hour's column buffers before they are copied into row i.
+
+The reason is the DOC flux itself. At 0.04 on the layer's drainage and
+water the Hamden spin-up leached 20 to 37 g C m-2 yr-1 of DOC, 6 to 10
+times the below-root-zone forest flux of about 3.5 g C m-2 yr-1 in Kindler
+et al. (2011, Global Change Biology 17:1167). The decomposers grow on DOC
+alone, and Phase 2 run on its own showed that it is the DOC that goes, not
+the N: with everything leached on the layer's water bacteria and fungi end
+at about 1.5e-9 g C m-2, with DOC alone held to the column's leaching they
+end at 11.2 and 41.2. Whether the stand still starves with only this
+changed has not been run.

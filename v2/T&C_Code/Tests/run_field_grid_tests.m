@@ -26,6 +26,7 @@ test_perennial_vegetation;
 test_dead_crown_reserve;
 test_erw_seed_water_loss;
 test_rain_chemistry_seed;
+test_leaching_water_basis;
 test_fit_exchange_affinity;
 test_plot_cec_scenarios;
 test_build_tc_forcing_from_nldas2;

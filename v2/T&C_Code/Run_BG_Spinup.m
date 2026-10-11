@@ -135,6 +135,10 @@ BG_SPINUP_CONSTRAINT = BG_Spinup_Constraint(MOD_PARAM_input);
 %%% The same measured slow stocks are a one-time state constraint at the real
 %%% transient start. They are not reapplied inside the recurrent ring.
 BG_TRANSIENT_INITIAL_CONSTRAINT = BG_Spinup_Constraint(MOD_PARAM_input, true);
+%%% v1.0: the water the dissolved pools leach with (Leaching_Water_Basis), as
+%%% the frame reads it from the same row; Phase 2 leaches as the frame does,
+%%% also when Phase 1 is taken from its checkpoint and the frame has not run.
+leach_layer = strcmp(Leaching_Water_Basis(MOD_PARAM_input),'layer');
 
 [p1_done, p1_avgs] = load_compatible_p1_checkpoint(p1_chk, spinup_cycle_years, STANDING_NUTRIENT_STATE_VERS);
 [p2_done, p2_bg_state] = load_compatible_p2_checkpoint(p2_chk, spinup_cycle_years, BG_SPINUP_CONSTRAINT, STANDING_NUTRIENT_STATE_VERS);
@@ -366,14 +370,25 @@ if ~spinup_handoff_only && ~p1_done && ~p2_done && ~p3_done
         p1_Tdp_acc = p1_Tdp_acc + mean(Tdp_bio_out(jrows),   'omitnan');
         p1_Se_acc  = p1_Se_acc  + mean(Se_bio_out(jrows),    'omitnan');
         p1_Psi_acc = p1_Psi_acc + mean(Psi_bio_out(jrows),   'omitnan');
-        p1_VSUM_acc  = p1_VSUM_acc  + mean(VSUM_out(jrows),  'omitnan');
+        %%% v1.0, leaching_water 'layer' (the frame's leach_layer): Phase 2
+        %%% leaches with the layer's own drainage over the layer's water, so
+        %%% these two carry the frame's daily records of those instead.
+        if leach_layer
+            p1_VSUM_acc = p1_VSUM_acc + mean(V_leach_out(jrows),'omitnan');
+        else
+            p1_VSUM_acc  = p1_VSUM_acc  + mean(VSUM_out(jrows),  'omitnan');
+        end
         p1_VTSUM_acc = p1_VTSUM_acc + mean(VTSUM_out(jrows),  'omitnan');
         p1_WFPS_acc  = p1_WFPS_acc  + mean(WFPS_bio_out(jrows),'omitnan');
         p1_fanaer_acc = p1_fanaer_acc + mean(f_anaer_bio_out(jrows),'omitnan');
         %% Peak leaf area of the year over every crown of both layers.
         p1_peak_LAI(end+1) = max([reshape(LAI_H(jrows,:),1,[]), ...
             reshape(LAI_L(jrows,:),1,[]), 0]);
-        p1_Lk_acc    = p1_Lk_acc    + sum(Lk(1:NN)) / (NNd_y - 1);
+        if leach_layer
+            p1_Lk_acc = p1_Lk_acc + mean(Lk_leach_out(jrows),'omitnan');
+        else
+            p1_Lk_acc    = p1_Lk_acc    + sum(Lk(1:NN)) / (NNd_y - 1);
+        end
 
         p1_T_H_acc      = p1_T_H_acc      + sum(T_H(1:NN,:), 1) / (NNd_y - 1);
         p1_T_L_acc      = p1_T_L_acc      + sum(T_L(1:NN,:), 1) / (NNd_y - 1);
@@ -750,7 +765,7 @@ if ~spinup_handoff_only && ~p2_done && ~p3_done
                 B_IO_day, Datam_day, 0, 0, ...
                 0, OPT_BfixN_p2, ...              % opt_ERW (off in Phase 2), opt_BfixN,
                 p2_f_anaer_bio, p2_WFPS_bio, ...  % mean anaerobic fraction and WFPS of the active layer,
-                [], []);                          % exchange scheme (inert with ERW off), default KNmaxd as in Phase 3
+                [], [], [], leach_layer);         % exchange scheme (inert with ERW off), default KNmaxd as in Phase 3, no overrides, the leaching water
             if lateral_replay_spinup
                 p2_lat_T = p2_P_now(p2_lat_idx);
                 p2_P_now(p2_lat_idx) = p2_lat_retain.*p2_lat_T + p2_lat_input;
@@ -1124,7 +1139,12 @@ while ~p3_converged
     cd(Directory);
     MAIN_FRAME_BG_ERW_10mins;
     cd(current_directory);
-    p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk, Bio_Zs, RfH_Zs, RfL_Zs);
+    if leach_layer
+        %%% v1.0, leaching_water 'layer': the ERW's drainage is the layer's.
+        p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk_bio, Bio_Zs, RfH_Zs, RfL_Zs);
+    else
+        p3_water_loss_by_ring(ring_pos) = ERW_Mean_Water_Loss(T_H, T_L, Lk, Bio_Zs, RfH_Zs, RfL_Zs);
+    end
     p3_rows = 2:j;
     %%% The plants' nutrient stock on day 1, the state the parameter file sets.
     %%% The frame fills its tissue records (TNIT ... TSIL) from day 2, so their
